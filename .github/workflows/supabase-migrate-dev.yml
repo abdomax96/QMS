@@ -11,8 +11,6 @@ on:
 jobs:
   migrate:
     runs-on: ubuntu-latest
-    # Skip if the repo doesn't currently have Supabase migrations checked in.
-    if: ${{ hashFiles('supabase/migrations/*.sql') != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
