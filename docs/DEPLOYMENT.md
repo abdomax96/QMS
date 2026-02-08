@@ -69,6 +69,29 @@
   - `VITE_SUPABASE_URL_PROD`
   - `VITE_SUPABASE_ANON_KEY_PROD`
 
+### 3.4 نشر Cloudflare Pages من جهازك (Direct Upload)
+إذا تعثّر ربط GitHub داخل Cloudflare أو تعطلت GitHub Actions، يمكنك النشر مجاناً مباشرة من جهازك عبر `wrangler`.
+
+ملف سكربت جاهز (Windows):
+- `scripts/deploy-pages.ps1`
+
+المتطلبات:
+- Cloudflare API Token بصلاحية Pages (Edit).
+- ضبط متغيرات البيئة على جهازك:
+  - `CLOUDFLARE_ACCOUNT_ID`
+  - `CLOUDFLARE_API_TOKEN`
+- ملف بيئة Production (محلي وغير مرفوع):
+  - أنشئ `.env.production.local` وضع فيه `VITE_SUPABASE_URL` و `VITE_SUPABASE_ANON_KEY` الخاصة بـ Supabase Prod.
+
+أوامر (PowerShell):
+- نشر Development:
+  - `powershell -ExecutionPolicy Bypass -File scripts/deploy-pages.ps1 -Target dev`
+- نشر Production:
+  - `powershell -ExecutionPolicy Bypass -File scripts/deploy-pages.ps1 -Target prod`
+
+ملاحظة: تم نشر Dev حالياً على:
+- `https://qms-dev.pages.dev`
+
 ## 4) CI/CD (اختياري لكن موصى به)
 
 ### 4.1 Frontend CI (lint/test/build)
