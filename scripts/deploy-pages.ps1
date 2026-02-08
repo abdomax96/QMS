@@ -7,7 +7,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function Assert-EnvVar([string]$Name) {
-  if (-not $env:$Name -or [string]::IsNullOrWhiteSpace($env:$Name)) {
+  $val = [Environment]::GetEnvironmentVariable($Name)
+  if (-not $val -or [string]::IsNullOrWhiteSpace($val)) {
     throw "Missing environment variable '$Name'."
   }
 }
@@ -28,4 +29,3 @@ npm run build
 
 Write-Host "Deploying to Cloudflare Pages project '$projectName' (branch: $branch)..."
 npx --yes wrangler pages deploy dist --project-name $projectName --branch $branch
-
