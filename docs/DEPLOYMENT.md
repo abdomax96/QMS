@@ -56,6 +56,19 @@
 
 ملاحظة SPA: أضفنا `public/_redirects` حتى تعمل روابط React Router عند عمل refresh على مسارات داخلية.
 
+بديل أسهل إذا لم تستطع ربط GitHub من داخل Cloudflare:
+- استخدم GitHub Actions للنشر إلى Cloudflare Pages (بدون ربط repo داخل Cloudflare UI).
+- Workflows جاهزة:
+  - `.github/workflows/cloudflare-pages-dev.yml` (ينشر تلقائياً عند push على `develop` إلى مشروع Pages اسمه `qms-dev`)
+  - `.github/workflows/cloudflare-pages-prod.yml` (ينشر عند push على `main` أو يدوياً عبر `workflow_dispatch` إلى مشروع Pages اسمه `qms-prod`)
+- تحتاج GitHub Secrets:
+  - `CLOUDFLARE_API_TOKEN`
+  - `CLOUDFLARE_ACCOUNT_ID`
+  - `VITE_SUPABASE_URL_DEV`
+  - `VITE_SUPABASE_ANON_KEY_DEV`
+  - `VITE_SUPABASE_URL_PROD`
+  - `VITE_SUPABASE_ANON_KEY_PROD`
+
 ## 4) CI/CD (اختياري لكن موصى به)
 
 ### 4.1 Frontend CI (lint/test/build)
