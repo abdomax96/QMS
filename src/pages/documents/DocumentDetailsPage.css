@@ -1,0 +1,224 @@
+/* Document Preview Styles - Matching TinyMCE Editor */
+/* Import Cairo font for Arabic consistency */
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
+
+/* ================== PREVIEW CONTAINER ================== */
+.document-preview-container {
+    font-family: 'Cairo', 'Arial', 'Tahoma', sans-serif !important;
+    font-size: 14px !important;
+    line-height: 1.8 !important;
+    direction: rtl !important;
+    text-align: right !important;
+    color: #1f2937;
+}
+
+.dark .document-preview-container {
+    color: #e5e7eb;
+}
+
+/* ================== TYPOGRAPHY - Match TinyMCE ================== */
+.document-preview-container p {
+    margin: 0.5em 0;
+}
+
+.document-preview-container h1 {
+    font-size: 18pt;
+    font-weight: bold;
+    margin: 1em 0 0.5em;
+}
+
+.document-preview-container h2 {
+    font-size: 16pt;
+    font-weight: bold;
+    margin: 0.8em 0 0.4em;
+}
+
+.document-preview-container h3 {
+    font-size: 14pt;
+    font-weight: bold;
+    margin: 0.6em 0 0.3em;
+}
+
+.document-preview-container h4,
+.document-preview-container h5,
+.document-preview-container h6 {
+    font-weight: bold;
+    margin: 0.5em 0 0.3em;
+}
+
+/* ================== LISTS ================== */
+.document-preview-container ul,
+.document-preview-container ol {
+    padding-right: 2em;
+    padding-left: 0;
+    margin: 0.5em 0;
+}
+
+.document-preview-container li {
+    margin: 0.3em 0;
+}
+
+/* ================== TABLES ================== */
+.document-preview-container table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1em 0;
+}
+
+.document-preview-container td,
+.document-preview-container th {
+    border: 1px solid #374151;
+    padding: 8px 12px;
+    text-align: right;
+}
+
+.document-preview-container th {
+    background: #e8e8e8;
+    font-weight: bold;
+}
+
+.dark .document-preview-container th {
+    background: #374151;
+}
+
+.dark .document-preview-container td,
+.dark .document-preview-container th {
+    border-color: #4b5563;
+}
+
+/* ================== LINKS ================== */
+.document-preview-container a {
+    color: #3b82f6;
+    text-decoration: underline;
+}
+
+.document-preview-container a:hover {
+    color: #2563eb;
+}
+
+/* ================== BLOCKQUOTE ================== */
+.document-preview-container blockquote {
+    border-right: 4px solid #3b82f6;
+    border-left: none;
+    padding-right: 16px;
+    padding-left: 0;
+    margin: 1em 0;
+    color: #6b7280;
+    background: #f9fafb;
+}
+
+.dark .document-preview-container blockquote {
+    background: #1f2937;
+    color: #9ca3af;
+}
+
+/* ================== CODE ================== */
+.document-preview-container code {
+    background: #f3f4f6;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+}
+
+.dark .document-preview-container code {
+    background: #374151;
+}
+
+.document-preview-container pre {
+    background: #1f2937;
+    color: #e5e7eb;
+    padding: 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    margin: 1em 0;
+}
+
+/* ================== PAGE BREAK STYLING ================== */
+/* TinyMCE pagebreak comment styling */
+.document-preview-container .mce-pagebreak,
+.document-preview-container hr {
+    page-break-after: always !important;
+    break-after: page !important;
+    margin: 40px 0 !important;
+    border: none !important;
+    border-top: 2px dashed #3b82f6 !important;
+    position: relative;
+    display: block;
+}
+
+.document-preview-container hr::after {
+    content: '📄 فاصل صفحة';
+    position: absolute;
+    top: -12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #dbeafe;
+    padding: 4px 16px;
+    color: #1d4ed8;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 12px;
+    white-space: nowrap;
+}
+
+.dark .document-preview-container hr {
+    border-color: #60a5fa !important;
+}
+
+.dark .document-preview-container hr::after {
+    background: #1e3a5f;
+    color: #93c5fd;
+}
+
+/* ================== IMAGES ================== */
+.document-preview-container img {
+    max-width: 100%;
+    height: auto;
+    margin: 1em 0;
+    border-radius: 4px;
+}
+
+/* ================== ALIGNMENT ================== */
+.document-preview-container .text-left,
+.document-preview-container [style*="text-align: left"] {
+    text-align: left !important;
+}
+
+.document-preview-container .text-center,
+.document-preview-container [style*="text-align: center"] {
+    text-align: center !important;
+}
+
+.document-preview-container .text-right,
+.document-preview-container [style*="text-align: right"] {
+    text-align: right !important;
+}
+
+.document-preview-container .text-justify,
+.document-preview-container [style*="text-align: justify"] {
+    text-align: justify !important;
+}
+
+/* ================== PRINT STYLES ================== */
+@media print {
+    .document-preview-container {
+        box-shadow: none !important;
+        width: 100% !important;
+        padding: 0 !important;
+    }
+
+    .document-preview-container hr {
+        page-break-after: always !important;
+        border: none !important;
+    }
+
+    .document-preview-container hr::after {
+        display: none !important;
+    }
+}
+
+@page {
+    size: A4;
+    margin: 15mm 20mm;
+}

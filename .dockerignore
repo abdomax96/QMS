@@ -1,0 +1,65 @@
+# Dependencies
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist
+build
+.vite
+.turbo
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+docker/volumes
+volumes
+
+# Environment
+.env
+.env.*
+!.env.production
+
+# Logs
+*.log
+logs
+
+# Temp
+.temp
+temp
+tmp
+*.tmp
+
+# Database
+*.sql
+supabase/snippets
+
+# Documentation
+README.md
+docs
+*.md
+!package.json
+
+# Scripts
+*.ps1
+*.sh
+
+# Archives
+*.zip
+*.tar
+*.gz

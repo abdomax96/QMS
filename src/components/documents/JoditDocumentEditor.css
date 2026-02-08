@@ -1,0 +1,217 @@
+/* JoditDocumentEditor - Simple, Clean Styles */
+
+.jodit-document-editor {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Force hide horizontal scroll on all jodit elements */
+.jodit-document-editor * {
+    max-width: 100%;
+}
+
+/* ================== PRINT ONLY ================== */
+.print-header,
+.print-footer {
+    display: none;
+}
+
+/* ================== JODIT CONTAINER ================== */
+.jodit-document-editor .jodit-container {
+    flex: 1 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    border: none !important;
+    background: #e5e7eb !important;
+    overflow: hidden !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    /* Important for flex children to shrink */
+}
+
+.dark .jodit-document-editor .jodit-container {
+    background: #111827 !important;
+}
+
+/* Toolbar - Sticky at top */
+.jodit-document-editor .jodit-toolbar__box {
+    flex-shrink: 0 !important;
+    background: #f3f4f6 !important;
+    border: none !important;
+    border-bottom: 1px solid #d1d5db !important;
+    padding: 4px 15px !important;
+    justify-content: center !important;
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 50 !important;
+}
+
+.dark .jodit-document-editor .jodit-toolbar__box {
+    background: #374151 !important;
+    border-color: #4b5563 !important;
+}
+
+/* Workplace - Scrollable area with A4 page centered */
+.jodit-document-editor .jodit-workplace {
+    flex: 1 1 0 !important;
+    /* Grow, shrink, base 0 for proper flex scrolling */
+    min-height: 0 !important;
+    /* Critical: allows flex item to shrink below content */
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    background: #e5e7eb !important;
+    display: flex !important;
+    justify-content: center !important;
+    padding: 20px 20px 60px 20px !important;
+    /* Extra bottom padding so scroll doesn't reach edge */
+}
+
+.dark .jodit-document-editor .jodit-workplace {
+    background: #111827 !important;
+}
+
+/* Editor area - A4 style */
+.jodit-document-editor .jodit-wysiwyg {
+    background: white !important;
+    width: 210mm !important;
+    min-width: 210mm !important;
+    max-width: 210mm !important;
+    min-height: 252mm !important;
+    padding: 15mm 20mm !important;
+    margin-bottom: 100px !important;
+    /* Gap at bottom - scroll won't reach edge */
+    box-shadow: 0 4px 25px rgba(0, 0, 0, 0.15) !important;
+    direction: rtl !important;
+    text-align: right !important;
+    font-family: 'Arial', 'Tahoma', sans-serif !important;
+    font-size: 14px !important;
+    line-height: 1.8 !important;
+    color: #1f2937 !important;
+}
+
+.dark .jodit-document-editor .jodit-wysiwyg {
+    background: #1f2937 !important;
+    color: #e5e7eb !important;
+}
+
+/* Placeholder */
+.jodit-document-editor .jodit-placeholder {
+    text-align: right !important;
+    padding: 15mm 20mm !important;
+    color: #9ca3af !important;
+}
+
+/* Hide status bar */
+.jodit-document-editor .jodit-status-bar {
+    display: none !important;
+}
+
+/* ================== CONTENT STYLING ================== */
+.jodit-wysiwyg p {
+    margin: 0.5em 0;
+}
+
+.jodit-wysiwyg h1 {
+    font-size: 18pt;
+    font-weight: bold;
+    margin: 1em 0 0.5em;
+}
+
+.jodit-wysiwyg h2 {
+    font-size: 16pt;
+    font-weight: bold;
+    margin: 0.8em 0 0.4em;
+}
+
+.jodit-wysiwyg h3 {
+    font-size: 14pt;
+    font-weight: bold;
+    margin: 0.6em 0 0.3em;
+}
+
+.jodit-wysiwyg ul,
+.jodit-wysiwyg ol {
+    padding-right: 2em;
+    padding-left: 0;
+    margin: 0.5em 0;
+}
+
+.jodit-wysiwyg table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1em 0;
+}
+
+.jodit-wysiwyg td,
+.jodit-wysiwyg th {
+    border: 1px solid #374151;
+    padding: 8px 12px;
+    text-align: right;
+}
+
+.jodit-wysiwyg th {
+    background: #e8e8e8;
+    font-weight: bold;
+}
+
+.dark .jodit-wysiwyg th {
+    background: #374151;
+}
+
+.dark .jodit-wysiwyg td,
+.dark .jodit-wysiwyg th {
+    border-color: #4b5563;
+}
+
+/* ================== PRINT ================== */
+@media print {
+    .jodit-document-editor {
+        overflow: visible !important;
+    }
+
+    .jodit-document-editor .jodit-toolbar__box {
+        display: none !important;
+    }
+
+    .print-header {
+        display: flex !important;
+        justify-content: space-between;
+        padding: 15mm 20mm 8px 20mm;
+        border-bottom: 2px solid #1f2937;
+        font-size: 12px;
+    }
+
+    .print-header .header-title {
+        font-size: 16px;
+        font-weight: bold;
+    }
+
+    .print-footer {
+        display: flex !important;
+        justify-content: space-between;
+        padding: 8px 20mm 15mm 20mm;
+        border-top: 1px solid #d1d5db;
+        font-size: 11px;
+        color: #6b7280;
+    }
+
+    .jodit-document-editor .jodit-workplace {
+        overflow: visible !important;
+        padding: 0 !important;
+        background: white !important;
+    }
+
+    .jodit-document-editor .jodit-wysiwyg {
+        box-shadow: none !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: auto !important;
+    }
+}
+
+@page {
+    size: A4;
+    margin: 0;
+}

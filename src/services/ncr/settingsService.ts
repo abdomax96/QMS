@@ -1,0 +1,249 @@
+import { supabase } from '../../config/supabase';
+import type { DefectCatalogItem, SystemSettings, UserProfile, PermissionMatrix } from '../../types/ncr';
+// Note: permissionMatrix.ts removed - permissions now managed via role_permissions table
+
+const SETTINGS_TABLE = 'settings';
+const SETTINGS_ID = 'global';
+
+// Legacy permission matrix is deprecated - now using RBAC role_permissions table
+const LEGACY_PERMISSION_MATRIX: PermissionMatrix = {} as PermissionMatrix;
+
+const defaultSettings: SystemSettings = {
+    departments: ['الإنتاج', 'الجودة', 'الصيانة', 'المخازن'],
+    users: [
+        { name: 'أحمد محمد', title: 'مهندس جودة' },
+        { name: 'فاطمة علي', title: 'مشرفة جودة' },
+        { name: 'محمد حسن', title: 'مهندس إنتاج' }
+    ],
+    defectCatalog: [
+        { id: crypto.randomUUID(), name: 'خدش السطح', category: 'جودة', isActive: true },
+        { id: crypto.randomUUID(), name: 'كسر', category: 'مواد', isActive: true },
+        { id: crypto.randomUUID(), name: 'خطأ أبعاد', category: 'عملية', isActive: true }
+    ],
+    products: [],
+    lines: [],
+    units: ['pcs', 'kg', 'ltr'],
+    qualityDepartments: ['الجودة'],
+    lastBackupAt: null,
+    permissionMatrix: LEGACY_PERMISSION_MATRIX, // Deprecated - use role_permissions table
+    holdsDisposalPolicy: 'warning',
+    ncrDocumentMeta: {
+        docCode: 'NCR-FRM-01',
+        issueNo: '1',
+        revisionNo: '0',
+        issueDate: '2026-01-01',
+        reviewDate: '2026-12-31'
+    }
+};
+
+export async function fetchSystemSettings(): Promise<SystemSettings> {
+    const { data, error } = await supabase
+        .from(SETTINGS_TABLE)
+        .select('id, departments, users, defect_catalog, products, lines, units, quality_departments, last_backup_at, permission_matrix, holds_disposal_policy, ncr_document_meta, created_at, updated_at')
+        .eq('id', SETTINGS_ID)
+        .single();
+
+    if (error || !data) {
+        // Create default settings if not exists
+        await supabase.from(SETTINGS_TABLE).insert({
+            id: SETTINGS_ID,
+            ...defaultSettings,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+        });
+        return defaultSettings;
+    }
+
+    return {
+        ...defaultSettings,
+        ...data,
+        departments: data.departments ?? defaultSettings.departments,
+        users: data.users ?? defaultSettings.users,
+        defectCatalog: data.defect_catalog ?? data.defectCatalog ?? defaultSettings.defectCatalog,
+        products: data.products ?? defaultSettings.products,
+        lines: data.lines ?? defaultSettings.lines,
+        qualityDepartments: data.quality_departments ?? data.qualityDepartments ?? defaultSettings.qualityDepartments,
+        lastBackupAt: data.last_backup_at ?? data.lastBackupAt ?? null,
+        permissionMatrix: data.permission_matrix ?? data.permissionMatrix ?? defaultSettings.permissionMatrix,
+        ncrDocumentMeta: data.ncr_document_meta ?? data.ncrDocumentMeta ?? defaultSettings.ncrDocumentMeta
+    };
+}
+
+export async function addProduct(product: string) {
+    const settings = await fetchSystemSettings();
+    const products = [...(settings.products || []), product];
+
+    await supabase.from(SETTINGS_TABLE).update({
+        products,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+}
+
+export async function removeProduct(product: string) {
+    const settings = await fetchSystemSettings();
+    const products = (settings.products || []).filter(p => p !== product);
+
+    await supabase.from(SETTINGS_TABLE).update({
+        products,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+}
+
+export async function addLine(line: string) {
+    const settings = await fetchSystemSettings();
+    const lines = [...(settings.lines || []), line];
+
+    await supabase.from(SETTINGS_TABLE).update({
+        lines,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+}
+
+export async function addUnit(unit: string) {
+    const settings = await fetchSystemSettings();
+    const units = [...(settings.units || []), unit];
+
+    await supabase.from(SETTINGS_TABLE).update({
+        units,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+}
+
+export async function removeUnit(unit: string) {
+    const settings = await fetchSystemSettings();
+    const units = (settings.units || []).filter(u => u !== unit);
+
+    await supabase.from(SETTINGS_TABLE).update({
+        units,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+}
+
+export async function removeLine(line: string) {
+    const settings = await fetchSystemSettings();
+    const lines = (settings.lines || []).filter(l => l !== line);
+
+    await supabase.from(SETTINGS_TABLE).update({
+        lines,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+}
+
+export async function updateSystemSettings(partial: Partial<SystemSettings>) {
+    const payload: Record<string, any> = {
+        ...partial,
+        updated_at: new Date().toISOString()
+    };
+
+    // Map camelCase to snake_case for DB
+    if (partial.ncrDocumentMeta) {
+        payload.ncr_document_meta = partial.ncrDocumentMeta;
+        delete payload.ncrDocumentMeta;
+    }
+
+    await supabase.from(SETTINGS_TABLE).update(payload).eq('id', SETTINGS_ID);
+}
+
+export async function addDepartment(department: string) {
+    const settings = await fetchSystemSettings();
+    const departments = [...(settings.departments || []), department];
+
+    await supabase.from(SETTINGS_TABLE).update({
+        departments,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+}
+
+export async function removeDepartment(department: string) {
+    const settings = await fetchSystemSettings();
+    const departments = (settings.departments || []).filter(d => d !== department);
+
+    await supabase.from(SETTINGS_TABLE).update({
+        departments,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+}
+
+export async function addUser(profile: UserProfile) {
+    const settings = await fetchSystemSettings();
+    const users = [...(settings.users || []), profile];
+
+    await supabase.from(SETTINGS_TABLE).update({
+        users,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+}
+
+export async function removeUser(profile: UserProfile) {
+    const settings = await fetchSystemSettings();
+    const users = (settings.users || []).filter(u => u.name !== profile.name);
+
+    await supabase.from(SETTINGS_TABLE).update({
+        users,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+}
+
+export async function addDefect(item: Omit<DefectCatalogItem, 'id'>) {
+    const settings = await fetchSystemSettings();
+    const defect: DefectCatalogItem = { id: crypto.randomUUID(), ...item };
+    const defectCatalog = [...(settings.defectCatalog || []), defect];
+
+    await supabase.from(SETTINGS_TABLE).update({
+        defect_catalog: defectCatalog,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+
+    return defect;
+}
+
+export async function removeDefect(item: DefectCatalogItem) {
+    const settings = await fetchSystemSettings();
+    const defectCatalog = (settings.defectCatalog || []).filter(d => d.id !== item.id);
+
+    await supabase.from(SETTINGS_TABLE).update({
+        defect_catalog: defectCatalog,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+}
+
+export async function removeUsersWithoutAccounts() {
+    const settings = await fetchSystemSettings();
+    const currentUsers = settings.users ?? [];
+
+    // Get all users from users table
+    const { data: usersData } = await supabase.from('users').select('name, display_name, email');
+
+    const accountNames = new Set<string>();
+    (usersData || []).forEach((d: any) => {
+        const name = d.name || d.display_name || d.email;
+        if (name) accountNames.add(String(name));
+    });
+
+    const filtered = currentUsers.filter((u) => accountNames.has(u.name));
+    if (filtered.length === currentUsers.length) return { removed: 0 };
+
+    await supabase.from(SETTINGS_TABLE).update({
+        users: filtered,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+
+    return { removed: currentUsers.length - filtered.length };
+}
+
+export async function updatePermissionMatrix(matrix: PermissionMatrix) {
+    await supabase.from(SETTINGS_TABLE).update({
+        permission_matrix: matrix,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+}
+
+export async function resetPermissionMatrix() {
+    // Deprecated - legacy permission matrix is no longer used
+    // Permissions are now managed via role_permissions table
+    console.warn('[DEPRECATED] resetPermissionMatrix is deprecated. Use role_permissions table instead.');
+    await supabase.from(SETTINGS_TABLE).update({
+        permission_matrix: LEGACY_PERMISSION_MATRIX,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+}

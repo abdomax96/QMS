@@ -1,0 +1,302 @@
+/* Quill Document Editor Styles - A4 Document Style */
+
+/* Main container - full height flex */
+.quill-document-editor {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #e5e7eb;
+}
+
+.dark .quill-document-editor {
+    background: #111827;
+}
+
+/* Editor container - flex grow with scroll */
+.quill-document-editor .editor-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* Quill container */
+.quill-document-editor .quill {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* ================== TOOLBAR - Fixed at top ================== */
+.quill-document-editor .ql-toolbar {
+    flex-shrink: 0 !important;
+    background: #f8fafc !important;
+    border: none !important;
+    border-bottom: 1px solid #d1d5db !important;
+    padding: 8px 16px !important;
+    display: flex !important;
+    flex-wrap: wrap !important;
+    justify-content: center !important;
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 50 !important;
+}
+
+.dark .quill-document-editor .ql-toolbar {
+    background: #374151 !important;
+    border-color: #4b5563 !important;
+}
+
+/* Toolbar RTL adjustments */
+.quill-document-editor .ql-toolbar .ql-formats {
+    margin-right: 0 !important;
+    margin-left: 15px !important;
+}
+
+/* Dark mode toolbar icons */
+.dark .quill-document-editor .ql-toolbar button,
+.dark .quill-document-editor .ql-toolbar .ql-picker-label {
+    color: #e5e7eb !important;
+}
+
+.dark .quill-document-editor .ql-toolbar button:hover,
+.dark .quill-document-editor .ql-toolbar .ql-picker-label:hover {
+    color: #60a5fa !important;
+}
+
+.dark .quill-document-editor .ql-toolbar .ql-stroke {
+    stroke: #e5e7eb !important;
+}
+
+.dark .quill-document-editor .ql-toolbar .ql-fill {
+    fill: #e5e7eb !important;
+}
+
+.dark .quill-document-editor .ql-toolbar button:hover .ql-stroke {
+    stroke: #60a5fa !important;
+}
+
+/* ================== EDITOR AREA - Scrollable ================== */
+.quill-document-editor .ql-container {
+    flex: 1 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: 0 !important;
+    border: none !important;
+    font-family: 'Cairo', 'Arial', 'Tahoma', sans-serif !important;
+    font-size: 14px !important;
+    overflow: hidden !important;
+    background: #e5e7eb !important;
+}
+
+.dark .quill-document-editor .ql-container {
+    background: #111827 !important;
+}
+
+/* Editor content area - scrollable with A4 styling */
+.quill-document-editor .ql-editor {
+    flex: 1 !important;
+    overflow-y: auto !important;
+    padding: 20px !important;
+    background: #e5e7eb !important;
+    direction: rtl !important;
+    text-align: right !important;
+}
+
+.dark .quill-document-editor .ql-editor {
+    background: #111827 !important;
+}
+
+/* A4 Page simulation - content wrapper */
+.quill-document-editor .ql-editor::before {
+    /* Placeholder styling */
+    direction: rtl !important;
+    text-align: right !important;
+    right: 0 !important;
+    left: auto !important;
+}
+
+/* Create A4 paper effect using pseudo-element on content */
+.quill-document-editor .ql-editor>* {
+    max-width: 210mm;
+    margin-left: auto;
+    margin-right: auto;
+    background: white;
+    padding: 15mm 20mm;
+    box-shadow: 0 4px 25px rgba(0, 0, 0, 0.15);
+    box-sizing: border-box;
+    min-height: 297mm;
+}
+
+.dark .quill-document-editor .ql-editor>* {
+    background: #1f2937;
+    color: #e5e7eb;
+}
+
+/* Alternative: Style the editor itself as A4 */
+.quill-document-editor .ql-editor {
+    /* A4 paper simulation */
+    --a4-width: 210mm;
+    --a4-min-height: 297mm;
+}
+
+/* Content styling */
+.quill-document-editor .ql-editor p {
+    margin: 0.5em 0;
+}
+
+.quill-document-editor .ql-editor h1 {
+    font-size: 18pt;
+    font-weight: bold;
+    margin: 1em 0 0.5em;
+}
+
+.quill-document-editor .ql-editor h2 {
+    font-size: 16pt;
+    font-weight: bold;
+    margin: 0.8em 0 0.4em;
+}
+
+.quill-document-editor .ql-editor h3 {
+    font-size: 14pt;
+    font-weight: bold;
+    margin: 0.6em 0 0.3em;
+}
+
+.quill-document-editor .ql-editor ul,
+.quill-document-editor .ql-editor ol {
+    padding-right: 2em;
+    padding-left: 0;
+    margin: 0.5em 0;
+}
+
+/* Tables */
+.quill-document-editor .ql-editor table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1em 0;
+}
+
+.quill-document-editor .ql-editor td,
+.quill-document-editor .ql-editor th {
+    border: 1px solid #374151;
+    padding: 8px 12px;
+    text-align: right;
+}
+
+.quill-document-editor .ql-editor th {
+    background: #e8e8e8;
+    font-weight: bold;
+}
+
+.dark .quill-document-editor .ql-editor th {
+    background: #374151;
+}
+
+/* Blockquote */
+.quill-document-editor .ql-editor blockquote {
+    border-right: 4px solid #3b82f6;
+    border-left: none;
+    padding-right: 16px;
+    padding-left: 0;
+    margin: 1em 0;
+    color: #6b7280;
+}
+
+/* Links */
+.quill-document-editor .ql-editor a {
+    color: #3b82f6;
+    text-decoration: underline;
+}
+
+/* ================== PRINT STYLES ================== */
+.quill-document-editor .print-header,
+.quill-document-editor .print-footer {
+    display: none;
+}
+
+@media print {
+    .quill-document-editor {
+        overflow: visible !important;
+    }
+
+    .quill-document-editor .ql-toolbar {
+        display: none !important;
+    }
+
+    .quill-document-editor .print-header {
+        display: flex !important;
+        justify-content: space-between;
+        padding: 15mm 20mm 8px 20mm;
+        border-bottom: 2px solid #1f2937;
+        font-size: 12px;
+    }
+
+    .quill-document-editor .print-header .header-title {
+        font-size: 16px;
+        font-weight: bold;
+    }
+
+    .quill-document-editor .print-footer {
+        display: flex !important;
+        justify-content: space-between;
+        padding: 8px 20mm 15mm 20mm;
+        border-top: 1px solid #d1d5db;
+        font-size: 11px;
+        color: #6b7280;
+    }
+
+    .quill-document-editor .ql-editor {
+        overflow: visible !important;
+        background: white !important;
+    }
+}
+
+@page {
+    size: A4;
+    margin: 0;
+}
+
+/* ================== SCROLLBAR STYLING ================== */
+.quill-document-editor .ql-editor::-webkit-scrollbar {
+    width: 8px;
+}
+
+.quill-document-editor .ql-editor::-webkit-scrollbar-track {
+    background: #e5e7eb;
+}
+
+.quill-document-editor .ql-editor::-webkit-scrollbar-thumb {
+    background: #9ca3af;
+    border-radius: 4px;
+}
+
+.quill-document-editor .ql-editor::-webkit-scrollbar-thumb:hover {
+    background: #6b7280;
+}
+
+.dark .quill-document-editor .ql-editor::-webkit-scrollbar-track {
+    background: #1f2937;
+}
+
+.dark .quill-document-editor .ql-editor::-webkit-scrollbar-thumb {
+    background: #4b5563;
+}
+
+/* Dropdown menus in dark mode */
+.dark .ql-picker-options {
+    background: #374151 !important;
+    border-color: #4b5563 !important;
+}
+
+.dark .ql-picker-item {
+    color: #e5e7eb !important;
+}
+
+.dark .ql-picker-item:hover {
+    color: #60a5fa !important;
+}

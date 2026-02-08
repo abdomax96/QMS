@@ -1,0 +1,34 @@
+name: Supabase Migrate (Dev)
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - "supabase/migrations/**"
+      - "supabase/seed.sql"
+      - "supabase/config.toml"
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    # Skip if the repo doesn't currently have Supabase migrations checked in.
+    if: ${{ hashFiles('supabase/migrations/*.sql') != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link project (Dev)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: supabase link --project-ref "${{ secrets.SUPABASE_PROJECT_REF_DEV }}" --yes
+
+      - name: Push migrations (Dev)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD_DEV }}
+        run: supabase db push --include-all --include-seed --yes
