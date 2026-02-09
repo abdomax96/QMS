@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useSupabaseAuth } from '../../hooks/useSupabaseAuth';
 import { useAppSettingsStore } from '../../store/appSettingsStore';
@@ -15,6 +15,8 @@ const LoginPage: React.FC = () => {
     const [error, setError] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [accountDeletedMessage, setAccountDeletedMessage] = useState('');
+    const [infoMessage, setInfoMessage] = useState('');
+    const handledReasonRef = useRef<string | null>(null);
 
     // Get logo from app settings
     const logoUrl = useAppSettingsStore((state) => state.logoUrl);
@@ -44,14 +46,34 @@ const LoginPage: React.FC = () => {
         loadSettings();
     }, []);
 
-    // Check if user was redirected due to account deletion
+    // Show user-friendly messages for redirects and ensure stale sessions are cleared.
     useEffect(() => {
         const reason = searchParams.get('reason');
+        if (!reason) return;
+        if (handledReasonRef.current === reason) return;
+        handledReasonRef.current = reason;
+
         if (reason === 'account_deleted') {
             setAccountDeletedMessage('تم حذف حسابك بواسطة مسؤول النظام. يرجى التواصل مع الإدارة للمزيد من المعلومات.');
-            // Clean up URL
-            window.history.replaceState({}, '', '/login');
+        } else if (reason === 'session_expired') {
+            setInfoMessage('انتهت صلاحية الجلسة. يرجى تسجيل الدخول مرة أخرى.');
+        } else if (reason === 'session_error') {
+            setInfoMessage('حدث خطأ أثناء التحقق من الجلسة. يرجى تسجيل الدخول مرة أخرى.');
+        } else if (reason === 'refresh_error') {
+            setInfoMessage('تعذر تحديث الجلسة. يرجى تسجيل الدخول مرة أخرى.');
         }
+
+        // Clear any stale local session tokens (prevents being stuck on an invalid session).
+        (async () => {
+            try {
+                await supabase.auth.signOut({ scope: 'local' });
+            } catch {
+                // Ignore (may be offline); user can still log in.
+            }
+        })();
+
+        // Clean up URL
+        window.history.replaceState({}, '', '/login');
     }, [searchParams]);
 
     // Get the page user was trying to access before being redirected to login
@@ -119,6 +141,13 @@ const LoginPage: React.FC = () => {
                                 <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
                             </svg>
                             <span>{accountDeletedMessage}</span>
+                        </div>
+                    )}
+
+                    {/* Info Message */}
+                    {infoMessage && (
+                        <div className="mb-4 p-3.5 bg-sky-50 dark:bg-sky-900/30 border border-sky-200 dark:border-sky-800 rounded-corporate text-sky-700 dark:text-sky-300 text-sm">
+                            {infoMessage}
                         </div>
                     )}
 
