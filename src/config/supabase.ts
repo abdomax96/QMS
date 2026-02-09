@@ -17,7 +17,9 @@ if (import.meta.env.DEV) {
 export const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 if (!isSupabaseConfigured) {
-    console.warn('⚠️ Supabase is NOT configured. Please create .env.local with VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then restart the dev server.');
+    console.warn(
+        '⚠️ Supabase is NOT configured. Create .env.development.local (recommended) or .env.local with VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then restart the dev server. For production deployments use .env.production.local (never commit).'
+    );
 }
 
 /**
