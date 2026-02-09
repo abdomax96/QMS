@@ -6,12 +6,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Invoke-Checked([string]$Exe, [string[]]$Args) {
-  $pretty = @($Exe) + $Args
+function Invoke-Checked([string]$Exe, [string[]]$Arguments) {
+  $pretty = @($Exe) + $Arguments
   Write-Host (">> " + ($pretty -join ' '))
-  & $Exe @Args
+  & $Exe @Arguments
   if ($LASTEXITCODE -ne 0) {
-    throw "Command failed ($LASTEXITCODE): $Exe $($Args -join ' ')"
+    throw "Command failed ($LASTEXITCODE): $Exe $($Arguments -join ' ')"
   }
 }
 
@@ -38,10 +38,14 @@ if ($Target -eq 'prod' -and -not (Test-Path .env.production.local)) {
 }
 
 Write-Host "Building for $Target..."
-Invoke-Checked npm @('ci')
+if (-not (Test-Path node_modules)) {
+  Invoke-Checked npm.cmd @('ci')
+} else {
+  Write-Host "node_modules already exists; skipping npm ci"
+}
 
 # Use explicit Vite mode so dev/prod builds never accidentally pick up the wrong .env.* file.
-Invoke-Checked npm @('run', 'build', '--', '--mode', $mode)
+Invoke-Checked npm.cmd @('run', 'build', '--', '--mode', $mode)
 
 Write-Host "Deploying to Cloudflare Pages project '$projectName' (branch: $branch)..."
-Invoke-Checked npx @('--yes', 'wrangler', 'pages', 'deploy', 'dist', '--project-name', $projectName, '--branch', $branch)
+Invoke-Checked npx.cmd @('--yes', 'wrangler', 'pages', 'deploy', 'dist', '--project-name', $projectName, '--branch', $branch)
