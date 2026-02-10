@@ -29,6 +29,23 @@ export function useVisibilityRefresh(options: UseVisibilityRefreshOptions = {}) 
     const isRefreshingRef = useRef(false);
 
     useEffect(() => {
+        const clearLocalSessionAndRedirect = async (reason: string) => {
+            try {
+                // Clear local auth state first so UI can proceed to login even if network is flaky.
+                useAuthStore.setState({ session: null, profile: null, loading: false, isQuality: false } as any);
+                dataCache.clear();
+                invalidatePermissionCache();
+
+                // Ensure Supabase local storage is cleared (prevents stale session blocking login).
+                await supabase.auth.signOut({ scope: 'local' });
+            } catch (err) {
+                // signOut can fail when offline; redirect anyway.
+                console.warn('[VisibilityRefresh] Failed to clear local session:', err);
+            } finally {
+                window.location.href = `/login?reason=${encodeURIComponent(reason)}`;
+            }
+        };
+
         const handleVisibilityChange = async () => {
             if (document.visibilityState === 'hidden') {
                 // Tab is now hidden - record timestamp
@@ -81,14 +98,14 @@ export function useVisibilityRefresh(options: UseVisibilityRefreshOptions = {}) 
                         console.warn('[VisibilityRefresh] Session fetch error:', sessionError.message);
                         // Session error after idle - redirect to login
                         clearTimeout(timeoutId);
-                        window.location.href = '/login?reason=session_error';
+                        await clearLocalSessionAndRedirect('session_error');
                         return;
                     }
 
                     if (!session) {
                         console.log('[VisibilityRefresh] No session found - redirecting to login');
                         clearTimeout(timeoutId);
-                        window.location.href = '/login?reason=session_expired';
+                        await clearLocalSessionAndRedirect('session_expired');
                         return;
                     }
 
@@ -99,10 +116,8 @@ export function useVisibilityRefresh(options: UseVisibilityRefreshOptions = {}) 
 
                     if (refreshError) {
                         console.warn('[VisibilityRefresh] Session refresh failed:', refreshError.message);
-                        // Clear stale auth state and redirect to login
-                        useAuthStore.setState({ session: null, profile: null, loading: false });
                         clearTimeout(timeoutId);
-                        window.location.href = '/login?reason=session_expired';
+                        await clearLocalSessionAndRedirect('session_expired');
                         return;
                     }
 
@@ -132,7 +147,7 @@ export function useVisibilityRefresh(options: UseVisibilityRefreshOptions = {}) 
                     console.error('[VisibilityRefresh] Unexpected error:', err);
                     clearTimeout(timeoutId);
                     // On unexpected error, redirect to login as fail-safe
-                    window.location.href = '/login?reason=refresh_error';
+                    await clearLocalSessionAndRedirect('refresh_error');
                 } finally {
                     isRefreshingRef.current = false;
                 }
