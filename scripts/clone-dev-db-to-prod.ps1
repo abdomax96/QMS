@@ -159,7 +159,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO anon, authent
 }
 
 function Apply-CoreAccessPolicyRepair([string]$DbHost, [string]$DbPort, [string]$DbUser, [string]$DbName, [string]$DbPassword) {
-  $repairSql = @"
+  $repairSql = @'
 -- Rebuild stable permission helper functions.
 CREATE OR REPLACE FUNCTION public.is_admin_user(check_user_id uuid DEFAULT auth.uid()) RETURNS boolean LANGUAGE sql SECURITY DEFINER STABLE
 SET search_path = public AS $$
@@ -308,17 +308,20 @@ DROP POLICY IF EXISTS "role_module_permissions_select_policy" ON public.role_mod
 CREATE POLICY "role_module_permissions_select_policy" ON public.role_module_permissions
 FOR SELECT TO authenticated
 USING (true);
-"@
+'@
 
   $env:PGPASSWORD = $DbPassword
+  $repairSqlFile = Join-Path $env:TEMP 'qms-core-access-repair.sql'
+  Set-Content -LiteralPath $repairSqlFile -Value $repairSql -Encoding UTF8 -NoNewline
   Invoke-Checked psql @(
     '--host', $DbHost,
     '--port', $DbPort,
     '--username', $DbUser,
     '--dbname', $DbName,
     '--set', 'ON_ERROR_STOP=1',
-    '--command', $repairSql
+    '--file', $repairSqlFile
   )
+  Remove-Item -LiteralPath $repairSqlFile -ErrorAction SilentlyContinue
 }
 
 function Get-SqlScalar([string]$DbHost, [string]$DbPort, [string]$DbUser, [string]$DbName, [string]$DbPassword, [string]$Sql) {
