@@ -254,6 +254,7 @@ function Resolve-BucketsToSync([string[]]$AvailableBuckets) {
 
 function BucketHasFiles([string]$Bucket, [string]$DevWorkdir) {
   $json = Invoke-Capture supabase @(
+    '--experimental',
     'storage', 'ls', "ss:///$Bucket",
     '--recursive',
     '--linked',
@@ -263,7 +264,29 @@ function BucketHasFiles([string]$Bucket, [string]$DevWorkdir) {
   if ([string]::IsNullOrWhiteSpace($json)) {
     return $false
   }
-  $parsed = $json | ConvertFrom-Json
+  $jsonCandidate = $json.Trim()
+
+  # Some CLI versions prepend informational lines before JSON output.
+  $arrayStart = $jsonCandidate.IndexOf('[')
+  $objectStart = $jsonCandidate.IndexOf('{')
+  $start = -1
+  if ($arrayStart -ge 0 -and $objectStart -ge 0) {
+    $start = [Math]::Min($arrayStart, $objectStart)
+  } elseif ($arrayStart -ge 0) {
+    $start = $arrayStart
+  } elseif ($objectStart -ge 0) {
+    $start = $objectStart
+  }
+  if ($start -gt 0) {
+    $jsonCandidate = $jsonCandidate.Substring($start)
+  }
+
+  try {
+    $parsed = $jsonCandidate | ConvertFrom-Json
+  } catch {
+    # Treat non-JSON/empty responses as no files to keep clone flow resilient.
+    return $false
+  }
   return (@($parsed).Count -gt 0)
 }
 
@@ -344,6 +367,7 @@ foreach ($bucket in $bucketsToSync) {
   New-Item -ItemType Directory -Force -Path $bucketMirrorPath | Out-Null
 
   Invoke-Checked supabase @(
+    '--experimental',
     'storage', 'cp',
     '--recursive',
     "ss:///$bucket",
@@ -353,6 +377,7 @@ foreach ($bucket in $bucketsToSync) {
   )
 
   Invoke-Checked supabase @(
+    '--experimental',
     'storage', 'cp',
     '--recursive',
     $bucketMirrorPath,
