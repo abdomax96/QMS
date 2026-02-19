@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import {
   Bars3Icon,
   MoonIcon,
@@ -11,6 +11,7 @@ import {
   ExclamationTriangleIcon,
   StopIcon,
   ClipboardDocumentListIcon,
+  ChatBubbleLeftRightIcon,
   BeakerIcon,
   LanguageIcon,
   FolderOpenIcon,
@@ -22,6 +23,7 @@ import { Link, Outlet, useLocation, useNavigate, ScrollRestoration } from 'react
 import useStore from '../store';
 import { cn } from '../utils';
 import { NotificationCenter } from '../components/notifications';
+import ChatDrawer from '../components/chat/ChatDrawer';
 import { useSupabaseAuth } from '../hooks/useSupabaseAuth';
 import { useLanguageStore } from '../store/languageStore';
 import { useAppSettingsStore } from '../store/appSettingsStore';
@@ -30,7 +32,6 @@ import TabBar from '../components/tabs/TabBar';
 import TabCloseConfirmDialog from '../components/tabs/TabCloseConfirmDialog';
 import { useTabsStore, type Tab } from '../store/tabsStore';
 import supabaseService from '../services/supabaseService';
-import { useCallback } from 'react';
 import { useModulePermissions } from '../hooks/useModulePermissions';
 import { SidebarSkeleton } from '../components/common/LoadingStates';
 import { useSessionHealth } from '../hooks/useSessionHealth';
@@ -71,6 +72,11 @@ interface NavItem {
   children?: NavItem[];
   defaultExpanded?: boolean;
 }
+
+  const DevReleasePanel = import.meta.env.DEV
+    ? lazy(() => import('../devtools/ReleasePanel'))
+    : null;
+  const chatProvider = (import.meta.env.VITE_CHAT_PROVIDER || 'native').toLowerCase();
 
 const MainLayout: React.FC = () => {
   const location = useLocation();
@@ -237,6 +243,13 @@ const MainLayout: React.FC = () => {
           label: 'المحتجزات (HOLD)',
           icon: <StopIcon className={iconSize} />,
           moduleCode: 'ncr',
+          requiresPermission: true
+        },
+        {
+          path: '/chat',
+          label: 'الدردشة',
+          icon: <ChatBubbleLeftRightIcon className={iconSize} />,
+          moduleCode: 'chat',
           requiresPermission: true
         },
       ]
@@ -645,6 +658,14 @@ const MainLayout: React.FC = () => {
         onCancel={() => setConfirmDialog(null)}
         onSave={handleSaveAndClose}
       />
+
+      {DevReleasePanel && (
+        <Suspense fallback={null}>
+          <DevReleasePanel />
+        </Suspense>
+      )}
+
+      {chatProvider !== 'mattermost' && <ChatDrawer />}
     </div>
   );
 };

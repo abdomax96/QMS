@@ -165,3 +165,36 @@
    - `supabase login`
    - `supabase link --project-ref <DEV_PROJECT_REF>`
    - `supabase db push`
+
+## 8) لوحة إصدار محلية (Dev Only)
+
+تمت إضافة مسار محلي آمن لتسهيل النشر من داخل واجهة التطوير:
+
+- لوحة الواجهة: `src/devtools/ReleasePanel.tsx`
+- الخدمة المحلية: `scripts/release-agent.mjs`
+- سكربت نسخ DB: `scripts/clone-dev-db-to-prod.ps1`
+- سكربت ترقية schema بدون فقد بيانات: `scripts/apply-prod-migrations.ps1`
+- سكربت Promote: `scripts/promote-prod-with-clone.ps1`
+
+تشغيل الخدمة:
+
+- `npm run release:agent`
+
+سيتم إنشاء جلسة محلية تلقائياً داخل اللوحة (بدون إدخال token يدوي).
+
+زر `Connect` داخل اللوحة يمكنه تشغيل `release-agent` تلقائياً أثناء `npm run dev`.
+
+مرجع الاستخدام الكامل:
+
+- `docs/RELEASE_PANEL.md`
+
+## 9) دمج Mattermost (اختياري)
+
+إذا أردت تحويل مسار `/chat` إلى Mattermost:
+
+- `VITE_CHAT_PROVIDER=mattermost`
+- `VITE_MATTERMOST_URL=https://your-mattermost-domain`
+- `VITE_MATTERMOST_MODE=external` أو `iframe` (الأخير يحتاج السماح بالـ iframe من جهة Mattermost).
+
+خطة نشر Mattermost على Vultr خطوة بخطوة:
+- `docs/MATTERMOST_VULTR.md`

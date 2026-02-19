@@ -109,19 +109,7 @@ const LabV2DashboardPage: React.FC = () => {
         ))}
       </div>
 
-      <div className="mt-10 max-w-7xl mx-auto">
-        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-4 flex items-center justify-between">
-          <div className="text-sm text-slate-700 dark:text-slate-300">
-            العودة للوحة المختبر الرئيسية:{' '}
-            <Link to="/lab" className="text-primary-600 hover:underline">
-              /lab
-            </Link>
-          </div>
-          <Link to="/lab" className="text-sm text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
-            الرجوع للوحة المختبر
-          </Link>
-        </div>
-      </div>
+
     </div>
   );
 };

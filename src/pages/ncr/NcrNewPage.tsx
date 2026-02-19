@@ -33,6 +33,14 @@ interface SelectOption {
     label: string;
 }
 
+interface DocumentOption {
+    id: string;
+    title: string;
+    document_number?: string;
+    department_id?: string | null;
+    type?: 'sop' | 'work_instruction' | string;
+}
+
 const schema = z.object({
     date: z.string().min(1, 'التاريخ مطلوب'),
     shift: z.enum(['A', 'B', 'C']).optional(),
@@ -73,7 +81,7 @@ const NcrNewPage = () => {
     const [products, setProducts] = useState<SelectOption[]>([]);
     const [lines, setLines] = useState<SelectOption[]>([]);
     const [materials, setMaterials] = useState<SelectOption[]>([]);
-    const [availableDocuments, setAvailableDocuments] = useState<any[]>([]);
+    const [availableDocuments, setAvailableDocuments] = useState<DocumentOption[]>([]);
 
     useEffect(() => {
         const fetchUsers = async () => {
@@ -221,18 +229,6 @@ const NcrNewPage = () => {
             )
             .subscribe();
 
-        // Fetch Documents for Dropdown
-        const fetchDocs = async () => {
-            const { data } = await supabase
-                .from('documents')
-                .select('id, title, document_number')
-                .eq('status', 'approved') // Only link approved documents
-                .order('title');
-
-            if (data) setAvailableDocuments(data);
-        };
-        fetchDocs();
-
         return () => {
             supabase.removeChannel(channel);
             supabase.removeChannel(departmentChannel);
@@ -263,6 +259,8 @@ const NcrNewPage = () => {
     const selectedProductId = watch('productId');
     const selectedLineId = watch('lineId');
     const selectedMaterialId = watch('materialReceivingId');
+    const selectedDepartmentId = watch('department');
+    const selectedDocumentId = watch('documentId');
     const severityValue = watch('severity');
     const occurrence = watch('occurrence');
     const detection = watch('detection');
@@ -274,14 +272,15 @@ const NcrNewPage = () => {
         materialReceivingId: selectedMaterialId
     });
 
-    const departmentOptions = departments.length
-        ? departments.map(d => d.label)
-        : settings?.departments || [];
+    const departmentOptions: DepartmentOption[] = departments.length
+        ? departments
+        : (settings?.departments || []).map((label) => ({ id: label, label }));
 
     const selectedDefect = defects.find(d => d.id === selectedDefectId);
     const selectedProductLabel = products.find(p => p.id === selectedProductId)?.label;
     const selectedLineLabel = lines.find(l => l.id === selectedLineId)?.label;
     const selectedMaterialLabel = materials.find(m => m.id === selectedMaterialId)?.label;
+    const selectedDocument = availableDocuments.find((doc) => doc.id === selectedDocumentId);
 
     const occ = Number(occurrence || 0);
     const det = Number(detection || 0);
@@ -295,6 +294,87 @@ const NcrNewPage = () => {
         }
     }, [profile, setValue]);
 
+    useEffect(() => {
+        const fetchReferenceDocuments = async () => {
+            if (!selectedCompanyId) {
+                setAvailableDocuments([]);
+                return;
+            }
+
+            const { data: userRes } = await supabase.auth.getUser();
+            const currentUserId = userRes?.user?.id;
+
+            const { data: docsData, error: docsError } = await supabase
+                .from('documents')
+                .select('id, title, document_number, department_id, type')
+                .eq('company_id', selectedCompanyId)
+                .eq('status', 'approved')
+                .in('type', ['sop', 'work_instruction'])
+                .order('title');
+
+            if (docsError) {
+                console.error('Error fetching reference documents:', docsError);
+                setAvailableDocuments([]);
+                return;
+            }
+
+            const { data: userDeptRows } = currentUserId
+                ? await supabase
+                    .from('user_departments')
+                    .select('department_id')
+                    .eq('user_id', currentUserId)
+                    .eq('is_active', true)
+                : { data: [] as { department_id: string }[] };
+
+            const userDepartmentIds = new Set<string>(
+                ((userDeptRows || []) as Array<{ department_id: string | null }>)
+                    .map((row) => row.department_id)
+                    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+            );
+
+            const { data: userShares } = currentUserId
+                ? await supabase
+                    .from('document_shares')
+                    .select('document_id')
+                    .eq('shared_with_user_id', currentUserId)
+                : { data: [] as { document_id: string }[] };
+
+            const { data: deptShares } = userDepartmentIds.size > 0
+                ? await supabase
+                    .from('document_shares')
+                    .select('document_id')
+                    .in('shared_with_department_id', Array.from(userDepartmentIds))
+                : { data: [] as { document_id: string }[] };
+
+            const sharedDocumentIds = new Set<string>(
+                [...(userShares || []), ...(deptShares || [])]
+                    .map((row) => row.document_id as string)
+                    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+            );
+
+            const localDepartmentOptions: DepartmentOption[] = departments.length
+                ? departments
+                : (settings?.departments || []).map((label) => ({ id: label, label }));
+            const selectedDepartmentOption = localDepartmentOptions.find((d) => d.id === selectedDepartmentId);
+            const selectedDepartmentUuid = selectedDepartmentOption ? selectedDepartmentOption.id : null;
+            const allowedDepartmentIds = new Set<string>([
+                ...Array.from(userDepartmentIds),
+                ...(selectedDepartmentUuid ? [selectedDepartmentUuid] : [])
+            ]);
+
+            const filteredDocs = (docsData || []).filter((doc: DocumentOption) => {
+                const isGeneral = !doc.department_id;
+                const inAllowedDepartment = !!doc.department_id && allowedDepartmentIds.has(doc.department_id);
+                const isShared = sharedDocumentIds.has(doc.id);
+                return isGeneral || inAllowedDepartment || isShared;
+            });
+
+            setAvailableDocuments(filteredDocs);
+        };
+
+        fetchReferenceDocuments();
+    }, [departments, selectedCompanyId, selectedDepartmentId, settings?.departments]);
+
     const onSubmit = async (values: FormData) => {
         setIsSubmitting(true);
         setFeedback(null);
@@ -307,11 +387,12 @@ const NcrNewPage = () => {
             }
 
             const defectLabel = selectedDefect?.name;
+            const selectedDepartmentOption = departmentOptions.find((d) => d.id === values.department);
 
             const payload: CreateNcrPayload = {
                 date: values.date,
                 shift: values.shift,
-                department: values.department,
+                department: selectedDepartmentOption?.label || values.department,
                 defectId: values.defectId || undefined,
                 defectType: values.defectType as any,
                 occurrence: occ || undefined,
@@ -329,6 +410,8 @@ const NcrNewPage = () => {
                 createdBy: values.createdBy || 'System',
                 description: values.description,
                 immediateAction: values.immediateAction,
+                documentId: values.documentId || undefined,
+                documentTitle: selectedDocument ? `${selectedDocument.document_number || ''} ${selectedDocument.title}`.trim() : undefined,
                 relatedMaterialReceivingId: values.materialReceivingId || undefined,
                 relatedMaterialName: selectedMaterialLabel || undefined,
                 companyId: selectedCompanyId
@@ -409,7 +492,7 @@ const NcrNewPage = () => {
                                 <select {...register('department')} className="w-full rounded-corporate border-slate-200 dark:border-slate-700 dark:bg-slate-900/50 focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500">
                                     <option value="">اختر القسم</option>
                                     {departmentOptions.map((dept) => (
-                                        <option key={dept} value={dept}>{dept}</option>
+                                        <option key={dept.id} value={dept.id}>{dept.label}</option>
                                     ))}
                                 </select>
                                 {errors.department && <p className="text-rose-500 text-sm mt-1">{errors.department.message}</p>}

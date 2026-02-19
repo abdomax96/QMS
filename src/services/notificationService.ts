@@ -16,7 +16,15 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 
 // ==================== Types ====================
 
-export type NotificationType = 'info' | 'success' | 'warning' | 'error' | 'task' | 'workflow';
+export type NotificationType =
+    | 'info'
+    | 'success'
+    | 'warning'
+    | 'error'
+    | 'task'
+    | 'workflow'
+    | 'chat_message'
+    | 'chat_mention';
 export type NotificationCategory = 'system' | 'ncr' | 'lab' | 'task' | 'approval' | 'alert';
 
 export interface Notification {
@@ -258,11 +266,22 @@ class NotificationService {
     /**
      * Delete all read notifications
      */
-    async deleteAllRead(): Promise<boolean> {
+    async deleteAllRead(userId?: string): Promise<boolean> {
+        let targetUserId = userId;
+        if (!targetUserId) {
+            const { data: { user } } = await supabase.auth.getUser();
+            targetUserId = user?.id;
+        }
+
+        if (!targetUserId) {
+            return false;
+        }
+
         const { error } = await supabase
             .from('notifications')
             .delete()
-            .eq('read', true);
+            .eq('read', true)
+            .eq('user_id', targetUserId);
 
         if (error) {
             console.error('Error deleting read notifications:', error);

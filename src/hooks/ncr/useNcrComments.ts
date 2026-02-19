@@ -8,6 +8,27 @@ import { supabase } from '../../config/supabase';
 import type { Comment, CreateCommentInput } from '../../domain/comments/types';
 
 const COMMENTS_TABLE = 'ncr_comments';
+const MODERN_SELECT = 'id, content, author_id, author_name, author_avatar, entity_id, entity_type, ncr_id, parent_id, edited, edited_at, created_at, reactions, attachments';
+const LEGACY_SELECT = 'id, content, author_id, author_name, ncr_id, parent_id, created_at, updated_at';
+
+const isMissingColumnError = (err: any): boolean => {
+    const code = err?.code || '';
+    const message = (err?.message || '').toLowerCase();
+    const details = (err?.details || '').toLowerCase();
+    return code === '42703'
+        || code === 'PGRST204'
+        || message.includes('column')
+        || details.includes('column');
+};
+
+const isTypeMismatchError = (err: any): boolean => {
+    const code = err?.code || '';
+    const message = (err?.message || '').toLowerCase();
+    return code === '42883'
+        || message.includes('operator does not exist')
+        || message.includes('uuid <> text')
+        || message.includes('uuid = text');
+};
 
 // Normalize DB row -> Comment model
 const mapRowToComment = (row: any): Comment => ({
@@ -16,14 +37,14 @@ const mapRowToComment = (row: any): Comment => ({
     authorId: row.author_id,
     authorName: row.author_name,
     authorAvatar: row.author_avatar ?? null,
-    entityId: row.entity_id,
-    entityType: row.entity_type,
-    parentId: row.parent_id,
+    entityId: row.entity_id ?? row.ncr_id,
+    entityType: row.entity_type ?? 'ncr',
+    parentId: row.parent_id ?? undefined,
     edited: row.edited || false,
-    editedAt: row.edited_at,
+    editedAt: row.edited_at ?? undefined,
     createdAt: row.created_at,
-    reactions: row.reactions,
-    attachments: row.attachments
+    reactions: row.reactions ?? [],
+    attachments: row.attachments ?? []
 });
 
 export function useNcrComments(entityId: string, entityType: 'ncr' | 'report' | 'hold' = 'ncr') {
@@ -31,33 +52,53 @@ export function useNcrComments(entityId: string, entityType: 'ncr' | 'report' | 
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
+    const loadComments = useCallback(async () => {
+        if (!entityId) return;
+
+        let data: any[] | null = null;
+        let fetchError: any = null;
+
+        const modernQuery = await supabase
+            .from(COMMENTS_TABLE)
+            .select(MODERN_SELECT)
+            .eq('entity_id', entityId)
+            .eq('entity_type', entityType)
+            .order('created_at', { ascending: true })
+            .limit(100);
+
+        if (!modernQuery.error) {
+            data = modernQuery.data;
+        } else if (isMissingColumnError(modernQuery.error)) {
+            const legacyQuery = await supabase
+                .from(COMMENTS_TABLE)
+                .select(LEGACY_SELECT)
+                .eq('ncr_id', entityId)
+                .order('created_at', { ascending: true })
+                .limit(100);
+
+            data = legacyQuery.data;
+            fetchError = legacyQuery.error;
+        } else {
+            fetchError = modernQuery.error;
+        }
+
+        if (fetchError) {
+            console.error('Error loading comments:', fetchError);
+            setError('حدث خطأ في تحميل التعليقات');
+            setLoading(false);
+            return;
+        }
+
+        const commentsList: Comment[] = (data || []).map(mapRowToComment);
+        setComments(commentsList);
+        setError(null);
+        setLoading(false);
+    }, [entityId, entityType]);
+
     // Load comments
     useEffect(() => {
         if (!entityId) return;
-
-        const loadComments = async () => {
-            const { data, error: fetchError } = await supabase
-                .from(COMMENTS_TABLE)
-                .select('id, content, author_id, author_name, entity_id, entity_type, parent_id, edited, edited_at, created_at, reactions, attachments')
-                .eq('entity_id', entityId)
-                .eq('entity_type', entityType)
-                .order('created_at', { ascending: true }) // الأقدم في الأعلى، الأحدث في الأسفل
-                .limit(100);
-
-            if (fetchError) {
-                console.error('Error loading comments:', fetchError);
-                setError('حدث خطأ في تحميل التعليقات');
-                setLoading(false);
-                return;
-            }
-
-            const commentsList: Comment[] = (data || []).map(mapRowToComment);
-
-            setComments(commentsList);
-            setLoading(false);
-        };
-
-        loadComments();
+        void loadComments();
 
         // Subscribe to real-time changes
         const channel = supabase
@@ -68,11 +109,11 @@ export function useNcrComments(entityId: string, entityType: 'ncr' | 'report' | 
                     event: '*',
                     schema: 'public',
                     table: COMMENTS_TABLE,
-                    filter: `entity_id=eq.${entityId}`
+                    filter: entityType === 'ncr' ? `ncr_id=eq.${entityId}` : `entity_id=eq.${entityId}`
                 },
                 () => {
                     // Reload comments on any change
-                    loadComments();
+                    void loadComments();
                 }
             )
             .subscribe();
@@ -80,36 +121,75 @@ export function useNcrComments(entityId: string, entityType: 'ncr' | 'report' | 
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [entityId, entityType]);
+    }, [entityId, entityType, loadComments]);
 
     // Add comment
     const addComment = useCallback(async (input: CreateCommentInput, authorId: string, authorName: string, authorAvatar?: string | null) => {
-        const { data, error: insertError } = await supabase.from(COMMENTS_TABLE).insert({
+        const { data: authData } = await supabase.auth.getUser();
+        const resolvedAuthorId = authorId || authData?.user?.id || '';
+        const timestamp = new Date().toISOString();
+
+        const modernInsert = await supabase.from(COMMENTS_TABLE).insert({
             content: input.content,
+            ncr_id: input.entityId,
             entity_id: input.entityId,
             entity_type: input.entityType,
             parent_id: input.parentId,
-            author_id: authorId,
+            author_id: resolvedAuthorId,
             author_name: authorName,
             author_avatar: authorAvatar ?? null,
             edited: false,
-            created_at: new Date().toISOString()
-        }).select('id, content, author_id, author_name, author_avatar, entity_id, entity_type, parent_id, edited, edited_at, created_at, reactions, attachments').single();
+            created_at: timestamp
+        }).select(MODERN_SELECT).single();
+
+        let insertData: any = modernInsert.data;
+        let insertError: any = modernInsert.error;
+
+        if (insertError && (isMissingColumnError(insertError) || isTypeMismatchError(insertError))) {
+            const legacyInsert = await supabase.from(COMMENTS_TABLE).insert({
+                content: input.content,
+                ncr_id: input.entityId,
+                parent_id: input.parentId,
+                author_id: resolvedAuthorId,
+                author_name: authorName,
+                created_at: timestamp,
+                updated_at: timestamp
+            }).select(LEGACY_SELECT).single();
+
+            insertData = legacyInsert.data;
+            insertError = legacyInsert.error;
+        }
+
+        // Fallback for environments with strict/legacy RLS where RETURNING can fail.
+        if (insertError && isTypeMismatchError(insertError)) {
+            const minimalInsert = await supabase.from(COMMENTS_TABLE).insert({
+                content: input.content,
+                ncr_id: input.entityId,
+                entity_id: input.entityId,
+                entity_type: input.entityType,
+                parent_id: input.parentId,
+                author_name: authorName
+            });
+
+            insertData = null;
+            insertError = minimalInsert.error;
+        }
 
         if (insertError) {
             console.error('Error adding comment:', insertError);
             throw insertError;
         }
 
-        // Optimistic update so the comment appears immediately
-        if (data) {
-            setComments(prev => [...prev, mapRowToComment(data)]); // أضف الجديد في الأسفل
+        if (insertData) {
+            setComments(prev => [...prev, mapRowToComment(insertData)]);
+        } else {
+            await loadComments();
         }
-    }, []);
+    }, [loadComments]);
 
     // Edit comment
     const editComment = useCallback(async (id: string, content: string) => {
-        const { error: updateError } = await supabase
+        let { error: updateError } = await supabase
             .from(COMMENTS_TABLE)
             .update({
                 content,
@@ -117,6 +197,17 @@ export function useNcrComments(entityId: string, entityType: 'ncr' | 'report' | 
                 edited_at: new Date().toISOString()
             })
             .eq('id', id);
+
+        if (updateError && isMissingColumnError(updateError)) {
+            const legacyUpdate = await supabase
+                .from(COMMENTS_TABLE)
+                .update({
+                    content,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('id', id);
+            updateError = legacyUpdate.error;
+        }
 
         if (updateError) {
             console.error('Error editing comment:', updateError);

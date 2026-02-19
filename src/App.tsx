@@ -31,6 +31,8 @@ const UserSettingsPage = lazy(() => import('./pages/UserSettingsPage'));
 // Task Pages - lazy loaded
 const TasksPage = lazy(() => import('./pages/tasks/TasksPage'));
 const TaskDetailsPage = lazy(() => import('./pages/tasks/TaskDetailsPage'));
+const ChatPage = lazy(() => import('./pages/chat/ChatPage'));
+const MattermostPage = lazy(() => import('./pages/chat/MattermostPage'));
 
 // Lab Pages (Legacy) - lazy loaded
 const LabOldDashboardPage = lazy(() => import('./pages/lab/LabDashboardPage'));
@@ -515,6 +517,21 @@ const router = createBrowserRouter([
           <TasksRoute>
             <TaskDetailsPage />
           </TasksRoute>
+        )
+      },
+      // ==================== Chat Module ====================
+      {
+        path: "chat",
+        element: (
+          <ModuleRoute module="chat" action="view_conversations">
+            <Suspense fallback={<PageLoader />}>
+              {import.meta.env.VITE_CHAT_PROVIDER === 'mattermost' ? (
+                <MattermostPage />
+              ) : (
+                <ChatPage />
+              )}
+            </Suspense>
+          </ModuleRoute>
         )
       },
       // ==================== Laboratory Module ====================

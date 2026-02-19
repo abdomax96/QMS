@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { supabase } from '../../config/supabase';
+import { addDefect as addDefectSetting, fetchSystemSettings, updateDefect as updateDefectSetting } from '../../services/ncr/settingsService';
 
 export type DefectType = 'raw_material' | 'product' | 'process' | 'other';
 
@@ -28,59 +28,69 @@ export function useDefects(options: UseDefectsOptions = {}) {
         setLoading(true);
         setError(null);
         try {
-            let query = supabase
-                .from('defects')
-                .select('id, name, severity, defect_type, is_active')
-                .order('name');
+            const settings = await fetchSystemSettings();
+            let next = (settings.defectCatalog || []).map((d) => ({
+                id: d.id,
+                name: d.name,
+                severity: (d.severity || 'medium') as 'low' | 'medium' | 'high',
+                defect_type: (d.defectType || 'other') as DefectType,
+                is_active: d.isActive !== false
+            }));
 
             if (!options.includeInactive) {
-                query = query.eq('is_active', true);
+                next = next.filter((d) => d.is_active);
             }
 
-            if (options.defectType) query = query.eq('defect_type', options.defectType);
-            // Source filters are placeholders for future table relations; kept for API compatibility
-            if (options.productId) query = query.eq('product_id', options.productId);
-            if (options.productionLineId) query = query.eq('production_line_id', options.productionLineId);
-            if (options.materialReceivingId) query = query.eq('material_receiving_id', options.materialReceivingId);
+            if (options.defectType) {
+                next = next.filter((d) => d.defect_type === options.defectType);
+            }
 
-            const { data, error: qError } = await query;
-            if (qError) throw qError;
-            setDefects((data || []) as Defect[]);
+            next.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+            setDefects(next);
         } catch (err: any) {
             console.error('Error loading defects', err);
             setError(err.message || 'Error loading defects');
         } finally {
             setLoading(false);
         }
-    }, [options.defectType, options.productId, options.productionLineId, options.materialReceivingId]);
+    }, [options.defectType, options.includeInactive, options.productId, options.productionLineId, options.materialReceivingId]);
 
     const addDefect = useCallback(
         async (input: { name: string; severity: 'low' | 'medium' | 'high'; defect_type: DefectType }) => {
-            const { data, error: insertError } = await supabase
-                .from('defects')
-                .insert({
-                    name: input.name,
-                    severity: input.severity,
-                    defect_type: input.defect_type,
-                    is_active: true
-                })
-                .select()
-                .single();
-
-            if (insertError) throw insertError;
+            const data = await addDefectSetting({
+                name: input.name,
+                category: 'NCR',
+                defectType: input.defect_type,
+                severity: input.severity,
+                isActive: true
+            });
             await fetchDefects();
-            return data as Defect;
+            return {
+                id: data.id,
+                name: data.name,
+                defect_type: (data.defectType || 'other') as DefectType,
+                severity: (data.severity || 'medium') as 'low' | 'medium' | 'high',
+                is_active: data.isActive !== false
+            } as Defect;
         },
         [fetchDefects]
     );
 
     const updateDefect = useCallback(
         async (id: string, patch: Partial<Pick<Defect, 'name' | 'severity' | 'defect_type' | 'is_active'>>) => {
-            const { error } = await supabase
-                .from('defects')
-                .update(patch)
-                .eq('id', id);
-            if (error) throw error;
+            const settings = await fetchSystemSettings();
+            const target = (settings.defectCatalog || []).find((d) => d.id === id);
+            if (!target) {
+                throw new Error('Defect not found');
+            }
+
+            await updateDefectSetting({
+                ...target,
+                name: patch.name ?? target.name,
+                defectType: (patch.defect_type ?? target.defectType ?? 'other') as DefectType,
+                severity: (patch.severity ?? target.severity ?? 'medium') as 'low' | 'medium' | 'high',
+                isActive: patch.is_active ?? target.isActive
+            });
             await fetchDefects();
         },
         [fetchDefects]

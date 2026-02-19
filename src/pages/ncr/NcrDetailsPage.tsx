@@ -16,7 +16,8 @@ import { useAuth } from '../../hooks/ncr/useAuth';
 import notificationService from '../../services/notificationService';
 import { supabase } from '../../config/supabase';
 import { useNcrComments } from '../../hooks/ncr/useNcrComments';
-import { getNcrById } from '../../services/ncr/ncrService';
+import { addNcrHoldSortLog, fetchNcrHoldSortLogs, getNcrById, type NcrHoldSortLogRecord } from '../../services/ncr/ncrService';
+import { printNcrReport } from '../../services/ncr/ncrPrintService';
 import { useEnsureCompaniesLoaded } from '../../hooks/useEnsureCompaniesLoaded';
 import { WORKFLOW_STAGES } from '../../types/ncr';
 import type { NcrRecord } from '../../types/ncr';
@@ -99,15 +100,15 @@ function NcrCommentsWrapper({ ncrId, userInfo, isClosed }: {
                     .from('users')
                     .select('id, name')
                     .eq('department', ncrRow.department)
-                    .neq('id', userInfo.id)
                     .eq('is_active', true);
 
-                if (!recipients || recipients.length === 0) return;
+                const filteredRecipients = (recipients || []).filter((u: any) => String(u.id) !== String(userInfo.id || ''));
+                if (!filteredRecipients.length) return;
 
                 const title = `تعليق جديد على NCR ${ncrRow.number || ''}`.trim();
                 const preview = input.content.slice(0, 120);
 
-                await Promise.all(recipients.map((u: any) =>
+                await Promise.all(filteredRecipients.map((u: any) =>
                     notificationService.createNotification({
                         userId: u.id,
                         title,
@@ -138,10 +139,19 @@ const NcrDetailsPage = () => {
     const [ncr, setNcr] = useState<NcrRecord | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [holdLogs, setHoldLogs] = useState<NcrHoldSortLogRecord[]>([]);
+    const [holdLogLoading, setHoldLogLoading] = useState(false);
+    const [holdLogForm, setHoldLogForm] = useState({
+        sortedQty: '',
+        destroyedQty: '',
+        sortedAt: new Date().toISOString().slice(0, 16),
+        notes: ''
+    });
+    const [holdLogError, setHoldLogError] = useState<string | null>(null);
 
     // User info for workflow actions
     const userInfo = {
-        id: profile?.uid || profile?.name || 'مستخدم',
+        id: profile?.uid || '',
         name: profile?.name || profile?.email || 'مستخدم',
         email: (profile as { email?: string })?.email || '',
         avatarUrl: (profile as { avatarUrl?: string })?.avatarUrl || null,
@@ -171,6 +181,67 @@ const NcrDetailsPage = () => {
             })
             .finally(() => setLoading(false));
     }, [id, selectedCompanyId]);
+
+    useEffect(() => {
+        const loadHoldLogs = async () => {
+            if (!id || !selectedCompanyId) {
+                setHoldLogs([]);
+                return;
+            }
+
+            setHoldLogLoading(true);
+            try {
+                const rows = await fetchNcrHoldSortLogs(id, selectedCompanyId);
+                setHoldLogs(rows);
+            } catch (err) {
+                console.error('Failed to load hold logs:', err);
+                setHoldLogs([]);
+            } finally {
+                setHoldLogLoading(false);
+            }
+        };
+
+        loadHoldLogs();
+    }, [id, selectedCompanyId]);
+
+    const handleAddHoldLog = async () => {
+        if (!ncr || !selectedCompanyId) return;
+
+        const sortedQty = Number(holdLogForm.sortedQty || 0);
+        const destroyedQty = Number(holdLogForm.destroyedQty || 0);
+
+        if (!sortedQty || sortedQty <= 0) {
+            setHoldLogError('يرجى إدخال كمية مفرزة أكبر من صفر.');
+            return;
+        }
+        if (destroyedQty < 0 || destroyedQty > sortedQty) {
+            setHoldLogError('الكمية المتهلكة يجب أن تكون بين 0 والكمية المفرزة.');
+            return;
+        }
+
+        setHoldLogError(null);
+        try {
+            const inserted = await addNcrHoldSortLog({
+                ncrId: ncr.id,
+                companyId: selectedCompanyId,
+                sortedQty,
+                destroyedQty,
+                sortedAt: holdLogForm.sortedAt ? new Date(holdLogForm.sortedAt).toISOString() : new Date().toISOString(),
+                sortedBy: userInfo.id || null,
+                notes: holdLogForm.notes || null
+            });
+            setHoldLogs((prev) => [inserted, ...prev]);
+            setHoldLogForm({
+                sortedQty: '',
+                destroyedQty: '',
+                sortedAt: new Date().toISOString().slice(0, 16),
+                notes: ''
+            });
+        } catch (err) {
+            console.error('Failed to add hold log:', err);
+            setHoldLogError('تعذر حفظ سجل الفرز. حاول مرة أخرى.');
+        }
+    };
 
     const handleDelete = async () => {
         if (!id || !confirm('هل أنت متأكد من حذف هذا التقرير؟')) return;
@@ -203,6 +274,10 @@ const NcrDetailsPage = () => {
     const isClosed = !!ncr.closedAt;
     const currentStage = WORKFLOW_STAGES[ncr.currentStage];
     const progress = ((ncr.completedStages?.length || 0) / 5) * 100;
+    const reservedQty = Number(ncr.reservedQty || 0);
+    const totalSortedQty = holdLogs.reduce((sum, row) => sum + Number(row.sortedQty || 0), 0);
+    const totalDestroyedQty = holdLogs.reduce((sum, row) => sum + Number(row.destroyedQty || 0), 0);
+    const remainingQty = Math.max(0, reservedQty - totalSortedQty);
 
     return (
         <div className="p-6 max-w-5xl mx-auto space-y-6">
@@ -225,7 +300,7 @@ const NcrDetailsPage = () => {
                 </div>
                 <div className="flex gap-2">
                     <button
-                        onClick={() => window.print()}
+                        onClick={() => void printNcrReport(ncr)}
                         className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors print:hidden"
                         title="طباعة التقرير"
                     >
@@ -339,7 +414,6 @@ const NcrDetailsPage = () => {
                                 <Link
                                     to={`/documents/${ncr.documentId}`}
                                     className="text-sm font-medium text-blue-700 dark:text-blue-300 hover:underline flex items-center gap-2"
-                                    target="_blank"
                                 >
                                     {ncr.documentTitle || 'عرض الوثيقة المرتبطة'}
                                     <ArrowTopRightOnSquareIcon className="w-4 h-4" />
@@ -391,6 +465,124 @@ const NcrDetailsPage = () => {
                 </div>
             </div>
 
+            {/* Hold Sorting Tracking */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 space-y-4">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">متابعة الكميات المحجوزة والفرز</h2>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-700">
+                        <p className="text-xs text-slate-500">الكمية المحجوزة</p>
+                        <p className="text-lg font-semibold text-slate-900 dark:text-white">{reservedQty || 0} {ncr.reservedUnit || ''}</p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20">
+                        <p className="text-xs text-blue-600 dark:text-blue-300">الكمية المفرزة</p>
+                        <p className="text-lg font-semibold text-blue-700 dark:text-blue-300">{totalSortedQty} {ncr.reservedUnit || ''}</p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/20">
+                        <p className="text-xs text-red-600 dark:text-red-300">الكمية المتهلكة</p>
+                        <p className="text-lg font-semibold text-red-700 dark:text-red-300">{totalDestroyedQty} {ncr.reservedUnit || ''}</p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/20">
+                        <p className="text-xs text-emerald-600 dark:text-emerald-300">الكمية المتبقية</p>
+                        <p className="text-lg font-semibold text-emerald-700 dark:text-emerald-300">{remainingQty} {ncr.reservedUnit || ''}</p>
+                    </div>
+                </div>
+
+                {!isClosed && (
+                    <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-3">
+                        <h3 className="text-sm font-semibold text-gray-900 dark:text-white">إضافة عملية فرز جديدة</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                            <div>
+                                <label className="block text-xs text-gray-600 dark:text-gray-300 mb-1">الكمية المفرزة *</label>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={holdLogForm.sortedQty}
+                                    onChange={(e) => setHoldLogForm((prev) => ({ ...prev, sortedQty: e.target.value }))}
+                                    className="w-full rounded-lg border-gray-300 dark:border-gray-600 dark:bg-gray-700"
+                                    placeholder="0"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-gray-600 dark:text-gray-300 mb-1">الكمية المتهلكة</label>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={holdLogForm.destroyedQty}
+                                    onChange={(e) => setHoldLogForm((prev) => ({ ...prev, destroyedQty: e.target.value }))}
+                                    className="w-full rounded-lg border-gray-300 dark:border-gray-600 dark:bg-gray-700"
+                                    placeholder="0"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-gray-600 dark:text-gray-300 mb-1">تاريخ ووقت الفرز</label>
+                                <input
+                                    type="datetime-local"
+                                    value={holdLogForm.sortedAt}
+                                    onChange={(e) => setHoldLogForm((prev) => ({ ...prev, sortedAt: e.target.value }))}
+                                    className="w-full rounded-lg border-gray-300 dark:border-gray-600 dark:bg-gray-700"
+                                />
+                            </div>
+                            <div className="flex items-end">
+                                <button
+                                    type="button"
+                                    onClick={handleAddHoldLog}
+                                    className="w-full px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+                                >
+                                    حفظ الفرز
+                                </button>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block text-xs text-gray-600 dark:text-gray-300 mb-1">ملاحظة</label>
+                            <textarea
+                                rows={2}
+                                value={holdLogForm.notes}
+                                onChange={(e) => setHoldLogForm((prev) => ({ ...prev, notes: e.target.value }))}
+                                className="w-full rounded-lg border-gray-300 dark:border-gray-600 dark:bg-gray-700"
+                                placeholder="تفاصيل إضافية عن عملية الفرز"
+                            />
+                        </div>
+                        {holdLogError && <p className="text-sm text-rose-600">{holdLogError}</p>}
+                    </div>
+                )}
+
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                        <thead className="bg-gray-50 dark:bg-gray-700">
+                            <tr>
+                                <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-100">التاريخ والوقت</th>
+                                <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-100">مفرز</th>
+                                <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-100">متهلك</th>
+                                <th className="px-3 py-2 text-right text-gray-700 dark:text-gray-100">ملاحظات</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                            {holdLogLoading ? (
+                                <tr>
+                                    <td className="px-3 py-4 text-center text-gray-500" colSpan={4}>جاري تحميل سجلات الفرز...</td>
+                                </tr>
+                            ) : holdLogs.length === 0 ? (
+                                <tr>
+                                    <td className="px-3 py-4 text-center text-gray-500" colSpan={4}>لا توجد سجلات فرز بعد</td>
+                                </tr>
+                            ) : (
+                                holdLogs.map((row) => (
+                                    <tr key={row.id}>
+                                        <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{formatDate(row.sortedAt)}</td>
+                                        <td className="px-3 py-2 text-blue-700 dark:text-blue-300">{row.sortedQty} {ncr.reservedUnit || ''}</td>
+                                        <td className="px-3 py-2 text-red-700 dark:text-red-300">{row.destroyedQty} {ncr.reservedUnit || ''}</td>
+                                        <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{row.notes || '-'}</td>
+                                    </tr>
+                                ))
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
             {/* Description */}
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">الوصف</h2>
@@ -432,7 +624,8 @@ const NcrDetailsPage = () => {
                                 </div>
                                 <p className="text-gray-800 dark:text-gray-200">{action.description}</p>
                                 <div className="mt-2 text-sm text-gray-500">
-                                    <span>المسؤول: {action.responsiblePerson}</span>
+                                    <span>القسم المسؤول: {action.responsibleDept || '-'}</span>
+                                    <span className="mr-4">المسؤول: {action.responsiblePerson || '-'}</span>
                                     {action.targetDate && <span className="mr-4">الموعد: {action.targetDate}</span>}
                                 </div>
                             </div>

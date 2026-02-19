@@ -17,6 +17,7 @@ import {
     BeakerIcon,
     ExclamationTriangleIcon,
     CubeIcon,
+    ChatBubbleLeftRightIcon,
     ChevronDownIcon,
     ChevronRightIcon,
     TrashIcon,
@@ -128,6 +129,23 @@ const DEFAULT_MODULES: AppModule[] = [
         data_isolation_mode: 'department',
     },
     {
+        code: 'chat',
+        name: 'Chat',
+        name_ar: 'الدردشة',
+        color: '#0EA5E9',
+        icon: 'ChatBubbleLeftRight',
+        available_actions: [
+            'view_conversations',
+            'create_conversation',
+            'send_message',
+            'send_attachment',
+            'manage_conversation',
+            'manage_department_chat',
+            'moderate_chat'
+        ],
+        data_isolation_mode: 'isolated',
+    },
+    {
         code: 'access_management',
         name: 'Access Management',
         name_ar: 'إدارة الصلاحيات',
@@ -185,6 +203,7 @@ const ModuleIcons: Record<string, React.ReactNode> = {
     ncr: <ExclamationTriangleIcon className="w-5 h-5" />,
     pallet_management: <CubeIcon className="w-5 h-5" />,
     documents: <FolderOpenIcon className="w-5 h-5" />,
+    chat: <ChatBubbleLeftRightIcon className="w-5 h-5" />,
     access_management: <ShieldCheckIcon className="w-5 h-5" />,
 };
 
@@ -225,6 +244,14 @@ const ActionLabels: Record<string, { en: string; ar: string; color: string }> = 
     obsolete: { en: 'Obsolete', ar: 'إلغاء', color: '#EF4444' },
     edit_after_approval: { en: 'Edit After Approval', ar: 'تحرير بعد الاعتماد', color: '#F97316' },
     view_all_documents: { en: 'View All Documents', ar: 'رؤية جميع الوثائق', color: '#06B6D4' },
+    // Chat actions
+    view_conversations: { en: 'View Conversations', ar: 'عرض المحادثات', color: '#6B7280' },
+    create_conversation: { en: 'Create Conversation', ar: 'إنشاء محادثة', color: '#10B981' },
+    send_message: { en: 'Send Message', ar: 'إرسال رسالة', color: '#3B82F6' },
+    send_attachment: { en: 'Send Attachment', ar: 'إرسال مرفق', color: '#8B5CF6' },
+    manage_conversation: { en: 'Manage Conversation', ar: 'إدارة المحادثة', color: '#F59E0B' },
+    manage_department_chat: { en: 'Manage Department Chat', ar: 'إدارة دردشة القسم', color: '#EC4899' },
+    moderate_chat: { en: 'Moderate Chat', ar: 'الإشراف على الدردشة', color: '#EF4444' },
 };
 
 // ==================== Loading ====================
@@ -1067,6 +1094,8 @@ const SimplePermissionMatrix: React.FC = () => {
 };
 
 export default SimplePermissionMatrix;
+
+
 
 
 

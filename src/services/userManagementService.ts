@@ -215,6 +215,25 @@ export const userManagementService = {
 
             // ============ STEP 3: Create Profile ============
             console.log(`[UserManagement] Step 2/4: Creating user profile...`);
+            let resolvedCompanyId: string | null = null;
+            const { data: companyId, error: companyError } = await supabase.rpc('get_user_company_id');
+            if (!companyError && companyId) {
+                resolvedCompanyId = companyId as string;
+            } else {
+                const { data: settingsRow, error: settingsError } = await supabase
+                    .from('settings')
+                    .select('main_company_id')
+                    .eq('id', 'global')
+                    .maybeSingle();
+                if (!settingsError && settingsRow?.main_company_id) {
+                    resolvedCompanyId = settingsRow.main_company_id as string;
+                }
+            }
+
+            if (!resolvedCompanyId) {
+                throw new Error('تعذر تحديد الشركة الحالية');
+            }
+
             const userProfile = {
                 id: authData.user.id,
                 email: input.email.trim(),
@@ -224,6 +243,7 @@ export const userManagementService = {
                 phone: input.phone || null,
                 roles: rolesToAssign, // Store in JSONB array for backward compatibility
                 is_active: true,
+                company_id: resolvedCompanyId,
                 created_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
             };

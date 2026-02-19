@@ -20,7 +20,7 @@ const SEVERITY_LABELS: Record<'low' | 'medium' | 'high', string> = {
 
 export default function NcrConfigPage() {
     const { defects, addDefect, updateDefect, loading, error } = useDefects({ includeInactive: true });
-    const { settings, updateSettings, isLoading: settingsLoading } = useNcrSettings();
+    const { settings, addUnit, removeUnit, updateSettings, isLoading: settingsLoading } = useNcrSettings();
     const [form, setForm] = useState<{ name: string; severity: 'low' | 'medium' | 'high'; type: DefectType }>({
         name: '',
         severity: 'medium',
@@ -30,6 +30,8 @@ export default function NcrConfigPage() {
     const [message, setMessage] = useState<string | null>(null);
     const [metaSaving, setMetaSaving] = useState(false);
     const [metaSaved, setMetaSaved] = useState(false);
+    const [unitInput, setUnitInput] = useState('');
+    const [unitSaving, setUnitSaving] = useState(false);
     const [meta, setMeta] = useState({
         docCode: '-01FRM-NCR',
         issueNo: '1',
@@ -158,6 +160,63 @@ export default function NcrConfigPage() {
                     {metaSaving ? 'جار الحفظ...' : 'حفظ التكويد'}
                 </button>
                 <p className="text-xs text-gray-500 dark:text-gray-400">تظهر هذه البيانات في ترويسة تقرير الطباعة لـ NCR.</p>
+            </div>
+
+            {/* Reserved Units */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5 space-y-4">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">وحدات الكمية المحجوزة</h2>
+                <div className="flex flex-wrap gap-2">
+                    {(settings?.units || []).map((unit) => (
+                        <button
+                            key={unit}
+                            type="button"
+                            onClick={async () => {
+                                setUnitSaving(true);
+                                try {
+                                    await removeUnit(unit);
+                                } finally {
+                                    setUnitSaving(false);
+                                }
+                            }}
+                            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-100 text-sm"
+                        >
+                            <span>{unit}</span>
+                            <span className="text-rose-500">×</span>
+                        </button>
+                    ))}
+                    {(settings?.units || []).length === 0 && (
+                        <p className="text-sm text-gray-500">لا توجد وحدات مضافة حاليًا</p>
+                    )}
+                </div>
+                <div className="flex gap-2">
+                    <input
+                        value={unitInput}
+                        onChange={(e) => setUnitInput(e.target.value)}
+                        placeholder="أضف وحدة جديدة (مثال: طن)"
+                        className="w-full rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-900/50"
+                    />
+                    <button
+                        type="button"
+                        disabled={unitSaving || !unitInput.trim()}
+                        onClick={async () => {
+                            const nextUnit = unitInput.trim();
+                            if (!nextUnit) return;
+                            setUnitSaving(true);
+                            try {
+                                await addUnit(nextUnit);
+                                setUnitInput('');
+                            } finally {
+                                setUnitSaving(false);
+                            }
+                        }}
+                        className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+                    >
+                        إضافة
+                    </button>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                    تُستخدم هذه القائمة مباشرة في حقل وحدة الكمية المحجوزة داخل نموذج NCR.
+                </p>
             </div>
 
             {/* إضافة عيب */}

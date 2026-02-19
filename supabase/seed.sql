@@ -58,7 +58,7 @@ VALUES (
         'd0000002-0000-0000-0000-000000000002',
         'ضمان الجودة',
         'ضمان الجودة',
-        'Quality Assurance',
+        'Quality Assurance',    
         'QA',
         '#10B981',
         'CheckCircle',
@@ -404,7 +404,154 @@ VALUES (
 -- =============================================
 -- 9. منح جميع الصلاحيات لدور Super Admin
 -- =============================================
--- Ensure additional modules exist
+-- Ensure additional modules exist (robust against environments missing UNIQUE(code))
+WITH desired_modules AS (
+    SELECT *
+    FROM (
+            VALUES (
+                    'master_data',
+                    'Master Data',
+                    'البيانات الأساسية',
+                    'Database',
+                    '#F59E0B',
+                    6,
+                    true,
+                    'shared',
+                    ARRAY ['view', 'create', 'edit', 'delete', 'approve', 'export', 'import']::text []
+                ),
+                (
+                    'settings',
+                    'Settings',
+                    'الإعدادات',
+                    'Cog',
+                    '#6B7280',
+                    8,
+                    true,
+                    'shared',
+                    ARRAY ['view', 'edit', 'manage_permissions', 'manage_users', 'manage_departments', 'manage_roles']::text []
+                ),
+                (
+                    'food_safety',
+                    'Food Safety',
+                    'سلامة الغذاء',
+                    'Shield',
+                    '#10B981',
+                    9,
+                    true,
+                    'shared',
+                    ARRAY ['view', 'create', 'edit', 'delete', 'approve', 'export']::text []
+                ),
+                (
+                    'chat',
+                    'Chat',
+                    'الدردشة',
+                    'MessageSquare',
+                    '#0EA5E9',
+                    10,
+                    true,
+                    'isolated',
+                    ARRAY [
+                        'view_conversations',
+                        'create_conversation',
+                        'send_message',
+                        'send_attachment',
+                        'manage_conversation',
+                        'manage_department_chat',
+                        'moderate_chat'
+                    ]::text []
+                )
+        ) AS v (
+            code,
+            name,
+            name_ar,
+            icon,
+            color,
+            display_order,
+            is_active,
+            data_isolation_mode,
+            available_actions
+        )
+)
+UPDATE public.app_modules am
+SET name = dm.name,
+    name_ar = dm.name_ar,
+    icon = dm.icon,
+    color = dm.color,
+    display_order = dm.display_order,
+    is_active = dm.is_active,
+    data_isolation_mode = dm.data_isolation_mode,
+    available_actions = dm.available_actions,
+    updated_at = NOW()
+FROM desired_modules dm
+WHERE am.code = dm.code;
+
+WITH desired_modules AS (
+    SELECT *
+    FROM (
+            VALUES (
+                    'master_data',
+                    'Master Data',
+                    'البيانات الأساسية',
+                    'Database',
+                    '#F59E0B',
+                    6,
+                    true,
+                    'shared',
+                    ARRAY ['view', 'create', 'edit', 'delete', 'approve', 'export', 'import']::text []
+                ),
+                (
+                    'settings',
+                    'Settings',
+                    'الإعدادات',
+                    'Cog',
+                    '#6B7280',
+                    8,
+                    true,
+                    'shared',
+                    ARRAY ['view', 'edit', 'manage_permissions', 'manage_users', 'manage_departments', 'manage_roles']::text []
+                ),
+                (
+                    'food_safety',
+                    'Food Safety',
+                    'سلامة الغذاء',
+                    'Shield',
+                    '#10B981',
+                    9,
+                    true,
+                    'shared',
+                    ARRAY ['view', 'create', 'edit', 'delete', 'approve', 'export']::text []
+                ),
+                (
+                    'chat',
+                    'Chat',
+                    'الدردشة',
+                    'MessageSquare',
+                    '#0EA5E9',
+                    10,
+                    true,
+                    'isolated',
+                    ARRAY [
+                        'view_conversations',
+                        'create_conversation',
+                        'send_message',
+                        'send_attachment',
+                        'manage_conversation',
+                        'manage_department_chat',
+                        'moderate_chat'
+                    ]::text []
+                )
+        ) AS v (
+            code,
+            name,
+            name_ar,
+            icon,
+            color,
+            display_order,
+            is_active,
+            data_isolation_mode,
+            available_actions
+        )
+)
 INSERT INTO public.app_modules (
         code,
         name,
@@ -416,43 +563,30 @@ INSERT INTO public.app_modules (
         data_isolation_mode,
         available_actions
     )
-VALUES (
-        'master_data',
-        'Master Data',
-        'البيانات الأساسية',
-        'Database',
-        '#F59E0B',
-        6,
-        true,
-        'shared',
-        ARRAY ['view', 'create', 'edit', 'delete', 'approve', 'export', 'import']
-    ),
-    (
-        'settings',
-        'Settings',
-        'الإعدادات',
-        'Cog',
-        '#6B7280',
-        8,
-        true,
-        'shared',
-        ARRAY ['view', 'edit', 'manage_permissions', 'manage_users', 'manage_departments', 'manage_roles']
-    ),
-    (
-        'food_safety',
-        'Food Safety',
-        'سلامة الغذاء',
-        'Shield',
-        '#10B981',
-        9,
-        true,
-        'shared',
-        ARRAY ['view', 'create', 'edit', 'delete', 'approve', 'export']
-    ) ON CONFLICT (code) DO
-UPDATE
-SET available_actions = EXCLUDED.available_actions,
-    is_active = true;
+SELECT dm.code,
+    dm.name,
+    dm.name_ar,
+    dm.icon,
+    dm.color,
+    dm.display_order,
+    dm.is_active,
+    dm.data_isolation_mode,
+    dm.available_actions
+FROM desired_modules dm
+WHERE NOT EXISTS (
+        SELECT 1
+        FROM public.app_modules am
+        WHERE am.code = dm.code
+    );
 -- Grant all module permissions to Super Admin
+UPDATE public.role_module_permissions rmp
+SET granted_actions = am.available_actions,
+    can_see_all_departments = true
+FROM public.app_modules am
+WHERE rmp.role_id = '10000001-0000-0000-0000-000000000001'
+    AND rmp.module_code = am.code
+    AND am.is_active = true;
+
 INSERT INTO public.role_module_permissions (
         role_id,
         module_code,
@@ -464,10 +598,13 @@ SELECT '10000001-0000-0000-0000-000000000001',
     am.available_actions,
     true
 FROM public.app_modules am
-WHERE am.is_active = true ON CONFLICT (role_id, module_code) DO
-UPDATE
-SET granted_actions = EXCLUDED.granted_actions,
-    can_see_all_departments = true;
+WHERE am.is_active = true
+    AND NOT EXISTS (
+        SELECT 1
+        FROM public.role_module_permissions rmp
+        WHERE rmp.role_id = '10000001-0000-0000-0000-000000000001'
+            AND rmp.module_code = am.code
+    );
 -- =============================================
 -- إعادة تفعيل فحص الصلاحيات
 -- =============================================

@@ -36,6 +36,13 @@ type DocMeta = {
   reviewDate: string;
 };
 
+type HoldSortLogRow = {
+  sorted_qty: number | string | null;
+  destroyed_qty: number | string | null;
+  sorted_at: string | null;
+  notes: string | null;
+};
+
 const fetchDocMeta = async (): Promise<DocMeta> => {
   const { data } = await supabase
     .from('settings')
@@ -72,6 +79,16 @@ const fetchUserDepartmentName = async (userId?: string | null) => {
   return (data as any)?.departments?.name || '-';
 };
 
+const fetchHoldSortLogs = async (ncrId: string): Promise<HoldSortLogRow[]> => {
+  const { data } = await supabase
+    .from('ncr_hold_sort_logs')
+    .select('sorted_qty, destroyed_qty, sorted_at, notes')
+    .eq('ncr_id', ncrId)
+    .order('sorted_at', { ascending: true });
+
+  return (data || []) as HoldSortLogRow[];
+};
+
 const roleLabel = (role?: 'department' | 'quality') => {
   if (role === 'quality') return 'ضبط الجودة';
   if (role === 'department') return 'القسم المختص';
@@ -87,8 +104,8 @@ const formatDate = (value?: string | null) => {
   }
 };
 
-const escapeHtml = (str: string) =>
-  str
+const escapeHtml = (value: unknown) =>
+  String(value ?? '-')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -100,8 +117,16 @@ export async function printNcrReport(ncr: NcrRecord) {
   const companyName = await fetchCompanyName(ncr.companyId);
   const proposedDept = await fetchUserDepartmentName(ncr.rootCauseApproval?.proposedBy);
   const reviewedDept = await fetchUserDepartmentName(ncr.rootCauseApproval?.reviewedBy);
+  const holdSortLogs = await fetchHoldSortLogs(ncr.id);
   const stageInfo = WORKFLOW_STAGES[ncr.currentStage] || WORKFLOW_STAGES.initial_report;
   const severityClass = ncr.severity === 'high' ? 'severity-high' : ncr.severity === 'medium' ? 'severity-medium' : 'severity-low';
+  const reservedQty = Number(ncr.reservedQty || 0);
+  const legacySortedQty = (ncr.holds || []).reduce((sum, h) => sum + Number(h.quantity || 0), 0);
+  const totalSortedQty = holdSortLogs.length
+    ? holdSortLogs.reduce((sum, row) => sum + Number(row.sorted_qty || 0), 0)
+    : legacySortedQty;
+  const totalDestroyedQty = holdSortLogs.reduce((sum, row) => sum + Number(row.destroyed_qty || 0), 0);
+  const remainingQty = Math.max(0, reservedQty - totalSortedQty);
 
   const actionsRows = (ncr.actions || []).map((a) => `
     <tr>
@@ -112,16 +137,6 @@ export async function printNcrReport(ncr: NcrRecord) {
       <td>${a.status}</td>
     </tr>
   `).join('') || '<tr><td colspan="5">لا توجد إجراءات CAPA</td></tr>';
-
-  const holdsRows = (ncr.holds || []).map((h) => `
-    <tr>
-      <td>${escapeHtml(h.type)}</td>
-      <td>${escapeHtml(h.quantity)} ${escapeHtml(h.unit)}</td>
-      <td>${escapeHtml(h.location)}</td>
-      <td>${h.status}</td>
-      <td>${formatDate(h.heldAt)}</td>
-    </tr>
-  `).join('') || '<tr><td colspan="5">لا توجد محتجزات</td></tr>';
 
   const verification = ncr.verification;
 
@@ -220,14 +235,18 @@ export async function printNcrReport(ncr: NcrRecord) {
     </div>
 
     <div class="section">
-      <h3>المحتجزات</h3>
+      <h3>ملخص المحتجزات والفرز</h3>
       <table class="table">
-        <thead>
+        <tbody>
           <tr>
-            <th>النوع</th><th>الكمية</th><th>الموقع</th><th>الحالة</th><th>تاريخ الحجز</th>
+            <th style="width:180px;">الكمية المحجوزة</th><td>${escapeHtml(ncr.reservedQty || '0')} ${escapeHtml(ncr.reservedUnit || '')}</td>
+            <th style="width:180px;">إجمالي المفرز</th><td>${escapeHtml(totalSortedQty)} ${escapeHtml(ncr.reservedUnit || '')}</td>
           </tr>
-        </thead>
-        <tbody>${holdsRows}</tbody>
+          <tr>
+            <th>إجمالي المتهلك</th><td>${escapeHtml(totalDestroyedQty)} ${escapeHtml(ncr.reservedUnit || '')}</td>
+            <th>الكمية المتبقية</th><td>${escapeHtml(remainingQty)} ${escapeHtml(ncr.reservedUnit || '')}</td>
+          </tr>
+        </tbody>
       </table>
     </div>
 
