@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { SystemSettings } from '../../types/ncr';
 import {
     addDefect,
+    updateDefect,
     addDepartment,
     addUser,
     fetchSystemSettings,
@@ -59,6 +60,11 @@ export function useNcrSettings() {
         onSuccess: invalidate
     });
 
+    const updateDefectMutation = useMutation({
+        mutationFn: updateDefect,
+        onSuccess: invalidate
+    });
+
     const addProductMutation = useMutation({ mutationFn: addProduct, onSuccess: invalidate });
     const removeProductMutation = useMutation({ mutationFn: removeProduct, onSuccess: invalidate });
 
@@ -87,6 +93,7 @@ export function useNcrSettings() {
         addUser: addUserMutation.mutateAsync,
         removeUser: removeUserMutation.mutateAsync,
         addDefect: addDefectMutation.mutateAsync,
+        updateDefect: updateDefectMutation.mutateAsync,
         removeDefect: removeDefectMutation.mutateAsync,
         addProduct: addProductMutation.mutateAsync,
         removeProduct: removeProductMutation.mutateAsync,

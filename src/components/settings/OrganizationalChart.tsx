@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { MagnifyingGlassIcon, PlusIcon, FunnelIcon } from '@heroicons/react/24/outline';
 import { DepartmentNode } from './DepartmentNode';
 import type { DepartmentWithChildren as DeptWithChildren } from '../../types/department';
@@ -20,6 +20,12 @@ export const OrganizationalChart: React.FC<OrganizationalChartProps> = ({
     onEditDepartment,
     onDeleteDepartment,
 }) => {
+    const NODE_WIDTH = 280;
+    const NODE_HEIGHT = 120;
+    const HORIZONTAL_GAP = 40;
+    const VERTICAL_GAP = 100;
+    const CANVAS_PADDING = 50;
+
     const [zoom, setZoom] = useState(1);
     const [pan, setPan] = useState({ x: 0, y: 0 });
     const [isDragging, setIsDragging] = useState(false);
@@ -91,43 +97,59 @@ export const OrganizationalChart: React.FC<OrganizationalChartProps> = ({
         setPan({ x: 0, y: 0 });
     };
 
-    // Calculate node positions (recursive layout)
-    const calculatePositions = (
-        nodes: DeptWithChildren[],
-        level: number = 0,
-        startX: number = 0
-    ): Map<string, { x: number; y: number; width: number }> => {
-        const positions = new Map();
-        const nodeWidth = 280;
-        const nodeHeight = 120;
-        const horizontalGap = 40;
-        const verticalGap = 100;
+    // Calculate node positions using true subtree widths to prevent branch overlap.
+    const calculatePositions = (roots: DeptWithChildren[]): Map<string, { x: number; y: number; width: number; height: number }> => {
+        const positions = new Map<string, { x: number; y: number; width: number; height: number }>();
+        const subtreeWidthCache = new Map<string, number>();
 
-        let currentX = startX;
+        const getSubtreeWidth = (node: DeptWithChildren): number => {
+            const cachedWidth = subtreeWidthCache.get(node.id);
+            if (cachedWidth !== undefined) return cachedWidth;
 
-        nodes.forEach((node) => {
-            const childCount = node.children?.length || 0;
-            const childrenWidth = childCount > 0
-                ? (childCount * nodeWidth) + ((childCount - 1) * horizontalGap)
-                : nodeWidth;
+            const children = node.children || [];
+            if (children.length === 0) {
+                subtreeWidthCache.set(node.id, NODE_WIDTH);
+                return NODE_WIDTH;
+            }
 
-            // Calculate position for this node
-            const nodeX = currentX + (childrenWidth - nodeWidth) / 2;
-            const nodeY = level * (nodeHeight + verticalGap);
+            const childrenTotalWidth = children.reduce((sum, child) => sum + getSubtreeWidth(child), 0)
+                + HORIZONTAL_GAP * (children.length - 1);
+
+            const subtreeWidth = Math.max(NODE_WIDTH, childrenTotalWidth);
+            subtreeWidthCache.set(node.id, subtreeWidth);
+            return subtreeWidth;
+        };
+
+        const placeNode = (node: DeptWithChildren, level: number, startX: number) => {
+            const subtreeWidth = getSubtreeWidth(node);
+            const children = node.children || [];
+
+            const nodeX = startX + (subtreeWidth - NODE_WIDTH) / 2;
+            const nodeY = level * (NODE_HEIGHT + VERTICAL_GAP);
 
             positions.set(node.id, {
                 x: nodeX,
                 y: nodeY,
-                width: nodeWidth,
+                width: NODE_WIDTH,
+                height: NODE_HEIGHT,
             });
 
-            // Recursively calculate positions for children
-            if (node.children && node.children.length > 0) {
-                const childPositions = calculatePositions(node.children, level + 1, currentX);
-                childPositions.forEach((pos, id) => positions.set(id, pos));
-            }
+            if (children.length === 0) return;
 
-            currentX += childrenWidth + horizontalGap;
+            const childrenTotalWidth = children.reduce((sum, child) => sum + getSubtreeWidth(child), 0)
+                + HORIZONTAL_GAP * (children.length - 1);
+
+            let childStartX = startX + (subtreeWidth - childrenTotalWidth) / 2;
+            children.forEach((child) => {
+                placeNode(child, level + 1, childStartX);
+                childStartX += getSubtreeWidth(child) + HORIZONTAL_GAP;
+            });
+        };
+
+        let currentX = 0;
+        roots.forEach((root) => {
+            placeNode(root, 0, currentX);
+            currentX += getSubtreeWidth(root) + HORIZONTAL_GAP;
         });
 
         return positions;
@@ -140,7 +162,7 @@ export const OrganizationalChart: React.FC<OrganizationalChartProps> = ({
     let maxY = 0;
     positions.forEach(pos => {
         maxX = Math.max(maxX, pos.x + pos.width);
-        maxY = Math.max(maxY, pos.y + 120);
+        maxY = Math.max(maxY, pos.y + pos.height);
     });
 
     // Render connecting lines using SVG
@@ -154,7 +176,7 @@ export const OrganizationalChart: React.FC<OrganizationalChartProps> = ({
                     if (!parentPos) return;
 
                     const parentCenterX = parentPos.x + parentPos.width / 2;
-                    const parentBottomY = parentPos.y + 120;
+                    const parentBottomY = parentPos.y + NODE_HEIGHT;
 
                     node.children.forEach(child => {
                         const childPos = positions.get(child.id);
@@ -164,7 +186,7 @@ export const OrganizationalChart: React.FC<OrganizationalChartProps> = ({
                         const childTopY = childPos.y;
 
                         // Draw L-shaped connection
-                        const midY = parentBottomY + 50;
+                        const midY = parentBottomY + VERTICAL_GAP / 2;
 
                         lines.push(
                             <path
@@ -297,17 +319,17 @@ export const OrganizationalChart: React.FC<OrganizationalChartProps> = ({
                         transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
                         transformOrigin: 'top left',
                         transition: isDragging ? 'none' : 'transform 0.2s ease',
-                        minWidth: `${maxX + 100}px`,
-                        minHeight: `${maxY + 100}px`,
-                        padding: '50px',
+                        minWidth: `${maxX + CANVAS_PADDING * 2}px`,
+                        minHeight: `${maxY + CANVAS_PADDING * 2}px`,
+                        padding: `${CANVAS_PADDING}px`,
                     }}
                 >
                     {/* SVG Layer for Connections */}
                     <svg
                         className="absolute top-0 left-0 pointer-events-none"
                         style={{
-                            width: `${maxX + 200}px`,
-                            height: `${maxY + 200}px`,
+                            width: `${maxX + CANVAS_PADDING * 4}px`,
+                            height: `${maxY + CANVAS_PADDING * 4}px`,
                         }}
                     >
                         {renderConnections()}

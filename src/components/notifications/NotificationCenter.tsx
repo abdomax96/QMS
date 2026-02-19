@@ -4,7 +4,7 @@
  */
 
 import React, { useRef, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
     BellIcon,
     XMarkIcon,
@@ -15,9 +15,26 @@ import {
     ArrowPathIcon
 } from '@heroicons/react/24/outline';
 import { useNotificationStore } from '../../store/notificationStore';
+import useChatDrawerStore from '../../store/chatDrawerStore';
 import { NotificationIcons, NotificationColors } from '../../domain/notifications/types';
 import { formatDateWithAppSettings } from '../../hooks/useDateFormat';
 import type { Notification } from '../../domain/notifications/types';
+import { useSupabaseAuth } from '../../hooks/useSupabaseAuth';
+
+const getChatConversationId = (notification: Notification): string | null => {
+    if (notification.entityType === 'chat_conversation' && notification.entityId) {
+        return notification.entityId;
+    }
+
+    if (notification.link && notification.link.includes('/chat')) {
+        const match = notification.link.match(/[?&]conversation=([^&]+)/);
+        if (match) {
+            return decodeURIComponent(match[1]);
+        }
+    }
+
+    return null;
+};
 
 // Individual Notification Item with improved styling
 const NotificationItem: React.FC<{
@@ -25,15 +42,27 @@ const NotificationItem: React.FC<{
     onMarkAsRead: (id: string) => void;
     onRemove: (id: string) => void;
     onClose: () => void;
-}> = ({ notification, onMarkAsRead, onRemove, onClose }) => {
-    const icon = NotificationIcons[notification.type];
+    onOpenChat: (conversationId?: string | null) => void;
+}> = ({ notification, onMarkAsRead, onRemove, onClose, onOpenChat }) => {
+    const icon = NotificationIcons[notification.type] || '🔔';
     const colorClass = NotificationColors[notification.priority];
     const timeAgo = getTimeAgo(notification.createdAt);
     const [isRemoving, setIsRemoving] = useState(false);
 
+    const chatConversationId = getChatConversationId(notification);
+    const isChatNotification = Boolean(chatConversationId) ||
+        notification.entityType === 'chat_conversation' ||
+        notification.type === 'chat_message' ||
+        notification.type === 'chat_mention';
+
     const handleClick = () => {
         if (!notification.read) {
             onMarkAsRead(notification.id);
+        }
+        if (isChatNotification) {
+            onOpenChat(chatConversationId || null);
+            onClose();
+            return;
         }
         if (notification.link) {
             onClose();
@@ -109,7 +138,7 @@ const NotificationItem: React.FC<{
         </div>
     );
 
-    if (notification.link) {
+    if (notification.link && !isChatNotification) {
         return <Link to={notification.link}>{content}</Link>;
     }
 
@@ -125,11 +154,15 @@ const DateGroupHeader: React.FC<{ label: string }> = ({ label }) => (
 
 // Main Notification Center
 export const NotificationCenter: React.FC = () => {
+    const { profile } = useSupabaseAuth();
     const {
         notifications,
         unreadCount,
         isOpen,
+        isLoading,
         soundEnabled,
+        initialize,
+        refresh,
         toggleOpen,
         setOpen,
         markAsRead,
@@ -138,9 +171,16 @@ export const NotificationCenter: React.FC = () => {
         clearAll,
         setSoundEnabled
     } = useNotificationStore();
+    const openChatDrawer = useChatDrawerStore(state => state.open);
+    const navigate = useNavigate();
+    const chatProvider = (import.meta.env.VITE_CHAT_PROVIDER || 'native').toLowerCase();
 
     const panelRef = useRef<HTMLDivElement>(null);
     const [isClearing, setIsClearing] = useState(false);
+
+    useEffect(() => {
+        void initialize(profile?.uid || null);
+    }, [initialize, profile?.uid]);
 
     // Group notifications by date
     const groupedNotifications = useMemo(() => {
@@ -190,12 +230,13 @@ export const NotificationCenter: React.FC = () => {
     }, [isOpen, setOpen]);
 
     // Handle clear all with animation
-    const handleClearAll = () => {
+    const handleClearAll = async () => {
         setIsClearing(true);
-        setTimeout(() => {
-            clearAll();
-            setIsClearing(false);
-        }, 300);
+        try {
+            await clearAll();
+        } finally {
+            setTimeout(() => setIsClearing(false), 150);
+        }
     };
 
     return (
@@ -265,20 +306,32 @@ export const NotificationCenter: React.FC = () => {
                                 {/* Mark all as read */}
                                 {unreadCount > 0 && (
                                     <button
-                                        onClick={markAllAsRead}
+                                        onClick={() => { void markAllAsRead(); }}
                                         className="p-1.5 rounded-lg text-green-600 hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-900/30 transition-all"
                                         title="تحديد الكل كمقروء"
                                     >
                                         <CheckIcon className="w-4 h-4" />
                                     </button>
                                 )}
+                                <button
+                                    onClick={() => { void refresh(); }}
+                                    className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 transition-all"
+                                    title="تحديث الإشعارات"
+                                >
+                                    <ArrowPathIcon className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                                </button>
                             </div>
                         </div>
                     </div>
 
                     {/* Notifications List */}
                     <div className="max-h-[400px] overflow-y-auto overscroll-contain">
-                        {notifications.length === 0 ? (
+                        {isLoading && notifications.length === 0 ? (
+                            <div className="p-10 text-center">
+                                <ArrowPathIcon className="w-8 h-8 mx-auto text-slate-400 animate-spin" />
+                                <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">جاري تحميل الإشعارات...</p>
+                            </div>
+                        ) : notifications.length === 0 ? (
                             <div className="p-10 text-center">
                                 <div className="w-16 h-16 mx-auto mb-4 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center">
                                     <BellIcon className="w-8 h-8 text-gray-400 dark:text-gray-500" />
@@ -296,9 +349,16 @@ export const NotificationCenter: React.FC = () => {
                                         <NotificationItem
                                             key={notification.id}
                                             notification={notification}
-                                            onMarkAsRead={markAsRead}
-                                            onRemove={removeNotification}
+                                            onMarkAsRead={(id) => { void markAsRead(id); }}
+                                            onRemove={(id) => { void removeNotification(id); }}
                                             onClose={() => setOpen(false)}
+                                            onOpenChat={(conversationId) => {
+                                                if (chatProvider === 'mattermost') {
+                                                    navigate('/chat');
+                                                } else {
+                                                    openChatDrawer(conversationId);
+                                                }
+                                            }}
                                         />
                                     ))}
                                 </div>
@@ -310,7 +370,7 @@ export const NotificationCenter: React.FC = () => {
                     {notifications.length > 0 && (
                         <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
                             <button
-                                onClick={handleClearAll}
+                                onClick={() => { void handleClearAll(); }}
                                 disabled={isClearing}
                                 className="w-full py-2 px-4 rounded-xl text-sm font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                             >

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
     EyeIcon,
@@ -6,6 +6,7 @@ import {
     ExclamationTriangleIcon,
     BuildingOffice2Icon
 } from '@heroicons/react/24/outline';
+import { supabase } from '../../config/supabase';
 import { useNcrs } from '../../hooks/ncr/useNcrs';
 import { useEnsureCompaniesLoaded } from '../../hooks/useEnsureCompaniesLoaded';
 import type { NcrRecord } from '../../types/ncr';
@@ -17,6 +18,8 @@ interface HoldItem {
     product: string;
     reserved: string;
     unit: string;
+    sorted: number;
+    destroyed: number;
     remaining: number;
     severity: string;
 }
@@ -24,26 +27,65 @@ interface HoldItem {
 const HoldsPage = () => {
     const { companies, selectedCompanyId, selectCompany } = useEnsureCompaniesLoaded();
     const { ncrs, isLoading, requiresCompanySelection } = useNcrs(selectedCompanyId);
+    const [holdMetrics, setHoldMetrics] = useState<Record<string, { sorted: number; destroyed: number }>>({});
+
+    useEffect(() => {
+        const loadHoldMetrics = async () => {
+            if (!selectedCompanyId || ncrs.length === 0) {
+                setHoldMetrics({});
+                return;
+            }
+
+            const ncrIds = ncrs.map((row) => row.id);
+            const { data, error } = await supabase
+                .from('ncr_hold_sort_logs')
+                .select('ncr_id, sorted_qty, destroyed_qty')
+                .eq('company_id', selectedCompanyId)
+                .in('ncr_id', ncrIds);
+
+            if (error) {
+                console.error('Failed to load hold metrics:', error);
+                setHoldMetrics({});
+                return;
+            }
+
+            const next: Record<string, { sorted: number; destroyed: number }> = {};
+            (data || []).forEach((row: any) => {
+                const ncrId = row.ncr_id as string;
+                if (!next[ncrId]) {
+                    next[ncrId] = { sorted: 0, destroyed: 0 };
+                }
+                next[ncrId].sorted += Number(row.sorted_qty || 0);
+                next[ncrId].destroyed += Number(row.destroyed_qty || 0);
+            });
+
+            setHoldMetrics(next);
+        };
+
+        loadHoldMetrics();
+    }, [ncrs, selectedCompanyId]);
 
     const holds = useMemo(() => {
         return ncrs
             .map((r: NcrRecord) => {
                 const reserved = Number(r.reservedQty || 0);
-                const holdsArr = r.holds || [];
-                const picked = holdsArr.reduce((s: number, h: any) => s + Number(h.quantity || h.qty || 0), 0);
-                const remaining = reserved - picked;
+                const legacySorted = (r.holds || []).reduce((sum: number, hold: any) => sum + Number(hold.quantity || hold.qty || 0), 0);
+                const metrics = holdMetrics[r.id] || { sorted: legacySorted, destroyed: 0 };
+                const remaining = reserved - metrics.sorted;
                 return {
                     id: r.id,
                     number: r.number,
                     product: r.productName ?? r.lineOrArea ?? '-',
                     reserved: r.reservedQty ?? '-',
                     unit: r.reservedUnit ?? '-',
-                    remaining,
+                    sorted: metrics.sorted,
+                    destroyed: metrics.destroyed,
+                    remaining: Math.max(0, remaining),
                     severity: r.severity
                 } as HoldItem;
             })
             .filter((h) => Number(h.remaining) > 0);
-    }, [ncrs]);
+    }, [holdMetrics, ncrs]);
 
     const stats = useMemo(() => ({
         total: holds.length,
@@ -142,6 +184,8 @@ const HoldsPage = () => {
                                     <th className="px-4 py-3 text-right text-sm font-semibold text-gray-900 dark:text-white">رقم التقرير</th>
                                     <th className="px-4 py-3 text-right text-sm font-semibold text-gray-900 dark:text-white">المنتج</th>
                                     <th className="px-4 py-3 text-right text-sm font-semibold text-gray-900 dark:text-white">الكمية المحجوزة</th>
+                                    <th className="px-4 py-3 text-right text-sm font-semibold text-gray-900 dark:text-white">المفرزة</th>
+                                    <th className="px-4 py-3 text-right text-sm font-semibold text-gray-900 dark:text-white">المتهلكة</th>
                                     <th className="px-4 py-3 text-right text-sm font-semibold text-gray-900 dark:text-white">المتبقي</th>
                                     <th className="px-4 py-3 text-right text-sm font-semibold text-gray-900 dark:text-white">الخطورة</th>
                                     <th className="px-4 py-3 text-right text-sm font-semibold text-gray-900 dark:text-white">إجراءات</th>
@@ -153,6 +197,8 @@ const HoldsPage = () => {
                                         <td className="px-4 py-3 text-sm font-medium text-primary-600">{h.number}</td>
                                         <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">{h.product}</td>
                                         <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">{h.reserved} {h.unit}</td>
+                                        <td className="px-4 py-3 text-sm text-blue-700 dark:text-blue-300">{h.sorted} {h.unit}</td>
+                                        <td className="px-4 py-3 text-sm text-red-700 dark:text-red-300">{h.destroyed} {h.unit}</td>
                                         <td className="px-4 py-3">
                                             <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${h.remaining > 0 ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'
                                                 }`}>

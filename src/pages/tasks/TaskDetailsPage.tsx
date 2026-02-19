@@ -1,63 +1,98 @@
 /**
  * Task Details Page
- * صفحة تفاصيل المهمة
+ * صفحة تفاصيل المهمة - مع سير العمل والإسناد والاعتماد
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
     ArrowRightIcon,
-    PencilIcon,
     TrashIcon,
     CalendarIcon,
     ClockIcon,
-    UserGroupIcon,
     ChatBubbleLeftIcon,
     PaperClipIcon,
     CheckCircleIcon,
     PlusIcon,
     FlagIcon,
     TagIcon,
-    XMarkIcon
+    XMarkIcon,
+    ArrowPathIcon,
 } from '@heroicons/react/24/outline';
 import { useTaskStore } from '../../store/taskStore';
 import useStore from '../../store';
-import type { TaskStatus } from '../../domain/tasks/types';
+import type { TaskChecklist } from '../../types/task';
 import {
-    taskStatusLabels,
-    taskStatusColors,
+    taskStageLabels,
+    taskStageColors,
     taskPriorityLabels,
     taskPriorityColors,
     taskCategoryLabels,
     getTaskProgress,
     isTaskOverdue,
-    formatTimeAgo
+    formatTimeAgo,
 } from '../../domain/tasks/types';
 import { useDateFormat } from '../../hooks/useDateFormat';
+import TaskWorkflowPanel from '../../components/tasks/TaskWorkflowPanel';
+import TaskAssignments from '../../components/tasks/TaskAssignments';
+import TaskApprovalPanel from '../../components/tasks/TaskApprovalPanel';
 
 const TaskDetailsPage: React.FC = () => {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
     const { user } = useStore();
     const {
-        getTaskById,
-        updateTaskStatus,
-        addChecklistItem,
-        toggleChecklistItem,
-        removeChecklistItem,
+        currentTask: task,
+        comments,
+        stageHistory,
+        assignments,
+        isLoading,
+        fetchTaskById,
+        fetchComments,
+        fetchStageHistory,
+        fetchAssignments,
+        assignUsers,
+        assignRole,
+        assignDepartment,
+        acceptTask,
+        declineTask,
+        removeAssignment,
+        updateChecklist,
         addComment,
-        deleteTask
+        deleteTask,
+        advanceStage,
+        returnStage,
+        approveTask,
+        rejectTask,
     } = useTaskStore();
     const { formatDate } = useDateFormat();
-
-    const task = getTaskById(id || '');
 
     const [newChecklistItem, setNewChecklistItem] = useState('');
     const [newComment, setNewComment] = useState('');
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [actionLoading, setActionLoading] = useState(false);
+
+    // Load task and related data
+    useEffect(() => {
+        if (id) {
+            fetchTaskById(id);
+            fetchComments(id);
+            fetchStageHistory(id);
+            fetchAssignments(id);
+        }
+    }, [id, fetchTaskById, fetchComments, fetchStageHistory, fetchAssignments]);
 
     const progress = useMemo(() => task ? getTaskProgress(task) : 0, [task]);
     const overdue = useMemo(() => task ? isTaskOverdue(task) : false, [task]);
+
+    if (isLoading && !task) {
+        return (
+            <div className="p-6 text-center">
+                <ArrowPathIcon className="w-10 h-10 text-gray-400 animate-spin mx-auto mb-4" />
+                <p className="text-gray-500">جاري تحميل المهمة...</p>
+            </div>
+        );
+    }
 
     if (!task) {
         return (
@@ -68,28 +103,103 @@ const TaskDetailsPage: React.FC = () => {
         );
     }
 
-    const statusColors = taskStatusColors[task.status];
     const priorityColors = taskPriorityColors[task.priority];
+    const actor = { id: user?.id || '', name: user?.name || user?.email || 'User' };
+    const companyId = task.company_id || 'a0000001-0000-0000-0000-000000000001';
 
-    const handleStatusChange = (newStatus: TaskStatus) => {
-        updateTaskStatus(task.id, newStatus, user?.id || '', user?.name || '');
-    };
-
-    const handleAddChecklistItem = () => {
+    const handleAddChecklistItem = async () => {
         if (!newChecklistItem.trim()) return;
-        addChecklistItem(task.id, newChecklistItem.trim());
+        const newItem: TaskChecklist = {
+            id: `cl_${Date.now()}`,
+            text: newChecklistItem.trim(),
+            completed: false,
+        };
+        await updateChecklist(task.id, [...task.checklist, newItem]);
         setNewChecklistItem('');
     };
 
-    const handleAddComment = () => {
-        if (!newComment.trim()) return;
-        addComment(task.id, newComment.trim(), user?.id || '', user?.name || '');
+    const handleToggleChecklistItem = async (itemId: string) => {
+        const updated = task.checklist.map(item =>
+            item.id === itemId
+                ? {
+                      ...item,
+                      completed: !item.completed,
+                      completed_at: !item.completed ? new Date().toISOString() : undefined,
+                      completed_by: !item.completed ? user?.id : undefined,
+                  }
+                : item
+        );
+        await updateChecklist(task.id, updated);
+    };
+
+    const handleRemoveChecklistItem = async (itemId: string) => {
+        await updateChecklist(task.id, task.checklist.filter(item => item.id !== itemId));
+    };
+
+    const handleAddComment = async () => {
+        if (!newComment.trim() || !user) return;
+        await addComment(task.id, newComment.trim(), { id: user.id, name: user.name || '' });
         setNewComment('');
     };
 
-    const handleDelete = () => {
-        deleteTask(task.id);
+    const handleDelete = async () => {
+        await deleteTask(task.id);
         navigate('/tasks');
+    };
+
+    const handleAdvanceStage = async (notes?: string) => {
+        if (!user) return;
+        setActionLoading(true);
+        try {
+            const result = await advanceStage(task.id, { id: user.id, name: user.name || '' }, notes);
+            if (!result.success && result.error) {
+                alert(result.error);
+            }
+            // Re-fetch stage history
+            await fetchStageHistory(task.id);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleReturnStage = async (notes?: string) => {
+        if (!user) return;
+        setActionLoading(true);
+        try {
+            const result = await returnStage(task.id, { id: user.id, name: user.name || '' }, notes);
+            if (!result.success && result.error) {
+                alert(result.error);
+            }
+            await fetchStageHistory(task.id);
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleApprove = async (notes?: string) => {
+        if (!user) return;
+        setActionLoading(true);
+        try {
+            const result = await approveTask(task.id, { id: user.id, name: user.name || '' }, notes);
+            if (!result.success && result.error) {
+                alert(result.error);
+            }
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleReject = async (reason: string) => {
+        if (!user) return;
+        setActionLoading(true);
+        try {
+            const result = await rejectTask(task.id, { id: user.id, name: user.name || '' }, reason);
+            if (!result.success && result.error) {
+                alert(result.error);
+            }
+        } finally {
+            setActionLoading(false);
+        }
     };
 
     return (
@@ -103,17 +213,21 @@ const TaskDetailsPage: React.FC = () => {
                     <ArrowRightIcon className="w-5 h-5" />
                 </button>
                 <div className="flex-1">
-                    <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{task.title}</h1>
+                    <div className="flex items-center gap-3">
+                        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{task.title}</h1>
+                        {task.task_number && (
+                            <span className="text-sm text-gray-500 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded">
+                                #{task.task_number}
+                            </span>
+                        )}
+                    </div>
                     <div className="flex items-center gap-3 mt-1 text-sm text-gray-500">
-                        <span>أنشأها {task.createdByName}</span>
+                        {task.created_by_name && <span>أنشأها {task.created_by_name}</span>}
                         <span>•</span>
-                        <span>{formatTimeAgo(task.createdAt)}</span>
+                        <span>{formatTimeAgo(task.created_at)}</span>
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
-                    <button className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
-                        <PencilIcon className="w-5 h-5" />
-                    </button>
                     <button
                         onClick={() => setShowDeleteConfirm(true)}
                         className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 rounded-lg"
@@ -123,9 +237,27 @@ const TaskDetailsPage: React.FC = () => {
                 </div>
             </div>
 
+            {/* Workflow Panel */}
+            <div className="mb-6">
+                <TaskWorkflowPanel
+                    task={task}
+                    onAdvance={handleAdvanceStage}
+                    onReturn={handleReturnStage}
+                    loading={actionLoading}
+                />
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* Main Content */}
                 <div className="lg:col-span-2 space-y-6">
+                    {/* Approval Panel */}
+                    <TaskApprovalPanel
+                        task={task}
+                        onApprove={handleApprove}
+                        onReject={handleReject}
+                        loading={actionLoading}
+                    />
+
                     {/* Description */}
                     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
                         <h3 className="font-semibold text-gray-900 dark:text-white mb-3">الوصف</h3>
@@ -164,7 +296,7 @@ const TaskDetailsPage: React.FC = () => {
                                     className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg group"
                                 >
                                     <button
-                                        onClick={() => toggleChecklistItem(task.id, item.id, user?.id || '', user?.name || '')}
+                                        onClick={() => handleToggleChecklistItem(item.id)}
                                         className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${item.completed
                                             ? 'bg-green-500 border-green-500 text-white'
                                             : 'border-gray-300 hover:border-green-500'
@@ -176,7 +308,7 @@ const TaskDetailsPage: React.FC = () => {
                                         {item.text}
                                     </span>
                                     <button
-                                        onClick={() => removeChecklistItem(task.id, item.id)}
+                                        onClick={() => handleRemoveChecklistItem(item.id)}
                                         className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
                                     >
                                         <XMarkIcon className="w-4 h-4" />
@@ -208,25 +340,31 @@ const TaskDetailsPage: React.FC = () => {
                     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
                         <h3 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2 mb-4">
                             <ChatBubbleLeftIcon className="w-5 h-5" />
-                            التعليقات ({task.comments.length})
+                            التعليقات ({comments.length})
                         </h3>
 
                         {/* Comment List */}
                         <div className="space-y-4 mb-4">
-                            {task.comments.map((comment) => (
+                            {comments.map((comment) => (
                                 <div key={comment.id} className="flex gap-3">
                                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-400 to-purple-500 flex items-center justify-center text-white font-medium shrink-0">
-                                        {comment.userName.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                                        {(comment.author_name || '؟').split(' ').map(n => n[0]).join('').slice(0, 2)}
                                     </div>
                                     <div className="flex-1">
                                         <div className="flex items-center gap-2 mb-1">
-                                            <span className="font-medium text-gray-900 dark:text-white">{comment.userName}</span>
-                                            <span className="text-xs text-gray-500">{formatTimeAgo(comment.createdAt)}</span>
+                                            <span className="font-medium text-gray-900 dark:text-white">{comment.author_name || 'مجهول'}</span>
+                                            <span className="text-xs text-gray-500">{formatTimeAgo(comment.created_at)}</span>
+                                            {comment.edited && (
+                                                <span className="text-xs text-gray-400">(معدّل)</span>
+                                            )}
                                         </div>
                                         <p className="text-gray-600 dark:text-gray-400">{comment.content}</p>
                                     </div>
                                 </div>
                             ))}
+                            {comments.length === 0 && (
+                                <p className="text-sm text-gray-500 text-center py-4">لا توجد تعليقات بعد</p>
+                            )}
                         </div>
 
                         {/* Add Comment */}
@@ -255,37 +393,95 @@ const TaskDetailsPage: React.FC = () => {
                         </div>
                     </div>
 
-                    {/* Activity */}
-                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-                        <h3 className="font-semibold text-gray-900 dark:text-white mb-4">النشاط</h3>
-                        <div className="space-y-3">
-                            {task.activities.slice(0, 10).map((activity) => (
-                                <div key={activity.id} className="flex items-center gap-3 text-sm">
-                                    <div className="w-2 h-2 rounded-full bg-primary-500"></div>
-                                    <span className="font-medium text-gray-700 dark:text-gray-300">{activity.userName}</span>
-                                    <span className="text-gray-500">{activity.description}</span>
-                                    <span className="text-gray-400 mr-auto">{formatTimeAgo(activity.timestamp)}</span>
-                                </div>
-                            ))}
+                    {/* Stage History */}
+                    {stageHistory.length > 0 && (
+                        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+                            <h3 className="font-semibold text-gray-900 dark:text-white mb-4">سجل المراحل</h3>
+                            <div className="space-y-3">
+                                {stageHistory.map((entry) => (
+                                    <div key={entry.id} className="flex items-start gap-3 text-sm">
+                                        <div className="w-2 h-2 rounded-full bg-primary-500 mt-2 shrink-0"></div>
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-2">
+                                                <span className="font-medium text-gray-700 dark:text-gray-300">
+                                                    {entry.changed_by_name || 'النظام'}
+                                                </span>
+                                                <span className="text-gray-500">
+                                                    {entry.action === 'advance' ? 'نقل من' : entry.action === 'return' ? 'أرجع من' : entry.action}
+                                                </span>
+                                                {entry.from_stage && (
+                                                    <>
+                                                        <span className={`px-1.5 py-0.5 rounded text-xs ${taskStageColors[entry.from_stage]?.bg || ''} ${taskStageColors[entry.from_stage]?.text || ''}`}>
+                                                            {taskStageLabels[entry.from_stage] || entry.from_stage}
+                                                        </span>
+                                                        <span className="text-gray-400">←</span>
+                                                    </>
+                                                )}
+                                                <span className={`px-1.5 py-0.5 rounded text-xs ${taskStageColors[entry.to_stage]?.bg || ''} ${taskStageColors[entry.to_stage]?.text || ''}`}>
+                                                    {taskStageLabels[entry.to_stage] || entry.to_stage}
+                                                </span>
+                                            </div>
+                                            {entry.notes && (
+                                                <p className="text-gray-500 mt-1">{entry.notes}</p>
+                                            )}
+                                            <span className="text-xs text-gray-400">{formatTimeAgo(entry.created_at)}</span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
-                    </div>
+                    )}
                 </div>
 
                 {/* Sidebar */}
                 <div className="space-y-6">
-                    {/* Status */}
+                    {/* Stage Badge */}
                     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-                        <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">الحالة</h4>
-                        <select
-                            value={task.status}
-                            onChange={(e) => handleStatusChange(e.target.value as TaskStatus)}
-                            className={`w-full px-4 py-2 rounded-lg border-2 font-medium ${statusColors.bg} ${statusColors.text} ${statusColors.border}`}
-                        >
-                            {Object.entries(taskStatusLabels).map(([value, label]) => (
-                                <option key={value} value={value}>{label}</option>
-                            ))}
-                        </select>
+                        <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">المرحلة الحالية</h4>
+                        <span className={`inline-flex px-4 py-2 rounded-lg text-sm font-medium ${taskStageColors[task.current_stage]?.bg || ''} ${taskStageColors[task.current_stage]?.text || ''}`}>
+                            {taskStageLabels[task.current_stage] || task.current_stage}
+                        </span>
                     </div>
+
+                    {/* Assignments */}
+                    <TaskAssignments
+                        task={task}
+                        assignments={assignments}
+                        currentUserId={actor.id}
+                        companyId={companyId}
+                        onAssignUsers={async (userIds, primaryId) => {
+                            if (!id || !actor.id) return;
+                            await assignUsers(id, userIds, primaryId, actor, companyId);
+                            await fetchAssignments(id);
+                            await fetchTaskById(id);
+                        }}
+                        onAssignRole={async (roleId) => {
+                            if (!id || !actor.id) return;
+                            await assignRole(id, roleId, actor);
+                            await fetchTaskById(id);
+                        }}
+                        onAssignDepartment={async (departmentId) => {
+                            if (!id || !actor.id) return;
+                            await assignDepartment(id, departmentId, actor);
+                            await fetchTaskById(id);
+                        }}
+                        onAccept={async () => {
+                            if (!id || !actor.id) return;
+                            await acceptTask(id, actor, companyId);
+                            await fetchAssignments(id);
+                            await fetchTaskById(id);
+                        }}
+                        onDecline={async (reason) => {
+                            if (!id || !actor.id) return;
+                            await declineTask(id, actor, reason);
+                            await fetchAssignments(id);
+                        }}
+                        onRemoveAssignment={async (userId) => {
+                            if (!id || !actor.id) return;
+                            await removeAssignment(id, userId);
+                            await fetchAssignments(id);
+                        }}
+                    />
 
                     {/* Details */}
                     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 space-y-4">
@@ -311,18 +507,40 @@ const TaskDetailsPage: React.FC = () => {
                                 <CalendarIcon className="w-4 h-4" /> الموعد النهائي
                             </h4>
                             <span className={overdue ? 'text-red-600 font-medium' : 'text-gray-600 dark:text-gray-400'}>
-                                {task.dueDate ? formatDate(task.dueDate) : 'غير محدد'}
+                                {task.due_date ? formatDate(task.due_date) : 'غير محدد'}
                                 {overdue && ' (متأخر)'}
                             </span>
                         </div>
 
                         {/* Estimated Hours */}
-                        {task.estimatedHours && (
+                        {task.estimated_hours && (
                             <div>
                                 <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1">
                                     <ClockIcon className="w-4 h-4" /> الوقت المقدر
                                 </h4>
-                                <span className="text-gray-600 dark:text-gray-400">{task.estimatedHours} ساعة</span>
+                                <span className="text-gray-600 dark:text-gray-400">{task.estimated_hours} ساعة</span>
+                            </div>
+                        )}
+
+                        {/* Approval Status */}
+                        {task.requires_approval && (
+                            <div>
+                                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-1">
+                                    <CheckCircleIcon className="w-4 h-4" /> الاعتماد
+                                </h4>
+                                {task.approved_by ? (
+                                    <span className="text-emerald-600 dark:text-emerald-400">
+                                        معتمد بواسطة {task.approved_by_name}
+                                    </span>
+                                ) : task.rejected_by ? (
+                                    <span className="text-red-600 dark:text-red-400">
+                                        مرفوض
+                                    </span>
+                                ) : (
+                                    <span className="text-amber-600 dark:text-amber-400">
+                                        في انتظار الاعتماد
+                                    </span>
+                                )}
                             </div>
                         )}
 
@@ -343,45 +561,24 @@ const TaskDetailsPage: React.FC = () => {
                         )}
                     </div>
 
-                    {/* Assignees */}
-                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-                        <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-1">
-                            <UserGroupIcon className="w-4 h-4" /> المعينون ({task.assignees.length})
-                        </h4>
-                        {task.assignees.length === 0 ? (
-                            <p className="text-sm text-gray-500">لم يتم تعيين أحد</p>
-                        ) : (
-                            <div className="space-y-2">
-                                {task.assignees.map(assignee => (
-                                    <div key={assignee.userId} className="flex items-center gap-2">
-                                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-400 to-purple-500 flex items-center justify-center text-white text-sm font-medium">
-                                            {assignee.userName.split(' ').map(n => n[0]).join('').slice(0, 2)}
-                                        </div>
-                                        <span className="text-gray-700 dark:text-gray-300">{assignee.userName}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
                     {/* Attachments */}
                     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
                         <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-1">
-                            <PaperClipIcon className="w-4 h-4" /> المرفقات ({task.attachments.length})
+                            <PaperClipIcon className="w-4 h-4" /> المرفقات ({task.attachments?.length || 0})
                         </h4>
-                        {task.attachments.length === 0 ? (
+                        {(!task.attachments || task.attachments.length === 0) ? (
                             <p className="text-sm text-gray-500">لا توجد مرفقات</p>
                         ) : (
                             <div className="space-y-2">
-                                {task.attachments.map(att => (
+                                {task.attachments.map((att: any) => (
                                     <a
                                         key={att.id}
-                                        href={att.fileUrl}
+                                        href={att.file_path || att.fileUrl}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="block p-2 bg-gray-50 dark:bg-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-600 text-sm"
                                     >
-                                        {att.fileName}
+                                        {att.file_name || att.fileName}
                                     </a>
                                 ))}
                             </div>

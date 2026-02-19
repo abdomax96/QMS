@@ -2,18 +2,7 @@
  * Notification Types and DTOs
  */
 
-export type NotificationType =
-    | 'ncr_created'
-    | 'ncr_assigned'
-    | 'ncr_updated'
-    | 'ncr_stage_advanced'
-    | 'ncr_closed'
-    | 'ncr_overdue'
-    | 'ncr_comment'
-    | 'system'
-    | 'info'
-    | 'warning'
-    | 'error';
+export type NotificationType = string;
 
 export type NotificationPriority = 'low' | 'normal' | 'high' | 'urgent';
 
@@ -26,7 +15,7 @@ export interface Notification {
     link?: string;
     linkLabel?: string;
     entityId?: string;
-    entityType?: 'ncr' | 'report' | 'user';
+    entityType?: 'ncr' | 'report' | 'user' | 'chat_conversation' | string;
     read: boolean;
     createdAt: string;
     expiresAt?: string;
@@ -40,7 +29,7 @@ export interface CreateNotificationInput {
     link?: string;
     linkLabel?: string;
     entityId?: string;
-    entityType?: 'ncr' | 'report' | 'user';
+    entityType?: 'ncr' | 'report' | 'user' | 'chat_conversation' | string;
     userId?: string; // Target user (null = all users)
     expiresAt?: string;
 }
@@ -105,6 +94,10 @@ export const NotificationIcons: Record<NotificationType, string> = {
     ncr_overdue: '⏰',
     ncr_comment: '💬',
     system: '⚙️',
+    task: '📝',
+    workflow: '🔄',
+    chat_message: '💬',
+    chat_mention: '📣',
     info: 'ℹ️',
     warning: '⚠️',
     error: '❌'

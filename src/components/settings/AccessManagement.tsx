@@ -25,6 +25,7 @@ const PermissionMatrix = lazy(() => import('../permissions/PermissionMatrix'));
 const SimplePermissionMatrix = lazy(() => import('../permissions/SimplePermissionMatrix'));
 // ModuleDistribution removed - module visibility now based on role permissions
 const NcrStagePermissions = lazy(() => import('./NcrStagePermissions'));
+const TaskStagePermissions = lazy(() => import('./TaskStagePermissions'));
 const OrgChart = lazy(() => import('./OrgChart'));
 
 // ==================== Types ====================
@@ -279,6 +280,13 @@ const UsersTableTab: React.FC = () => {
                     return;
                 }
 
+                const { data: companyId, error: companyError } = await supabase.rpc('get_user_company_id');
+                if (companyError || !companyId) {
+                    console.error('[UserCreate] Failed to resolve company_id:', companyError);
+                    alert('تعذر تحديد الشركة الحالية');
+                    return;
+                }
+
                 console.log('[UserCreate] Step 2: Creating profile (upsert)...', authData.user.id);
                 // Use upsert instead of insert to handle cases where a database trigger might have 
                 // already created the user record (common Supabase pattern)
@@ -291,6 +299,7 @@ const UsersTableTab: React.FC = () => {
                     department: departments.find(d => d.id === formData.department_id)?.name || null,
                     roles: formData.roles,
                     is_active: formData.is_active,
+                    company_id: companyId,
                     created_at: new Date().toISOString()
                 }, { onConflict: 'id' });
 
@@ -1635,7 +1644,7 @@ const AccessManagement: React.FC = () => {
     const [searchParams, setSearchParams] = useSearchParams();
 
     // Valid tab IDs
-    const validTabs = ['users', 'departments', 'matrix', 'ncr-stage'];
+    const validTabs = ['users', 'departments', 'matrix', 'ncr-stage', 'task-stage'];
 
     // Get initial tab from URL or default to 'users'
     const getInitialTab = useCallback(() => {
@@ -1665,7 +1674,8 @@ const AccessManagement: React.FC = () => {
         { id: 'users', label: 'المستخدمين', icon: UserGroupIcon },
         { id: 'departments', label: 'الهيكل التنظيمي', icon: BuildingOfficeIcon },
         { id: 'matrix', label: 'مصفوفة الصلاحيات', icon: TableCellsIcon },
-        { id: 'ncr-stage', label: 'صلاحيات NCR حسب الدور والمرحلة', icon: ExclamationTriangleIcon }
+        { id: 'ncr-stage', label: 'صلاحيات NCR حسب الدور والمرحلة', icon: ExclamationTriangleIcon },
+        { id: 'task-stage', label: 'صلاحيات المهام حسب الدور والمرحلة', icon: CubeIcon }
     ];
 
     return (
@@ -1711,6 +1721,13 @@ const AccessManagement: React.FC = () => {
                     <Suspense fallback={<SettingsSkeleton />}>
                         <div className="h-[70vh] min-h-[620px]">
                             <NcrStagePermissions />
+                        </div>
+                    </Suspense>
+                )}
+                {activeTab === 'task-stage' && (
+                    <Suspense fallback={<SettingsSkeleton />}>
+                        <div className="h-[70vh] min-h-[620px]">
+                            <TaskStagePermissions />
                         </div>
                     </Suspense>
                 )}

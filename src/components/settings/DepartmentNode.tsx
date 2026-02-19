@@ -31,7 +31,7 @@ export const DepartmentNode: React.FC<DepartmentNodeProps> = ({
             onClick={onClick}
             className={`
                 group relative
-                min-w-[220px] max-w-[280px]
+                w-[280px]
                 bg-white dark:bg-gray-800
                 rounded-xl
                 border-2 transition-all duration-300 cursor-pointer

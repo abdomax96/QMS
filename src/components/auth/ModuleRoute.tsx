@@ -42,6 +42,7 @@ export const ModuleAccessDenied: React.FC<AccessDeniedProps> = ({ module, action
         tasks: 'المهام',
         lab: 'المختبر',
         ncr: 'NCR والمحتجزات',
+        chat: 'الدردشة',
     };
 
     const actionNames: Record<string, string> = {
@@ -53,6 +54,13 @@ export const ModuleAccessDenied: React.FC<AccessDeniedProps> = ({ module, action
         export: 'تصدير',
         print: 'طباعة',
         share: 'مشاركة',
+        view_conversations: 'عرض المحادثات',
+        create_conversation: 'إنشاء محادثة',
+        send_message: 'إرسال رسالة',
+        send_attachment: 'إرسال مرفق',
+        manage_conversation: 'إدارة المحادثة',
+        manage_department_chat: 'إدارة دردشة القسم',
+        moderate_chat: 'إدارة الإشراف',
     };
 
     const moduleName = moduleNames[module] || module;
@@ -250,6 +258,8 @@ export const NcrRoute: React.FC<{ children: React.ReactNode; action?: string | s
 );
 
 export default ModuleRoute;
+
+
 
 
 

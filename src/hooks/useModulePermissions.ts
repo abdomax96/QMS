@@ -22,6 +22,13 @@ export interface NcrStagePermission {
     can_return: boolean;
 }
 
+export interface TaskStagePermission {
+    stage_code: string;
+    allowed_actions: string[];
+    can_advance: boolean;
+    can_return: boolean;
+}
+
 export interface UseModulePermissionsReturn {
     // Module permissions
     permissions: ModulePermission[];
@@ -43,23 +50,34 @@ export interface UseModulePermissionsReturn {
     canAdvanceNcr: (stageCode: string) => boolean;
     canReturnNcr: (stageCode: string) => boolean;
 
+    // Task stage permissions
+    taskPermissions: TaskStagePermission[];
+    canPerformTaskAction: (stageCode: string, action: string) => boolean;
+    canAdvanceTask: (stageCode: string) => boolean;
+    canReturnTask: (stageCode: string) => boolean;
+
     // Refresh
     refresh: () => Promise<void>;
 }
 
 // ==================== Default Modules ====================
-const DEFAULT_MODULES = ['forms_reports', 'tasks', 'lab', 'ncr'];
+const DEFAULT_MODULES = ['forms_reports', 'tasks', 'lab', 'ncr', 'chat'];
 
 // ==================== Hook ====================
 export function useModulePermissions(): UseModulePermissionsReturn {
     const { profile } = useSupabaseAuth();
     const [permissions, setPermissions] = useState<ModulePermission[]>([]);
     const [ncrPermissions, setNcrPermissions] = useState<NcrStagePermission[]>([]);
+    const [taskPermissions, setTaskPermissions] = useState<TaskStagePermission[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
     // AbortController ref to cancel in-flight requests on timeout or unmount
     const abortControllerRef = useRef<AbortController | null>(null);
+    // Monotonic request id to prevent stale requests from updating state.
+    const requestIdRef = useRef(0);
+    // If task_stage_permissions table is missing, stop retrying the same failing query each render.
+    const taskStagePermissionsMissingRef = useRef(false);
 
     // Helper to add timeout to promises
     const withTimeout = <T>(promise: Promise<T>, timeoutMs: number = 10000): Promise<T> => {
@@ -67,6 +85,27 @@ export function useModulePermissions(): UseModulePermissionsReturn {
             promise,
             new Promise<T>((_, reject) => setTimeout(() => reject(new Error('Request timed out')), timeoutMs))
         ]);
+    };
+
+    const isAbortError = (err: unknown): boolean => {
+        const e = err as { name?: string; message?: string } | null;
+        const name = (e?.name || '').toLowerCase();
+        const message = (e?.message || '').toLowerCase();
+        return name === 'aborterror' || message.includes('aborted');
+    };
+
+    const isMissingTableError = (err: unknown, tableName: string): boolean => {
+        const e = err as { code?: string; message?: string; details?: string } | null;
+        const code = (e?.code || '').toUpperCase();
+        const message = (e?.message || '').toLowerCase();
+        const details = (e?.details || '').toLowerCase();
+        const table = tableName.toLowerCase();
+
+        return (
+            code === 'PGRST205' ||
+            (message.includes(table) && message.includes('schema cache')) ||
+            details.includes('schema cache')
+        );
     };
 
     // Maximum time to wait for permission loading before forcing completion
@@ -77,6 +116,7 @@ export function useModulePermissions(): UseModulePermissionsReturn {
         if (!profile?.uid) {
             setPermissions([]);
             setNcrPermissions([]);
+            setTaskPermissions([]);
             setLoading(false);
             return;
         }
@@ -89,12 +129,16 @@ export function useModulePermissions(): UseModulePermissionsReturn {
         // Create new AbortController for this request
         const abortController = new AbortController();
         abortControllerRef.current = abortController;
+        const requestId = ++requestIdRef.current;
+        const isCurrentRequest = () =>
+            requestId === requestIdRef.current && !abortController.signal.aborted;
 
         setLoading(true);
         setError(null);
 
         // Safety timeout - ensures loading ALWAYS resolves, preventing infinite loading
         const safetyTimeoutId = setTimeout(() => {
+            if (requestId !== requestIdRef.current) return;
             console.warn('[Permissions] ⚠️ Load timeout reached after', LOAD_TIMEOUT_MS, 'ms - forcing completion');
             abortController.abort(); // Cancel the request on timeout
             setError('انتهت مهلة تحميل الصلاحيات');
@@ -146,13 +190,20 @@ export function useModulePermissions(): UseModulePermissionsReturn {
             } else {
                 // ==================== FALLBACK: Direct role_module_permissions path ====================
                 // Module visibility derived from role_module_permissions table (same as SimplePermissionMatrix)
-                console.warn('[Permissions] RPC not available, using role_module_permissions fallback. Error:', rpcError?.message);
+                if (rpcError && isAbortError(rpcError)) {
+                    return;
+                }
+                if (rpcError) {
+                    console.warn('[Permissions] RPC not available, using role_module_permissions fallback. Error:', rpcError?.message);
+                }
 
                 // Always get roles from user_roles table (profile.roles contains role names, not IDs)
                 const { data: userRolesData, error: userRolesError } = await supabase
                     .from('user_roles')
                     .select('role_id')
                     .eq('user_id', profile.uid);
+
+                if (!isCurrentRequest()) return;
 
                 if (userRolesError) {
                     console.error('[Permissions] Error fetching user_roles:', userRolesError.message);
@@ -173,6 +224,8 @@ export function useModulePermissions(): UseModulePermissionsReturn {
                     .from('role_module_permissions')
                     .select('module_code, granted_actions, can_see_all_departments')
                     .in('role_id', roleIds);
+
+                if (!isCurrentRequest()) return;
 
                 if (roleModulePermsError) {
                     console.error('[Permissions] Error loading role_module_permissions:', roleModulePermsError);
@@ -217,6 +270,8 @@ export function useModulePermissions(): UseModulePermissionsReturn {
                 .select('role_id')
                 .eq('user_id', profile.uid);
 
+            if (!isCurrentRequest()) return;
+
             if (userRolesRowsError) {
                 console.warn('[Permissions] Error fetching user roles for NCR stage permissions:', userRolesRowsError.message);
             }
@@ -237,6 +292,8 @@ export function useModulePermissions(): UseModulePermissionsReturn {
                     .eq('is_active', true)
                     .is('department_id', null)
                     .in('role_id', roleIds);
+
+                if (!isCurrentRequest()) return;
 
                 if (nspRowsError) {
                     console.warn('[Permissions] Error fetching role-based NCR stage permissions:', nspRowsError.message);
@@ -276,6 +333,68 @@ export function useModulePermissions(): UseModulePermissionsReturn {
             const stagePermissions = Array.from(ncrMap.values());
             setNcrPermissions(stagePermissions);
 
+            // ==================== Task Stage Permissions ====================
+            // Same pattern as NCR: role-only source from task_stage_permissions table.
+            let taskStageRows: {
+                stage_code: string | null;
+                allowed_actions: string[] | null;
+                can_advance: boolean | null;
+                can_return: boolean | null;
+            }[] = [];
+
+            if (roleIds.length > 0 && !taskStagePermissionsMissingRef.current) {
+                const { data: tspRows, error: tspRowsError } = await supabase
+                    .from('task_stage_permissions')
+                    .select('stage_code, allowed_actions, can_advance, can_return')
+                    .eq('is_active', true)
+                    .is('department_id', null)
+                    .in('role_id', roleIds);
+
+                if (!isCurrentRequest()) return;
+
+                if (tspRowsError) {
+                    if (isMissingTableError(tspRowsError, 'task_stage_permissions')) {
+                        taskStagePermissionsMissingRef.current = true;
+                        console.info('[Permissions] task_stage_permissions table is missing in this environment. Apply migration 20260216000000_task_management_v2.sql to enable task workflow permissions.');
+                    } else {
+                        console.warn('[Permissions] Error fetching task stage permissions:', tspRowsError.message);
+                    }
+                } else if (tspRows?.length) {
+                    taskStageRows = tspRows;
+                }
+            }
+
+            const taskMap = new Map<string, TaskStagePermission>();
+            taskStageRows.forEach(row => {
+                const stageCode = (row.stage_code || '').trim();
+                if (!stageCode) return;
+
+                const allowedActions = Array.from(new Set((row.allowed_actions || []).filter(Boolean)));
+                const canAdvance = Boolean(row.can_advance);
+                const canReturn = Boolean(row.can_return);
+
+                if (!allowedActions.includes('view')) {
+                    allowedActions.unshift('view');
+                }
+
+                const existing = taskMap.get(stageCode);
+                if (existing) {
+                    existing.allowed_actions = Array.from(new Set([...existing.allowed_actions, ...allowedActions]));
+                    existing.can_advance = existing.can_advance || canAdvance;
+                    existing.can_return = existing.can_return || canReturn;
+                } else {
+                    taskMap.set(stageCode, {
+                        stage_code: stageCode,
+                        allowed_actions: allowedActions,
+                        can_advance: canAdvance,
+                        can_return: canReturn,
+                    });
+                }
+            });
+
+            const taskStagePermissions = Array.from(taskMap.values());
+            setTaskPermissions(taskStagePermissions);
+
             // Derive NCR module visibility/actions strictly from role-stage rows.
             const ncrModuleActions = Array.from(new Set(
                 stagePermissions.flatMap(stagePerm => [
@@ -294,17 +413,24 @@ export function useModulePermissions(): UseModulePermissionsReturn {
                     can_see_all_departments: false,
                 });
             }
+            if (!isCurrentRequest()) return;
             setPermissions(mergedPermissions);
 
         } catch (err) {
+            if (isAbortError(err) || abortController.signal.aborted) {
+                return;
+            }
             console.error('Error loading permissions:', err);
             setError('فشل في تحميل الصلاحيات');
             setPermissions([]);
             setNcrPermissions([]);
+            setTaskPermissions([]);
         } finally {
             // Clear safety timeout and ensure loading is always set to false
             clearTimeout(safetyTimeoutId);
-            setLoading(false);
+            if (isCurrentRequest()) {
+                setLoading(false);
+            }
         }
     }, [profile?.uid]);
 
@@ -374,6 +500,22 @@ export function useModulePermissions(): UseModulePermissionsReturn {
         return perm?.can_return ?? false;
     }, [ncrPermissions]);
 
+    // Task stage permission checks
+    const canPerformTaskAction = useCallback((stageCode: string, action: string): boolean => {
+        const perm = taskPermissions.find(p => p.stage_code === stageCode);
+        return perm?.allowed_actions.includes(action) ?? false;
+    }, [taskPermissions]);
+
+    const canAdvanceTask = useCallback((stageCode: string): boolean => {
+        const perm = taskPermissions.find(p => p.stage_code === stageCode);
+        return perm?.can_advance ?? false;
+    }, [taskPermissions]);
+
+    const canReturnTask = useCallback((stageCode: string): boolean => {
+        const perm = taskPermissions.find(p => p.stage_code === stageCode);
+        return perm?.can_return ?? false;
+    }, [taskPermissions]);
+
     return {
         permissions,
         loading,
@@ -389,6 +531,10 @@ export function useModulePermissions(): UseModulePermissionsReturn {
         canPerformNcrAction,
         canAdvanceNcr,
         canReturnNcr,
+        taskPermissions,
+        canPerformTaskAction,
+        canAdvanceTask,
+        canReturnTask,
         refresh: loadPermissions,
     };
 }

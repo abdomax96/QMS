@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "verify:prod-build": "node scripts/verify-prod-build-no-release-panel.mjs",
     "lint": "eslint .",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "release:agent": "node scripts/release-agent.mjs"
   },
   "dependencies": {
     "@ckeditor/ckeditor5-build-decoupled-document": "^41.4.2",

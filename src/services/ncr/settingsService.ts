@@ -8,6 +8,18 @@ const SETTINGS_ID = 'global';
 // Legacy permission matrix is deprecated - now using RBAC role_permissions table
 const LEGACY_PERMISSION_MATRIX: PermissionMatrix = {} as PermissionMatrix;
 
+type DefectType = 'raw_material' | 'product' | 'process' | 'other';
+
+const normalizeDefect = (item: any): DefectCatalogItem => ({
+    id: item?.id || crypto.randomUUID(),
+    name: item?.name || 'عيب غير مسمى',
+    category: item?.category || 'عام',
+    defectType: (item?.defectType || item?.defect_type || 'other') as DefectType,
+    severity: (item?.severity || 'medium') as 'low' | 'medium' | 'high',
+    description: item?.description || undefined,
+    isActive: item?.isActive ?? item?.is_active ?? true
+});
+
 const defaultSettings: SystemSettings = {
     departments: ['الإنتاج', 'الجودة', 'الصيانة', 'المخازن'],
     users: [
@@ -16,9 +28,9 @@ const defaultSettings: SystemSettings = {
         { name: 'محمد حسن', title: 'مهندس إنتاج' }
     ],
     defectCatalog: [
-        { id: crypto.randomUUID(), name: 'خدش السطح', category: 'جودة', isActive: true },
-        { id: crypto.randomUUID(), name: 'كسر', category: 'مواد', isActive: true },
-        { id: crypto.randomUUID(), name: 'خطأ أبعاد', category: 'عملية', isActive: true }
+        { id: crypto.randomUUID(), name: 'خدش السطح', category: 'جودة', defectType: 'product', severity: 'medium', isActive: true },
+        { id: crypto.randomUUID(), name: 'كسر', category: 'مواد', defectType: 'raw_material', severity: 'high', isActive: true },
+        { id: crypto.randomUUID(), name: 'خطأ أبعاد', category: 'عملية', defectType: 'process', severity: 'medium', isActive: true }
     ],
     products: [],
     lines: [],
@@ -59,9 +71,13 @@ export async function fetchSystemSettings(): Promise<SystemSettings> {
         ...data,
         departments: data.departments ?? defaultSettings.departments,
         users: data.users ?? defaultSettings.users,
-        defectCatalog: data.defect_catalog ?? data.defectCatalog ?? defaultSettings.defectCatalog,
+        defectCatalog: (Array.isArray(data.defect_catalog ?? data.defectCatalog)
+            ? (data.defect_catalog ?? data.defectCatalog)
+            : defaultSettings.defectCatalog
+        ).map(normalizeDefect),
         products: data.products ?? defaultSettings.products,
         lines: data.lines ?? defaultSettings.lines,
+        units: data.units ?? defaultSettings.units,
         qualityDepartments: data.quality_departments ?? data.qualityDepartments ?? defaultSettings.qualityDepartments,
         lastBackupAt: data.last_backup_at ?? data.lastBackupAt ?? null,
         permissionMatrix: data.permission_matrix ?? data.permissionMatrix ?? defaultSettings.permissionMatrix,
@@ -101,7 +117,9 @@ export async function addLine(line: string) {
 
 export async function addUnit(unit: string) {
     const settings = await fetchSystemSettings();
-    const units = [...(settings.units || []), unit];
+    const nextUnit = unit.trim();
+    if (!nextUnit) return;
+    const units = Array.from(new Set([...(settings.units || []), nextUnit]));
 
     await supabase.from(SETTINGS_TABLE).update({
         units,
@@ -111,7 +129,7 @@ export async function addUnit(unit: string) {
 
 export async function removeUnit(unit: string) {
     const settings = await fetchSystemSettings();
-    const units = (settings.units || []).filter(u => u !== unit);
+    const units = (settings.units || []).filter(u => u !== unit.trim());
 
     await supabase.from(SETTINGS_TABLE).update({
         units,
@@ -139,6 +157,22 @@ export async function updateSystemSettings(partial: Partial<SystemSettings>) {
     if (partial.ncrDocumentMeta) {
         payload.ncr_document_meta = partial.ncrDocumentMeta;
         delete payload.ncrDocumentMeta;
+    }
+    if (partial.defectCatalog) {
+        payload.defect_catalog = partial.defectCatalog.map(normalizeDefect);
+        delete payload.defectCatalog;
+    }
+    if (partial.qualityDepartments) {
+        payload.quality_departments = partial.qualityDepartments;
+        delete payload.qualityDepartments;
+    }
+    if (partial.lastBackupAt !== undefined) {
+        payload.last_backup_at = partial.lastBackupAt;
+        delete payload.lastBackupAt;
+    }
+    if (partial.holdsDisposalPolicy) {
+        payload.holds_disposal_policy = partial.holdsDisposalPolicy;
+        delete payload.holdsDisposalPolicy;
     }
 
     await supabase.from(SETTINGS_TABLE).update(payload).eq('id', SETTINGS_ID);
@@ -186,7 +220,7 @@ export async function removeUser(profile: UserProfile) {
 
 export async function addDefect(item: Omit<DefectCatalogItem, 'id'>) {
     const settings = await fetchSystemSettings();
-    const defect: DefectCatalogItem = { id: crypto.randomUUID(), ...item };
+    const defect: DefectCatalogItem = normalizeDefect({ id: crypto.randomUUID(), ...item });
     const defectCatalog = [...(settings.defectCatalog || []), defect];
 
     await supabase.from(SETTINGS_TABLE).update({
@@ -195,6 +229,20 @@ export async function addDefect(item: Omit<DefectCatalogItem, 'id'>) {
     }).eq('id', SETTINGS_ID);
 
     return defect;
+}
+
+export async function updateDefect(item: DefectCatalogItem) {
+    const settings = await fetchSystemSettings();
+    const defectCatalog = (settings.defectCatalog || []).map((existing) =>
+        existing.id === item.id ? normalizeDefect(item) : normalizeDefect(existing)
+    );
+
+    await supabase.from(SETTINGS_TABLE).update({
+        defect_catalog: defectCatalog,
+        updated_at: new Date().toISOString()
+    }).eq('id', SETTINGS_ID);
+
+    return normalizeDefect(item);
 }
 
 export async function removeDefect(item: DefectCatalogItem) {

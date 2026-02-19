@@ -173,7 +173,13 @@ export function useNcrStagePermissions(currentNcrStage?: string): NcrStagePermis
         const canClose = checkAction('closure', 'close');
         const canVerifyAndClose = canClose;
         const canExport = checkAction('closure', 'export');
-        const canReopen = currentStage ? checkAction(currentStage, 'reopen') : canEdit;
+        const canReturnByMatrix =
+            isAdmin ||
+            isSuperAdmin ||
+            (hasStageRecord ? Boolean(stagePermRecord?.can_return) : false);
+        const canReopen = currentStage
+            ? (checkAction(currentStage, 'reopen') || canReturnByMatrix)
+            : (canEdit || canReturnByMatrix);
 
         // CAPA permissions
         const canAddCapa = checkAction('disposition', 'add_capa');

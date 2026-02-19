@@ -24,6 +24,8 @@ export interface CreateNcrPayload {
     createdBy: string;
     description: string;
     immediateAction?: string;
+    documentId?: string;
+    documentTitle?: string;
     attachments?: File[];
     // Integration links - حقول الربط
     relatedLabTestId?: string;
@@ -49,7 +51,87 @@ export interface UpdateNcrPayload extends Partial<CreateNcrPayload> {
 
 const NCR_TABLE = 'ncr_reports';
 const META_TABLE = 'meta';
-const NCR_SELECT_COLUMNS = 'id, number, title, date, shift, department, product_name, line_or_area, reserved_qty, reserved_unit, severity, defect_id, defect_type, occurrence, detection, rpn, risk_band, standard_defect, custom_type, discovered_by, created_by, description, immediate_action, root_cause, actions, holds, verification, attachments, created_at, updated_at, closed_at, current_stage, completed_stages, stage_history, root_cause_approval, status, related_lab_test_id, related_lab_test_number, related_material_receiving_id, related_material_name, related_batch_number, related_supplier_id, related_supplier_name, auto_generated_from_lab, company_id';
+const NCR_SELECT_COLUMNS = 'id, number, title, date, shift, department, product_name, line_or_area, reserved_qty, reserved_unit, severity, defect_id, defect_type, occurrence, detection, rpn, risk_band, standard_defect, custom_type, discovered_by, created_by, description, immediate_action, document_id, document_title, root_cause, actions, holds, verification, attachments, created_at, updated_at, closed_at, current_stage, completed_stages, stage_history, root_cause_approval, status, related_lab_test_id, related_lab_test_number, related_material_receiving_id, related_material_name, related_batch_number, related_supplier_id, related_supplier_name, auto_generated_from_lab, company_id';
+
+export interface NcrHoldSortLogRecord {
+    id: string;
+    ncrId: string;
+    companyId: string;
+    sortedQty: number;
+    destroyedQty: number;
+    sortedAt: string;
+    sortedBy: string | null;
+    notes: string | null;
+    createdAt: string;
+    updatedAt: string;
+}
+
+function parseQuantity(value: unknown): number {
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : 0;
+    }
+
+    if (typeof value !== 'string') return 0;
+
+    const easternToWestern: Record<string, string> = {
+        '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
+        '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9'
+    };
+
+    const normalized = value
+        .trim()
+        .replace(/[٠-٩]/g, (ch) => easternToWestern[ch] || ch)
+        .replace(/[٬,]/g, '')
+        .replace(/٫/g, '.');
+
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatQuantity(value: number): string {
+    return new Intl.NumberFormat('ar-EG', {
+        minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+        maximumFractionDigits: 4
+    }).format(value);
+}
+
+async function calculateNcrHoldRemainingQty(
+    ncr: NcrRecord,
+    companyId?: string | null
+): Promise<{ reservedQty: number; sortedQty: number; remainingQty: number }> {
+    const reservedQty = parseQuantity(ncr.reservedQty);
+    if (reservedQty <= 0) {
+        return { reservedQty: 0, sortedQty: 0, remainingQty: 0 };
+    }
+
+    let sortedQtyFromLogs = 0;
+    let hasSortLogs = false;
+
+    let query = supabase
+        .from('ncr_hold_sort_logs')
+        .select('sorted_qty')
+        .eq('ncr_id', ncr.id);
+
+    if (companyId) {
+        query = query.eq('company_id', companyId);
+    }
+
+    const { data, error } = await query;
+
+    if (!error && Array.isArray(data) && data.length > 0) {
+        hasSortLogs = true;
+        sortedQtyFromLogs = data.reduce((sum, row: any) => sum + parseQuantity(row?.sorted_qty), 0);
+    }
+
+    const legacySortedQty = (ncr.holds || []).reduce((sum, hold: any) => {
+        return sum + parseQuantity(hold?.quantity ?? hold?.qty);
+    }, 0);
+
+    const sortedQty = hasSortLogs ? sortedQtyFromLogs : legacySortedQty;
+    const remainingQty = Math.max(0, reservedQty - sortedQty);
+
+    return { reservedQty, sortedQty, remainingQty };
+}
 
 function formatDate(date: string): { year: number } {
     const d = new Date(date);
@@ -224,6 +306,8 @@ export async function createNcr(payload: CreateNcrPayload): Promise<NcrRecord> {
         created_by: resolvedCreatedBy,
         description: payload.description,
         immediate_action: payload.immediateAction ?? null,
+        document_id: payload.documentId ?? null,
+        document_title: payload.documentTitle ?? null,
         root_cause: null,
         actions: [],
         holds: [],
@@ -335,6 +419,8 @@ export async function updateNcr(payload: UpdateNcrPayload) {
     }
     if (payload.description) updates.description = payload.description;
     if (payload.immediateAction !== undefined) updates.immediate_action = payload.immediateAction;
+    if (payload.documentId !== undefined) updates.document_id = payload.documentId;
+    if (payload.documentTitle !== undefined) updates.document_title = payload.documentTitle;
     if (payload.status) updates.status = payload.status;
     if (payload.rootCause !== undefined) updates.root_cause = payload.rootCause;
     if (payload.closedAt !== undefined) updates.closed_at = payload.closedAt;
@@ -412,6 +498,8 @@ function normalizeNcr(data: Record<string, unknown>): NcrRecord {
         createdBy: data.created_by as string,
         description: data.description as string,
         immediateAction: (data.immediate_action as string) ?? undefined,
+        documentId: (data.document_id as string) ?? undefined,
+        documentTitle: (data.document_title as string) ?? undefined,
         status: (data.status as NcrRecord['status']) ?? 'open',
         rootCause: (data.root_cause as string) ?? undefined,
         actions,
@@ -538,7 +626,9 @@ export async function addCapaAction(
     action: {
         type: 'corrective' | 'preventive';
         description: string;
+        responsibleDeptId?: string;
         responsibleDept: string;
+        responsiblePersonId?: string;
         responsiblePerson: string;
         targetDate: string;
     },
@@ -696,6 +786,14 @@ export async function verifyAndClose(
     };
 
     if (result === 'success') {
+        const { remainingQty } = await calculateNcrHoldRemainingQty(ncr, companyId);
+        if (remainingQty > 0) {
+            const unitLabel = (ncr.reservedUnit || '').trim();
+            const qtyLabel = formatQuantity(remainingQty);
+            const suffix = unitLabel ? ` ${unitLabel}` : '';
+            throw new Error(`لا يمكن إغلاق الحالة طالما توجد كمية محتجزة متبقية (${qtyLabel}${suffix}).`);
+        }
+
         updates.status = 'closed';
         updates.closed_at = now;
         updates.current_stage = 'verification_closure';
@@ -709,4 +807,206 @@ export async function verifyAndClose(
     const { error } = await query;
     if (error) throw error;
     return (await getNcrById(id, companyId))!;
+}
+
+function resolveStatusForStage(stage: NcrRecord['currentStage']): NcrStatus {
+    if (stage === 'initial_report') return 'open';
+    if (stage === 'verification_closure') return 'pending_review';
+    return 'in_progress';
+}
+
+const NCR_STAGE_SEQUENCE: NcrRecord['currentStage'][] = [
+    'initial_report',
+    'root_cause_analysis',
+    'capa_planning',
+    'capa_execution',
+    'verification_closure',
+];
+
+/**
+ * Return NCR to previous workflow stage.
+ * Permission is enforced at UI via ncr_stage_permissions matrix (can_return/reopen).
+ */
+export async function returnToPreviousStage(
+    id: string,
+    transitionedBy: string,
+    transitionedByName: string,
+    transitionedByEmail: string,
+    notes?: string,
+    companyId?: string | null
+): Promise<NcrRecord> {
+    const ncr = await getNcrById(id, companyId);
+    if (!ncr) throw new Error('NCR not found');
+
+    const currentIndex = NCR_STAGE_SEQUENCE.indexOf(ncr.currentStage);
+    if (currentIndex <= 0) {
+        throw new Error('لا يمكن الإرجاع من هذه المرحلة');
+    }
+
+    const targetStage = NCR_STAGE_SEQUENCE[currentIndex - 1];
+    const targetIndex = NCR_STAGE_SEQUENCE.indexOf(targetStage);
+    const now = new Date().toISOString();
+
+    const newTransition = {
+        from: ncr.currentStage,
+        to: targetStage,
+        transitionedBy,
+        transitionedByName,
+        transitionedByEmail,
+        transitionedAt: now,
+        notes: notes || 'إرجاع الحالة للمرحلة السابقة'
+    };
+
+    const completedStages = Array.isArray(ncr.completedStages)
+        ? ncr.completedStages.filter((stage) => {
+            const stageIndex = NCR_STAGE_SEQUENCE.indexOf(stage);
+            return stageIndex !== -1 && stageIndex < targetIndex;
+        })
+        : [];
+
+    const resetUpdates: Record<string, unknown> = {};
+
+    // Force real re-work on the returned stage before allowing progress again.
+    if (targetStage === 'root_cause_analysis') {
+        // Requires root cause to be proposed/approved again.
+        resetUpdates.root_cause_approval = null;
+        resetUpdates.verification = null;
+    } else if (targetStage === 'capa_planning') {
+        // Requires CAPA planning to be rebuilt/confirmed again.
+        resetUpdates.actions = [];
+        resetUpdates.verification = null;
+    } else if (targetStage === 'capa_execution') {
+        // Requires CAPA execution to be updated/completed again.
+        resetUpdates.actions = (ncr.actions || []).map((action) => ({
+            ...action,
+            status: 'pending'
+        }));
+        resetUpdates.verification = null;
+    } else if (targetStage === 'initial_report') {
+        // Rolling back to initial report clears downstream approvals/execution state.
+        resetUpdates.root_cause_approval = null;
+        resetUpdates.actions = [];
+        resetUpdates.verification = null;
+    }
+
+    let query = supabase.from(NCR_TABLE).update({
+        current_stage: targetStage,
+        status: resolveStatusForStage(targetStage),
+        closed_at: null,
+        completed_stages: completedStages,
+        stage_history: [...(ncr.stageHistory || []), newTransition],
+        updated_at: now,
+        ...resetUpdates
+    }).eq('id', id);
+
+    if (companyId) {
+        query = query.eq('company_id', companyId);
+    }
+
+    const { error } = await query;
+    if (error) throw error;
+
+    return (await getNcrById(id, companyId))!;
+}
+
+/**
+ * Return NCR from verification stage back to CAPA execution after failed verification.
+ */
+export async function returnFailedVerificationToExecution(
+    id: string,
+    transitionedBy: string,
+    transitionedByName: string,
+    transitionedByEmail: string,
+    notes?: string,
+    companyId?: string | null
+): Promise<NcrRecord> {
+    const ncr = await getNcrById(id, companyId);
+    if (!ncr) throw new Error('NCR not found');
+
+    if (ncr.currentStage !== 'verification_closure') {
+        throw new Error('لا يمكن إرجاع الحالة إلا من مرحلة التحقق والإغلاق');
+    }
+
+    if (ncr.verification?.result && ncr.verification.result !== 'fail') {
+        throw new Error('لا يمكن الإرجاع إلا بعد تحقق فاشل');
+    }
+
+    return returnToPreviousStage(
+        id,
+        transitionedBy,
+        transitionedByName,
+        transitionedByEmail,
+        notes || 'إرجاع الحالة بعد فشل التحقق',
+        companyId
+    );
+}
+
+export async function fetchNcrHoldSortLogs(
+    ncrId: string,
+    companyId?: string | null
+): Promise<NcrHoldSortLogRecord[]> {
+    let query = supabase
+        .from('ncr_hold_sort_logs')
+        .select('id, ncr_id, company_id, sorted_qty, destroyed_qty, sorted_at, sorted_by, notes, created_at, updated_at')
+        .eq('ncr_id', ncrId)
+        .order('sorted_at', { ascending: false });
+
+    if (companyId) {
+        query = query.eq('company_id', companyId);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    return (data || []).map((row: any) => ({
+        id: row.id,
+        ncrId: row.ncr_id,
+        companyId: row.company_id,
+        sortedQty: Number(row.sorted_qty || 0),
+        destroyedQty: Number(row.destroyed_qty || 0),
+        sortedAt: row.sorted_at,
+        sortedBy: row.sorted_by ?? null,
+        notes: row.notes ?? null,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+    }));
+}
+
+export async function addNcrHoldSortLog(input: {
+    ncrId: string;
+    companyId: string;
+    sortedQty: number;
+    destroyedQty?: number;
+    sortedAt?: string;
+    sortedBy?: string | null;
+    notes?: string | null;
+}): Promise<NcrHoldSortLogRecord> {
+    const { data, error } = await supabase
+        .from('ncr_hold_sort_logs')
+        .insert({
+            ncr_id: input.ncrId,
+            company_id: input.companyId,
+            sorted_qty: input.sortedQty,
+            destroyed_qty: input.destroyedQty ?? 0,
+            sorted_at: input.sortedAt ?? new Date().toISOString(),
+            sorted_by: input.sortedBy ?? null,
+            notes: input.notes ?? null
+        })
+        .select('id, ncr_id, company_id, sorted_qty, destroyed_qty, sorted_at, sorted_by, notes, created_at, updated_at')
+        .single();
+
+    if (error) throw error;
+
+    return {
+        id: data.id,
+        ncrId: data.ncr_id,
+        companyId: data.company_id,
+        sortedQty: Number(data.sorted_qty || 0),
+        destroyedQty: Number(data.destroyed_qty || 0),
+        sortedAt: data.sorted_at,
+        sortedBy: data.sorted_by ?? null,
+        notes: data.notes ?? null,
+        createdAt: data.created_at,
+        updatedAt: data.updated_at
+    };
 }

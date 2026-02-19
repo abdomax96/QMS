@@ -5,7 +5,7 @@
  * Updated: 2025-12-31 - Using stage-based permissions per architecture redesign
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
     PlusIcon,
     CheckIcon,
@@ -15,13 +15,15 @@ import {
     ClipboardDocumentListIcon,
     LockClosedIcon
 } from '@heroicons/react/24/outline';
+import { supabase } from '../../config/supabase';
 import {
     proposeRootCause,
     reviewRootCause,
     addCapaAction,
     updateCapaStatus,
     progressToNextStage,
-    verifyAndClose
+    verifyAndClose,
+    returnToPreviousStage
 } from '../../services/ncr/ncrService';
 import { useNcrStagePermissions } from '../../hooks/ncr/useNcrStagePermissions';
 import { InlineLoading } from '../common/LoadingStates';
@@ -49,6 +51,7 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
         canCompleteCapa,
         canProgressWorkflow,
         canVerifyAndClose,
+        canReopen,
         isAdmin,
         currentStage
     } = useNcrStagePermissions(ncr.currentStage as import('../../types/ncr').NcrStage);
@@ -64,15 +67,53 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
     const [capaForm, setCapaForm] = useState({
         type: 'corrective' as 'corrective' | 'preventive',
         description: '',
-        responsibleDept: '',
-        responsiblePerson: '',
+        responsibleDeptId: '',
+        responsiblePersonId: '',
         targetDate: ''
     });
     const [verificationNotes, setVerificationNotes] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
+    const [departments, setDepartments] = useState<{ id: string; name: string; name_ar?: string | null }[]>([]);
+    const [users, setUsers] = useState<{ id: string; name?: string | null; email?: string | null; department_id?: string | null }[]>([]);
 
     const isClosed = !!ncr.closedAt;
     const currentStageInfo = WORKFLOW_STAGES[ncr.currentStage];
+    const workflowStageOrder: NcrRecord['currentStage'][] = [
+        'initial_report',
+        'root_cause_analysis',
+        'capa_planning',
+        'capa_execution',
+        'verification_closure'
+    ];
+    const currentStageIndex = workflowStageOrder.indexOf(ncr.currentStage);
+    const previousStageCode = currentStageIndex > 0 ? workflowStageOrder[currentStageIndex - 1] : null;
+    const previousStageLabel = previousStageCode ? WORKFLOW_STAGES[previousStageCode]?.name : null;
+    const canReturnToPreviousStage = Boolean(previousStageCode) && (canReopen || isAdmin);
+    const filteredUsers = capaForm.responsibleDeptId
+        ? users.filter((user) => user.department_id === capaForm.responsibleDeptId)
+        : [];
+
+    useEffect(() => {
+        const loadCapaLookup = async () => {
+            const [{ data: deptRows }, { data: userRows }] = await Promise.all([
+                supabase
+                    .from('departments')
+                    .select('id, name, name_ar')
+                    .eq('is_active', true)
+                    .order('display_order', { ascending: true }),
+                supabase
+                    .from('users')
+                    .select('id, name, email, department_id')
+                    .eq('is_active', true)
+                    .order('name', { ascending: true })
+            ]);
+
+            setDepartments(deptRows || []);
+            setUsers(userRows || []);
+        };
+
+        loadCapaLookup();
+    }, []);
 
     // Root cause analysis handlers
     const handleProposeRootCause = async () => {
@@ -123,16 +164,26 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
 
     // CAPA handlers
     const handleAddCapa = async () => {
-        if (!capaForm.description.trim() || !capaForm.responsiblePerson.trim()) return;
+        if (!capaForm.description.trim() || !capaForm.responsibleDeptId || !capaForm.responsiblePersonId) return;
         setIsProcessing(true);
         try {
-            const updated = await addCapaAction(ncr.id, capaForm, ncr.companyId);
+            const selectedDept = departments.find((d) => d.id === capaForm.responsibleDeptId);
+            const selectedUser = users.find((u) => u.id === capaForm.responsiblePersonId);
+            const updated = await addCapaAction(ncr.id, {
+                type: capaForm.type,
+                description: capaForm.description,
+                responsibleDeptId: capaForm.responsibleDeptId,
+                responsibleDept: selectedDept?.name_ar || selectedDept?.name || '',
+                responsiblePersonId: capaForm.responsiblePersonId,
+                responsiblePerson: selectedUser?.name || selectedUser?.email || '',
+                targetDate: capaForm.targetDate
+            }, ncr.companyId);
             onUpdate(updated);
             setCapaForm({
                 type: 'corrective',
                 description: '',
-                responsibleDept: '',
-                responsiblePerson: '',
+                responsibleDeptId: '',
+                responsiblePersonId: '',
                 targetDate: ''
             });
             setShowCapaForm(false);
@@ -187,7 +238,36 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
             setShowVerifyForm(false);
         } catch (error) {
             console.error('Error verifying NCR:', error);
-            alert('حدث خطأ في التحقق');
+            const message = (error as { message?: string })?.message || 'حدث خطأ في التحقق';
+            alert(message);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const handleReturnToPreviousStage = async () => {
+        if (!previousStageCode || !previousStageLabel) return;
+        if (!confirm(`هل تريد إرجاع الحالة إلى مرحلة "${previousStageLabel}"؟`)) return;
+
+        setIsProcessing(true);
+        try {
+            const notes = ncr.currentStage === 'verification_closure' && ncr.verification?.result === 'fail'
+                ? 'إرجاع الحالة بعد فشل التحقق'
+                : `إرجاع الحالة إلى المرحلة السابقة (${previousStageLabel})`;
+
+            const updated = await returnToPreviousStage(
+                ncr.id,
+                userInfo.id || userInfo.name,
+                userInfo.name,
+                userInfo.email,
+                notes,
+                ncr.companyId
+            );
+            onUpdate(updated);
+            setShowVerifyForm(false);
+        } catch (error) {
+            console.error('Error returning NCR to previous stage:', error);
+            alert('تعذر إرجاع الحالة إلى المرحلة السابقة');
         } finally {
             setIsProcessing(false);
         }
@@ -216,7 +296,7 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
     // Check if user has any permissions
     const hasAnyNcrPermission = canProposeRootCause || canApproveRootCause ||
         canAddCapa || canCompleteCapa ||
-        canProgressWorkflow || canVerifyAndClose;
+        canProgressWorkflow || canVerifyAndClose || canReopen;
 
     if (!hasAnyNcrPermission) {
         return (
@@ -404,21 +484,37 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
                                     <div className="grid grid-cols-2 gap-3">
                                         <div>
                                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">القسم المسؤول</label>
-                                            <input
-                                                type="text"
-                                                value={capaForm.responsibleDept}
-                                                onChange={(e) => setCapaForm({ ...capaForm, responsibleDept: e.target.value })}
+                                            <select
+                                                value={capaForm.responsibleDeptId}
+                                                onChange={(e) => setCapaForm({ ...capaForm, responsibleDeptId: e.target.value, responsiblePersonId: '' })}
                                                 className="w-full rounded-lg border-gray-300 dark:border-gray-600 dark:bg-gray-600"
-                                            />
+                                            >
+                                                <option value="">اختر القسم</option>
+                                                {departments.map((dept) => (
+                                                    <option key={dept.id} value={dept.id}>
+                                                        {dept.name_ar || dept.name}
+                                                    </option>
+                                                ))}
+                                            </select>
                                         </div>
                                         <div>
                                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">الشخص المسؤول</label>
-                                            <input
-                                                type="text"
-                                                value={capaForm.responsiblePerson}
-                                                onChange={(e) => setCapaForm({ ...capaForm, responsiblePerson: e.target.value })}
+                                            <select
+                                                value={capaForm.responsiblePersonId}
+                                                onChange={(e) => setCapaForm({ ...capaForm, responsiblePersonId: e.target.value })}
                                                 className="w-full rounded-lg border-gray-300 dark:border-gray-600 dark:bg-gray-600"
-                                            />
+                                                disabled={!capaForm.responsibleDeptId}
+                                            >
+                                                <option value="">اختر المسؤول</option>
+                                                {filteredUsers.map((user) => (
+                                                    <option key={user.id} value={user.id}>
+                                                        {user.name || user.email || user.id}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            {capaForm.responsibleDeptId && filteredUsers.length === 0 && (
+                                                <p className="text-xs text-amber-600 mt-1">لا يوجد مستخدمون نشطون في هذا القسم.</p>
+                                            )}
                                         </div>
                                     </div>
                                     <div className="flex gap-2">
@@ -461,7 +557,7 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
                                             </div>
                                             <p className="text-sm text-gray-800 dark:text-gray-200">{action.description}</p>
                                             <div className="mt-1 text-xs text-gray-500">
-                                                المسؤول: {action.responsiblePerson} | الموعد: {action.targetDate || '-'}
+                                                القسم: {action.responsibleDept || '-'} | المسؤول: {action.responsiblePerson || '-'} | الموعد: {action.targetDate || '-'}
                                             </div>
                                         </div>
                                     ))}
@@ -512,6 +608,25 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
                                 بدء التحقق والإغلاق
                             </button>
                         )}
+                    </div>
+                )}
+
+                {/* Return to previous stage (permission matrix: can_return/reopen) */}
+                {canReturnToPreviousStage && (
+                    <div className="mb-6 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                        {ncr.currentStage === 'verification_closure' && ncr.verification?.result === 'fail' && (
+                            <p className="text-sm text-amber-800 mb-2">
+                                آخر نتيجة تحقق كانت فاشلة. يمكنك إرجاع الحالة للمرحلة السابقة لاستكمال الإجراءات.
+                            </p>
+                        )}
+                        <button
+                            onClick={handleReturnToPreviousStage}
+                            disabled={isProcessing}
+                            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50"
+                        >
+                            <ArrowRightIcon className="w-4 h-4" />
+                            {previousStageLabel ? `إرجاع إلى ${previousStageLabel}` : 'إرجاع للمرحلة السابقة'}
+                        </button>
                     </div>
                 )}
 

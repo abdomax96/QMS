@@ -77,7 +77,21 @@ export const LEGACY_WORKFLOW_STAGES: Record<string, WorkflowStage> = {
 
 export type NcrSeverity = 'low' | 'medium' | 'high' | 'critical';
 
-export type NcrStatus = 'open' | 'analysis' | 'action' | 'verification' | 'closed' | 'cancelled';
+export type NcrStatus =
+    | 'open'
+    | 'in_progress'
+    | 'pending_review'
+    | 'resolved'
+    | 'closed'
+    | 'cancelled'
+    | 'draft'
+    | 'pending'
+    | 'approved'
+    | 'rejected'
+    // Legacy statuses (kept for backward compatibility with old rows/UI logic)
+    | 'analysis'
+    | 'action'
+    | 'verification';
 
 export type NcrStage = 'initial_report' | 'root_cause_analysis' | 'capa_planning' | 'capa_execution' | 'verification_closure';
 
@@ -106,7 +120,9 @@ export interface CapaAction {
     id: string;
     type: 'corrective' | 'preventive';
     description: string;
+    responsibleDeptId?: string;
     responsibleDept: string;
+    responsiblePersonId?: string;
     responsiblePerson: string;
     targetDate: string;
     status: 'pending' | 'in-progress' | 'completed';
@@ -124,6 +140,19 @@ export interface NcrHold {
     releasedAt?: string;
     releasedBy?: string;
     notes?: string;
+}
+
+export interface NcrHoldSortLog {
+    id: string;
+    ncrId: string;
+    companyId: string;
+    sortedQty: number;
+    destroyedQty: number;
+    sortedAt: string;
+    sortedBy?: string | null;
+    notes?: string | null;
+    createdAt: string;
+    updatedAt: string;
 }
 
 export interface NcrVerification {
@@ -313,6 +342,8 @@ export interface DefectCatalogItem {
     id: string;
     category: string;
     name: string;
+    defectType?: 'raw_material' | 'product' | 'process' | 'other';
+    severity?: 'low' | 'medium' | 'high';
     description?: string;
     isActive: boolean;
 }

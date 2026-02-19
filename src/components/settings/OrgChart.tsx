@@ -3,7 +3,7 @@
  * Compact interactive org chart with CRUD and Multi-Select functionality
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     BuildingOfficeIcon,
     ChevronDownIcon,
@@ -30,6 +30,7 @@ interface Department {
     parent_department_id?: string;
     is_active: boolean;
     sort_order?: number;
+    display_order?: number;
 }
 
 interface Role {
@@ -101,6 +102,53 @@ const OrgChart: React.FC = () => {
         loadData();
     }, []);
 
+    const getDepartmentOrder = (dept: Department): number =>
+        dept.sort_order ?? dept.display_order ?? 9999;
+
+    const sortDepartmentTree = (nodes: DepartmentWithRoles[]): DepartmentWithRoles[] =>
+        [...nodes]
+            .sort((a, b) => getDepartmentOrder(a) - getDepartmentOrder(b))
+            .map((node) => ({
+                ...node,
+                children: sortDepartmentTree(node.children),
+            }));
+
+    // Build a pyramid-style view with a single top node when multiple roots exist.
+    const chartRoots = useMemo(() => {
+        if (departments.length <= 1) return departments;
+
+        const normalized = (value?: string) => (value || '').trim().toLowerCase();
+        const code = (value?: string) => (value || '').trim().toUpperCase();
+
+        const topRoot =
+            departments.find((d) => code(d.code) === 'EXEC') ||
+            departments.find((d) => code(d.code) === 'ADMIN') ||
+            departments.find((d) => normalized(d.name_ar).includes('الإدارة التنفيذية')) ||
+            departments.find((d) => normalized(d.name_ar).includes('الادارة التنفيذية')) ||
+            departments.find((d) => normalized(d.name).includes('executive')) ||
+            departments.find((d) => normalized(d.name).includes('administration')) ||
+            departments.find((d) => normalized(d.name_ar).includes('الإدارة')) ||
+            departments[0];
+
+        if (!topRoot) return departments;
+
+        const otherRoots = departments.filter((d) => d.id !== topRoot.id);
+        if (otherRoots.length === 0) return departments;
+
+        const childIds = new Set(topRoot.children.map((c) => c.id));
+        const mergedChildren = [
+            ...topRoot.children,
+            ...otherRoots.filter((d) => !childIds.has(d.id)),
+        ].sort((a, b) => getDepartmentOrder(a) - getDepartmentOrder(b));
+
+        const mergedTop: DepartmentWithRoles = {
+            ...topRoot,
+            children: mergedChildren,
+        };
+
+        return [mergedTop];
+    }, [departments]);
+
     // Keyboard shortcuts
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -147,12 +195,12 @@ const OrgChart: React.FC = () => {
     const loadData = async () => {
         setLoading(true);
         const [deptRes, rolesRes, deptRolesRes] = await Promise.all([
-            supabase.from('departments').select('id, name, name_ar, code, color, parent_department_id, is_active, sort_order').eq('is_active', true).order('sort_order'),
+            supabase.from('departments').select('id, name, name_ar, code, color, parent_department_id, is_active, sort_order, display_order').eq('is_active', true),
             supabase.from('roles').select('id, name, name_ar, code, color').eq('is_active', true),
             supabase.from('department_roles').select('department_id, role_id')
         ]);
 
-        const allDepts = deptRes.data || [];
+        const allDepts = [...(deptRes.data || [])].sort((a, b) => getDepartmentOrder(a) - getDepartmentOrder(b));
         const roles = rolesRes.data || [];
         const deptRoles = deptRolesRes.data || [];
 
@@ -181,7 +229,7 @@ const OrgChart: React.FC = () => {
         });
 
         setExpandedIds(new Set(allDepts.map(d => d.id)));
-        setDepartments(rootDepts);
+        setDepartments(sortDepartmentTree(rootDepts));
         setLoading(false);
     };
 
@@ -236,7 +284,7 @@ const OrgChart: React.FC = () => {
     const saveDept = async () => {
         try {
             // SECURITY: Backend permission enforcement
-            await requirePermission('settings', 'edit');
+            await requirePermission('access_management', 'edit');
 
             if (editingDept) {
                 await supabase.from('departments').update({
@@ -266,7 +314,7 @@ const OrgChart: React.FC = () => {
         if (selectedIds.size === 0) return;
         try {
             // SECURITY: Backend permission enforcement
-            await requirePermission('settings', 'delete');
+            await requirePermission('access_management', 'edit');
 
             await supabase.from('departments').update({ is_active: false }).in('id', Array.from(selectedIds));
             setShowDeleteConfirm(false);
@@ -328,7 +376,7 @@ const OrgChart: React.FC = () => {
 
         try {
             // SECURITY: Backend permission enforcement
-            await requirePermission('settings', 'edit');
+            await requirePermission('access_management', 'edit');
 
             if (editingRole) {
                 await supabase.from('roles').update({
@@ -376,7 +424,7 @@ const OrgChart: React.FC = () => {
         if (!roleToDelete) return;
         try {
             // SECURITY: Backend permission enforcement
-            await requirePermission('settings', 'delete');
+            await requirePermission('access_management', 'edit');
 
             // First remove from department_roles
             await supabase.from('department_roles').delete().eq('role_id', roleToDelete.id);
@@ -409,33 +457,71 @@ const OrgChart: React.FC = () => {
         });
     };
 
-    if (loading) return <SettingsSkeleton />;
+    const CHILDREN_GAP_PX = 16;
+    const getNodeCardWidth = (level: number) => (level === 0 ? 190 : 150);
+
+    // Reserve horizontal space for each expanded subtree so sibling branches never overlap.
+    const subtreeWidthById = useMemo(() => {
+        const widths = new Map<string, number>();
+
+        const calculateWidth = (node: DepartmentWithRoles, level: number): number => {
+            const nodeWidth = getNodeCardWidth(level);
+            const isExpanded = expandedIds.has(node.id);
+            const hasChildren = node.children.length > 0;
+
+            if (!isExpanded || !hasChildren) {
+                widths.set(node.id, nodeWidth);
+                return nodeWidth;
+            }
+
+            const childrenTotalWidth =
+                node.children.reduce((sum, child) => sum + calculateWidth(child, level + 1), 0) +
+                CHILDREN_GAP_PX * Math.max(0, node.children.length - 1);
+
+            const subtreeWidth = Math.max(nodeWidth, childrenTotalWidth);
+            widths.set(node.id, subtreeWidth);
+            return subtreeWidth;
+        };
+
+        chartRoots.forEach((root) => calculateWidth(root, 0));
+        return widths;
+    }, [chartRoots, expandedIds]);
+
+    const getSubtreeWidth = (node: DepartmentWithRoles, level: number): number =>
+        subtreeWidthById.get(node.id) ?? getNodeCardWidth(level);
 
     // ==================== Node Renderer ====================
     const renderNode = (dept: DepartmentWithRoles, level: number = 0): React.ReactNode => {
         const isExpanded = expandedIds.has(dept.id);
         const hasChildren = dept.children.length > 0;
         const isSelected = selectedIds.has(dept.id);
+        const nodeWidth = getNodeCardWidth(level);
+        const subtreeWidth = getSubtreeWidth(dept, level);
+        const childSubtreeWidths = dept.children.map((child) => getSubtreeWidth(child, level + 1));
+        const connectorLeft = childSubtreeWidths[0] ? childSubtreeWidths[0] / 2 : 0;
+        const connectorRight = childSubtreeWidths.length > 0
+            ? childSubtreeWidths[childSubtreeWidths.length - 1] / 2
+            : 0;
 
         return (
-            <div key={dept.id} className="flex flex-col items-center">
-                <div className="relative group">
+            <div key={dept.id} className="flex flex-col items-center relative shrink-0" style={{ width: `${subtreeWidth}px` }}>
+                <div className="relative group" style={{ width: `${nodeWidth}px` }}>
                     <div
                         onClick={(e) => handleSelect(dept, e)}
                         className={`
                             cursor-pointer transition-all duration-150
                             bg-white dark:bg-gray-800 rounded-lg shadow border-r-4 
-                            px-2 py-1.5 min-w-[100px] max-w-[130px]
+                            ${level === 0 ? 'px-3 py-2' : 'px-2 py-1.5'}
                             hover:shadow-md
                             ${isSelected ? 'ring-2 ring-primary-500 bg-primary-50 dark:bg-primary-900/20' : ''}
                         `}
-                        style={{ borderRightColor: dept.color || '#6B7280' }}
+                        style={{ borderRightColor: dept.color || '#6B7280', width: `${nodeWidth}px` }}
                     >
                         <div className="text-center">
-                            <h4 className="text-[11px] font-semibold text-gray-900 dark:text-white leading-tight truncate">
+                            <h4 className={`${level === 0 ? 'text-sm' : 'text-[11px]'} font-semibold text-gray-900 dark:text-white leading-tight truncate`}>
                                 {dept.name_ar || dept.name}
                             </h4>
-                            <div className="flex items-center justify-center gap-1 mt-0.5 text-[9px] text-gray-500">
+                            <div className={`flex items-center justify-center gap-1 mt-0.5 ${level === 0 ? 'text-[10px]' : 'text-[9px]'} text-gray-500`}>
                                 <ShieldCheckIcon className="w-2.5 h-2.5" />
                                 <span>{dept.roles.length}</span>
                                 {hasChildren && (
@@ -486,13 +572,22 @@ const OrgChart: React.FC = () => {
 
                 {/* Children */}
                 {isExpanded && hasChildren && (
-                    <div className="mt-4 relative">
-                        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-4 bg-gray-300 dark:bg-gray-600 -mt-4" />
-                        {dept.children.length > 1 && <div className="absolute top-0 h-px bg-gray-300 dark:bg-gray-600" style={{ left: '10%', right: '10%' }} />}
-                        <div className="flex gap-3 justify-center flex-wrap">
-                            {dept.children.map(child => (
-                                <div key={child.id} className="relative pt-4">
-                                    <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-4 bg-gray-300 dark:bg-gray-600" />
+                    <div className="mt-5 relative w-full flex justify-center">
+                        <div className="absolute -top-5 left-1/2 -translate-x-1/2 w-px h-5 bg-gray-300 dark:bg-gray-600" />
+                        <div className="relative inline-flex items-start justify-center gap-4 flex-nowrap">
+                            {dept.children.length > 1 && (
+                                <div
+                                    className="absolute top-0 h-px bg-gray-300 dark:bg-gray-600"
+                                    style={{ left: `${connectorLeft}px`, right: `${connectorRight}px` }}
+                                />
+                            )}
+                            {dept.children.map((child, index) => (
+                                <div
+                                    key={child.id}
+                                    className="relative pt-5 flex justify-center shrink-0"
+                                    style={{ width: `${childSubtreeWidths[index]}px` }}
+                                >
+                                    <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-5 bg-gray-300 dark:bg-gray-600" />
                                     {renderNode(child, level + 1)}
                                 </div>
                             ))}
@@ -502,6 +597,8 @@ const OrgChart: React.FC = () => {
             </div>
         );
     };
+
+    if (loading) return <SettingsSkeleton />;
 
     return (
         <div ref={containerRef} className="flex flex-col h-full" tabIndex={0}>
@@ -547,8 +644,8 @@ const OrgChart: React.FC = () => {
                         </button>
                     </div>
                 ) : (
-                    <div className="flex justify-center gap-4 flex-wrap">
-                        {departments.map(dept => renderNode(dept))}
+                    <div className="mx-auto min-w-max flex items-start gap-8 pb-4">
+                        {chartRoots.map(dept => renderNode(dept))}
                     </div>
                 )}
             </div>

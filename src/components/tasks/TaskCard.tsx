@@ -1,6 +1,6 @@
 /**
  * Task Card Component
- * بطاقة عرض المهمة
+ * بطاقة عرض المهمة - مع شارة المرحلة ومؤشر نوع الإسناد
  */
 
 import React from 'react';
@@ -8,23 +8,23 @@ import { Link } from 'react-router-dom';
 import {
     CalendarIcon,
     UserGroupIcon,
-    ChatBubbleLeftIcon,
-    PaperClipIcon,
     CheckCircleIcon,
-    ClockIcon,
     ExclamationTriangleIcon,
-    FlagIcon
+    FlagIcon,
+    UserIcon,
+    ShieldCheckIcon,
+    BuildingOfficeIcon,
 } from '@heroicons/react/24/outline';
-import type { Task } from '../../domain/tasks/types';
-import { FormattedDate } from '../common/FormattedDate';
+import type { Task } from '../../types/task';
+import { TASK_STAGE_LABELS, TASK_ASSIGNMENT_TYPE_LABELS } from '../../types/task';
 import {
-    taskStatusLabels,
-    taskStatusColors,
+    taskStageColors,
+    taskStageLabels,
     taskPriorityLabels,
     taskPriorityColors,
     getTaskProgress,
     isTaskOverdue,
-    getDaysUntilDue
+    getDaysUntilDue,
 } from '../../domain/tasks/types';
 
 interface TaskCardProps {
@@ -33,12 +33,19 @@ interface TaskCardProps {
     compact?: boolean;
 }
 
+const assignmentIcon = {
+    individual: UserIcon,
+    role: ShieldCheckIcon,
+    department: BuildingOfficeIcon,
+};
+
 const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, compact = false }) => {
     const progress = getTaskProgress(task);
     const overdue = isTaskOverdue(task);
     const daysUntil = getDaysUntilDue(task);
-    const statusColors = taskStatusColors[task.status];
-    const priorityColors = taskPriorityColors[task.priority];
+    const stageColors = taskStageColors[task.current_stage] || taskStageColors.assignment;
+    const priorityColors = taskPriorityColors[task.priority] || taskPriorityColors.medium;
+    const AssignIcon = assignmentIcon[task.assignment_type] || UserIcon;
 
     if (compact) {
         return (
@@ -56,18 +63,16 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, compact = false }) =
                     </span>
                 </div>
                 <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
-                    {task.dueDate && (
+                    {task.due_date && (
                         <span className={`flex items-center gap-1 ${overdue ? 'text-red-600' : ''}`}>
                             <CalendarIcon className="w-3 h-3" />
-                            <FormattedDate date={task.dueDate} />
+                            {overdue ? 'متأخر' : daysUntil === 0 ? 'اليوم' : daysUntil === 1 ? 'غداً' : `${daysUntil} يوم`}
                         </span>
                     )}
-                    {task.assignees.length > 0 && (
-                        <span className="flex items-center gap-1">
-                            <UserGroupIcon className="w-3 h-3" />
-                            {task.assignees.length}
-                        </span>
-                    )}
+                    <span className="flex items-center gap-1">
+                        <AssignIcon className="w-3 h-3" />
+                        {TASK_ASSIGNMENT_TYPE_LABELS[task.assignment_type]?.ar || 'فردي'}
+                    </span>
                 </div>
             </Link>
         );
@@ -87,7 +92,7 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, compact = false }) =
             )}
 
             <div className="p-4">
-                {/* Header */}
+                {/* Header: title + stage badge */}
                 <div className="flex items-start justify-between gap-2 mb-3">
                     <Link
                         to={`/tasks/${task.id}`}
@@ -95,8 +100,8 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, compact = false }) =
                     >
                         {task.title}
                     </Link>
-                    <span className={`shrink-0 px-2.5 py-1 text-xs font-medium rounded-full ${statusColors.bg} ${statusColors.text}`}>
-                        {taskStatusLabels[task.status]}
+                    <span className={`shrink-0 px-2.5 py-1 text-xs font-medium rounded-full ${stageColors.bg} ${stageColors.text}`}>
+                        {taskStageLabels[task.current_stage] || task.current_stage}
                     </span>
                 </div>
 
@@ -108,7 +113,7 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, compact = false }) =
                 )}
 
                 {/* Progress Bar */}
-                {task.checklist.length > 0 && (
+                {task.checklist && task.checklist.length > 0 && (
                     <div className="mb-4">
                         <div className="flex items-center justify-between mb-1">
                             <span className="text-xs text-gray-500">التقدم</span>
@@ -134,7 +139,7 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, compact = false }) =
                     </span>
 
                     {/* Due Date */}
-                    {task.dueDate && (
+                    {task.due_date && (
                         <span className={`flex items-center gap-1 ${overdue ? 'text-red-600 font-medium' : ''}`}>
                             {overdue ? (
                                 <ExclamationTriangleIcon className="w-4 h-4" />
@@ -146,51 +151,36 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onClick, compact = false }) =
                     )}
 
                     {/* Checklist */}
-                    {task.checklist.length > 0 && (
+                    {task.checklist && task.checklist.length > 0 && (
                         <span className="flex items-center gap-1">
                             <CheckCircleIcon className="w-4 h-4" />
                             {task.checklist.filter(c => c.completed).length}/{task.checklist.length}
                         </span>
                     )}
 
-                    {/* Comments */}
-                    {task.comments.length > 0 && (
-                        <span className="flex items-center gap-1">
-                            <ChatBubbleLeftIcon className="w-4 h-4" />
-                            {task.comments.length}
-                        </span>
-                    )}
+                    {/* Assignment type indicator */}
+                    <span className="flex items-center gap-1">
+                        <AssignIcon className="w-4 h-4" />
+                        {TASK_ASSIGNMENT_TYPE_LABELS[task.assignment_type]?.ar || 'فردي'}
+                    </span>
 
-                    {/* Attachments */}
-                    {task.attachments.length > 0 && (
-                        <span className="flex items-center gap-1">
-                            <PaperClipIcon className="w-4 h-4" />
-                            {task.attachments.length}
+                    {/* Approval indicator */}
+                    {task.requires_approval && (
+                        <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                            <CheckCircleIcon className="w-4 h-4" />
+                            اعتماد
                         </span>
                     )}
                 </div>
 
-                {/* Assignees */}
-                {task.assignees.length > 0 && (
+                {/* Assignee info */}
+                {task.assigned_to_name && (
                     <div className="flex items-center gap-2 mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
-                        <div className="flex -space-x-2 rtl:space-x-reverse">
-                            {task.assignees.slice(0, 4).map((assignee) => (
-                                <div
-                                    key={assignee.userId}
-                                    className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-400 to-purple-500 flex items-center justify-center text-white text-xs font-medium border-2 border-white dark:border-gray-800"
-                                    title={assignee.userName}
-                                >
-                                    {assignee.userName.split(' ').map(n => n[0]).join('').slice(0, 2)}
-                                </div>
-                            ))}
-                            {task.assignees.length > 4 && (
-                                <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-600 flex items-center justify-center text-xs font-medium border-2 border-white dark:border-gray-800">
-                                    +{task.assignees.length - 4}
-                                </div>
-                            )}
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary-400 to-purple-500 flex items-center justify-center text-white text-xs font-medium border-2 border-white dark:border-gray-800">
+                            {task.assigned_to_name.split(' ').map(n => n[0]).join('').slice(0, 2)}
                         </div>
                         <span className="text-xs text-gray-500">
-                            {task.assignees.length === 1 ? task.assignees[0].userName : `${task.assignees.length} أشخاص`}
+                            {task.assigned_to_name}
                         </span>
                     </div>
                 )}

@@ -1,187 +1,93 @@
 /**
- * Task Management Types & DTOs
- * نظام إدارة المهام - الأنواع والواجهات
+ * Task Management Domain Types & Helpers
+ * نظام إدارة المهام - الأنواع والدوال المساعدة
  */
 
 import { formatDateWithAppSettings } from '../../hooks/useDateFormat';
 
-// ============ Enums ============
+// Re-export all types from the main types file
+export type {
+    Task,
+    TaskAssignment,
+    TaskChecklist,
+    TaskComment,
+    TaskAttachment,
+    TaskStageHistory,
+    TaskHistory,
+    UserTaskStats,
+    CreateTaskInput,
+    UpdateTaskInput,
+    TaskFilters,
+    TaskStage,
+    TaskStageAction,
+    TaskAssignmentType,
+    TaskType,
+    TaskPriority,
+    TaskStatus,
+    TaskCategory,
+} from '../../types/task';
 
-export type TaskStatus = 'pending' | 'in_progress' | 'review' | 'completed' | 'cancelled';
-export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
-export type TaskCategory = 'general' | 'ncr' | 'quality' | 'maintenance' | 'safety' | 'training' | 'audit';
+export {
+    TASK_STAGE_ORDER,
+    TASK_STAGE_LABELS,
+    TASK_ASSIGNMENT_TYPE_LABELS,
+    TASK_TYPE_LABELS,
+    TASK_PRIORITY_LABELS,
+    TASK_STATUS_LABELS,
+    TASK_CATEGORY_LABELS,
+} from '../../types/task';
 
-// ============ Interfaces ============
+// ============ UI Style Maps ============
 
-export interface TaskAssignee {
-    userId: string;
-    userName: string;
-    assignedAt: string;
-    assignedBy: string;
-}
-
-export interface TaskChecklist {
-    id: string;
-    text: string;
-    completed: boolean;
-    completedAt?: string;
-    completedBy?: string;
-}
-
-export interface TaskComment {
-    id: string;
-    userId: string;
-    userName: string;
-    content: string;
-    createdAt: string;
-    updatedAt?: string;
-}
-
-export interface TaskAttachment {
-    id: string;
-    fileName: string;
-    fileUrl: string;
-    fileSize: number;
-    fileType: string;
-    uploadedBy: string;
-    uploadedAt: string;
-}
-
-export interface TaskActivity {
-    id: string;
-    type: 'created' | 'updated' | 'status_changed' | 'assigned' | 'comment' | 'attachment' | 'checklist';
-    userId: string;
-    userName: string;
-    description: string;
-    oldValue?: string;
-    newValue?: string;
-    timestamp: string;
-}
-
-export interface Task {
-    id: string;
-    title: string;
-    description: string;
-    status: TaskStatus;
-    priority: TaskPriority;
-    category: TaskCategory;
-
-    // Dates
-    createdAt: string;
-    createdBy: string;
-    createdByName: string;
-    updatedAt: string;
-    dueDate?: string;
-    completedAt?: string;
-
-    // Assignments
-    assignees: TaskAssignee[];
-    department?: string;
-
-    // Related entities - الكيانات المرتبطة
-    relatedNcrId?: string;
-    relatedReportId?: string;
-    relatedLabTestId?: string;          // ربط مع فحص معملي
-    relatedLabTestNumber?: string;      // رقم الفحص للعرض
-    relatedMaterialReceivingId?: string; // ربط مع استلام مادة
-    relatedMaterialName?: string;       // اسم المادة للعرض
-    relatedSupplierId?: string;         // ربط مع مورد
-    relatedSupplierName?: string;       // اسم المورد للعرض
-    relatedControlPointId?: string;     // ربط مع نقطة تحكم (Food Safety)
-
-    // Sub-items
-    checklist: TaskChecklist[];
-    comments: TaskComment[];
-    attachments: TaskAttachment[];
-    activities: TaskActivity[];
-
-    // Metadata
-    tags?: string[];
-    estimatedHours?: number;
-    actualHours?: number;
-}
-
-// ============ DTOs ============
-
-export interface CreateTaskInput {
-    title: string;
-    description: string;
-    priority: TaskPriority;
-    category: TaskCategory;
-    dueDate?: string;
-    assigneeIds?: string[];
-    department?: string;
-    relatedNcrId?: string;
-    relatedReportId?: string;
-    relatedLabTestId?: string;
-    relatedLabTestNumber?: string;
-    relatedMaterialReceivingId?: string;
-    relatedMaterialName?: string;
-    relatedSupplierId?: string;
-    relatedSupplierName?: string;
-    relatedControlPointId?: string;
-    checklist?: string[];
-    tags?: string[];
-    estimatedHours?: number;
-}
-
-export interface UpdateTaskInput {
-    title?: string;
-    description?: string;
-    priority?: TaskPriority;
-    category?: TaskCategory;
-    status?: TaskStatus;
-    dueDate?: string;
-    tags?: string[];
-    estimatedHours?: number;
-    actualHours?: number;
-}
-
-export interface TaskFilters {
-    status?: TaskStatus[];
-    priority?: TaskPriority[];
-    category?: TaskCategory[];
-    assigneeId?: string;
-    createdBy?: string;
-    department?: string;
-    dueDateFrom?: string;
-    dueDateTo?: string;
-    search?: string;
-}
-
-// ============ Helper Functions ============
-
-export const taskStatusLabels: Record<TaskStatus, string> = {
+export const taskStatusLabels: Record<string, string> = {
     pending: 'قيد الانتظار',
     in_progress: 'قيد التنفيذ',
-    review: 'قيد المراجعة',
+    on_hold: 'معلق مؤقتاً',
     completed: 'مكتمل',
-    cancelled: 'ملغي'
+    cancelled: 'ملغي',
+    overdue: 'متأخر',
 };
 
-export const taskStatusColors: Record<TaskStatus, { bg: string; text: string; border: string }> = {
+export const taskStatusColors: Record<string, { bg: string; text: string; border: string }> = {
     pending: { bg: 'bg-gray-100 dark:bg-gray-700', text: 'text-gray-700 dark:text-gray-300', border: 'border-gray-300' },
     in_progress: { bg: 'bg-blue-100 dark:bg-blue-900', text: 'text-blue-700 dark:text-blue-300', border: 'border-blue-300' },
-    review: { bg: 'bg-yellow-100 dark:bg-yellow-900', text: 'text-yellow-700 dark:text-yellow-300', border: 'border-yellow-300' },
+    on_hold: { bg: 'bg-yellow-100 dark:bg-yellow-900', text: 'text-yellow-700 dark:text-yellow-300', border: 'border-yellow-300' },
     completed: { bg: 'bg-green-100 dark:bg-green-900', text: 'text-green-700 dark:text-green-300', border: 'border-green-300' },
-    cancelled: { bg: 'bg-red-100 dark:bg-red-900', text: 'text-red-700 dark:text-red-300', border: 'border-red-300' }
+    cancelled: { bg: 'bg-red-100 dark:bg-red-900', text: 'text-red-700 dark:text-red-300', border: 'border-red-300' },
+    overdue: { bg: 'bg-red-100 dark:bg-red-900', text: 'text-red-700 dark:text-red-300', border: 'border-red-300' },
 };
 
-export const taskPriorityLabels: Record<TaskPriority, string> = {
+export const taskStageColors: Record<string, { bg: string; text: string; border: string }> = {
+    assignment: { bg: 'bg-blue-100 dark:bg-blue-900', text: 'text-blue-700 dark:text-blue-300', border: 'border-blue-300' },
+    in_progress: { bg: 'bg-purple-100 dark:bg-purple-900', text: 'text-purple-700 dark:text-purple-300', border: 'border-purple-300' },
+    review: { bg: 'bg-amber-100 dark:bg-amber-900', text: 'text-amber-700 dark:text-amber-300', border: 'border-amber-300' },
+    approval: { bg: 'bg-emerald-100 dark:bg-emerald-900', text: 'text-emerald-700 dark:text-emerald-300', border: 'border-emerald-300' },
+    closed: { bg: 'bg-gray-100 dark:bg-gray-700', text: 'text-gray-700 dark:text-gray-300', border: 'border-gray-300' },
+};
+
+export const taskStageLabels: Record<string, string> = {
+    assignment: 'التعيين',
+    in_progress: 'قيد التنفيذ',
+    review: 'المراجعة',
+    approval: 'الاعتماد',
+    closed: 'مغلقة',
+};
+
+export const taskPriorityLabels: Record<string, string> = {
     low: 'منخفضة',
     medium: 'متوسطة',
     high: 'مرتفعة',
     urgent: 'عاجلة'
 };
 
-export const taskPriorityColors: Record<TaskPriority, { bg: string; text: string }> = {
+export const taskPriorityColors: Record<string, { bg: string; text: string }> = {
     low: { bg: 'bg-slate-100 dark:bg-slate-800', text: 'text-slate-600 dark:text-slate-400' },
     medium: { bg: 'bg-blue-100 dark:bg-blue-900', text: 'text-blue-600 dark:text-blue-400' },
     high: { bg: 'bg-orange-100 dark:bg-orange-900', text: 'text-orange-600 dark:text-orange-400' },
     urgent: { bg: 'bg-red-100 dark:bg-red-900', text: 'text-red-600 dark:text-red-400' }
 };
 
-export const taskCategoryLabels: Record<TaskCategory, string> = {
+export const taskCategoryLabels: Record<string, string> = {
     general: 'عامة',
     ncr: 'عدم مطابقة',
     quality: 'جودة',
@@ -191,7 +97,7 @@ export const taskCategoryLabels: Record<TaskCategory, string> = {
     audit: 'تدقيق'
 };
 
-export const taskCategoryIcons: Record<TaskCategory, string> = {
+export const taskCategoryIcons: Record<string, string> = {
     general: 'clipboard-document-list',
     ncr: 'exclamation-triangle',
     quality: 'check-badge',
@@ -201,29 +107,58 @@ export const taskCategoryIcons: Record<TaskCategory, string> = {
     audit: 'document-magnifying-glass'
 };
 
-// Calculate task progress
+// ============ Helper Functions ============
+
+import type { Task, TaskStage } from '../../types/task';
+import { TASK_STAGE_ORDER } from '../../types/task';
+
+/** Calculate task checklist progress */
 export function getTaskProgress(task: Task): number {
-    if (task.checklist.length === 0) return 0;
+    if (!task.checklist || task.checklist.length === 0) return 0;
     const completed = task.checklist.filter(item => item.completed).length;
     return Math.round((completed / task.checklist.length) * 100);
 }
 
-// Check if task is overdue
+/** Check if task is overdue */
 export function isTaskOverdue(task: Task): boolean {
-    if (!task.dueDate || task.status === 'completed' || task.status === 'cancelled') return false;
-    return new Date(task.dueDate) < new Date();
+    if (!task.due_date || task.status === 'completed' || task.status === 'cancelled') return false;
+    return new Date(task.due_date) < new Date();
 }
 
-// Get days until due
+/** Get days until due */
 export function getDaysUntilDue(task: Task): number | null {
-    if (!task.dueDate) return null;
-    const due = new Date(task.dueDate);
+    if (!task.due_date) return null;
+    const due = new Date(task.due_date);
     const now = new Date();
     const diffTime = due.getTime() - now.getTime();
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 }
 
-// Format time ago
+/** Get next stage in workflow */
+export function getNextStage(currentStage: TaskStage): TaskStage | null {
+    const idx = TASK_STAGE_ORDER.indexOf(currentStage);
+    if (idx < 0 || idx >= TASK_STAGE_ORDER.length - 1) return null;
+    return TASK_STAGE_ORDER[idx + 1];
+}
+
+/** Get previous stage in workflow */
+export function getPreviousStage(currentStage: TaskStage): TaskStage | null {
+    const idx = TASK_STAGE_ORDER.indexOf(currentStage);
+    if (idx <= 0) return null;
+    return TASK_STAGE_ORDER[idx - 1];
+}
+
+/** Check if a stage is completed */
+export function isStageCompleted(stage: TaskStage, completedStages: string[]): boolean {
+    return completedStages.includes(stage);
+}
+
+/** Get stage index for progress calculation */
+export function getStageIndex(stage: TaskStage): number {
+    return TASK_STAGE_ORDER.indexOf(stage);
+}
+
+/** Format time ago */
 export function formatTimeAgo(dateString: string): string {
     const date = new Date(dateString);
     const now = new Date();
@@ -239,7 +174,7 @@ export function formatTimeAgo(dateString: string): string {
     return formatDateWithAppSettings(date);
 }
 
-// Generate unique ID
+/** Generate unique ID (for local use only, DB uses gen_random_uuid) */
 export function generateTaskId(): string {
     return `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }

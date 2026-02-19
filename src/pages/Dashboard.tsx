@@ -292,7 +292,13 @@ const NcrDashboard: React.FC = () => {
   const stats = useMemo(() => {
     const total = ncrs.length;
     const open = ncrs.filter((n: NcrRecord) => n.status === 'open').length;
-    const inProgress = ncrs.filter((n: NcrRecord) => n.status === 'analysis' || n.status === 'action').length;
+    const inProgress = ncrs.filter((n: NcrRecord) =>
+      n.status === 'in_progress' ||
+      n.status === 'analysis' ||
+      n.status === 'action' ||
+      n.status === 'verification' ||
+      n.status === 'pending_review'
+    ).length;
     const closed = ncrs.filter((n: NcrRecord) => n.status === 'closed').length;
     const highSeverity = ncrs.filter((n: NcrRecord) => n.severity === 'high').length;
 
@@ -661,12 +667,12 @@ const LabDashboard: React.FC = () => {
 // ============ Tasks Dashboard Tab ============
 
 const TasksDashboard: React.FC = () => {
-  const { tasks, getFilteredTasks, getOverdueTasks, getTasksByStatus } = useTaskStore();
+  const { tasks, getOverdueTasks } = useTaskStore();
 
   const stats = useMemo(() => {
-    const pending = getTasksByStatus('pending').length;
-    const inProgress = getTasksByStatus('in_progress').length;
-    const completed = getTasksByStatus('completed').length;
+    const pending = tasks.filter(t => t.status === 'pending').length;
+    const inProgress = tasks.filter(t => t.status === 'in_progress').length;
+    const completed = tasks.filter(t => t.status === 'completed').length;
     const overdue = getOverdueTasks().length;
 
     // Tasks by category
@@ -676,10 +682,10 @@ const TasksDashboard: React.FC = () => {
     });
 
     return { total: tasks.length, pending, inProgress, completed, overdue, byCategory };
-  }, [tasks, getTasksByStatus, getOverdueTasks]);
+  }, [tasks, getOverdueTasks]);
 
   const recentTasks = [...tasks]
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     .slice(0, 5);
 
   const overdueTasks = getOverdueTasks().slice(0, 5);
@@ -791,10 +797,10 @@ const TasksDashboard: React.FC = () => {
                   <div className="flex justify-between items-start">
                     <div>
                       <div className="font-medium text-gray-900 dark:text-white">{task.title}</div>
-                      <div className="text-sm text-gray-500">{task.dueDate && dayjs(task.dueDate).format('YYYY-MM-DD')}</div>
+                      <div className="text-sm text-gray-500">{task.due_date && dayjs(task.due_date).format('YYYY-MM-DD')}</div>
                     </div>
                     <span className="text-xs text-red-600">
-                      {task.dueDate && dayjs().diff(dayjs(task.dueDate), 'day')} يوم تأخير
+                      {task.due_date && dayjs().diff(dayjs(task.due_date), 'day')} يوم تأخير
                     </span>
                   </div>
                 </Link>

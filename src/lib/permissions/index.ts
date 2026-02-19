@@ -17,7 +17,7 @@ export { default as NcrPermissionActions, NcrActionButton, NcrStageInfo } from '
 export { default as modulePermissionsService, moduleService, departmentModuleService, ncrWorkflowService, roleModuleService, documentShareService } from '../../services/modulePermissionsService';
 
 // ==================== Types ====================
-export type { ModulePermission, NcrStagePermission, UseModulePermissionsReturn } from '../../hooks/useModulePermissions';
+export type { ModulePermission, NcrStagePermission, TaskStagePermission, UseModulePermissionsReturn } from '../../hooks/useModulePermissions';
 export type { DataIsolationConfig, UseDataIsolationReturn } from '../../hooks/useDataIsolation';
 export type { AppModule, DepartmentModuleAccess, NcrWorkflowStage, NcrStagePermission as NcrStagePermissionDB, RoleModulePermission, DocumentShare } from '../../services/modulePermissionsService';
 
@@ -27,6 +27,7 @@ export const MODULE_CODES = {
     TASKS: 'tasks',
     LAB: 'lab',
     NCR: 'ncr',
+    CHAT: 'chat',
 } as const;
 
 export const PERMISSION_ACTIONS = {
@@ -61,11 +62,37 @@ export const NCR_STAGES = {
     CANCELLED: 'cancelled',
 } as const;
 
+export const TASK_STAGES = {
+    ASSIGNMENT: 'assignment',
+    IN_PROGRESS: 'in_progress',
+    REVIEW: 'review',
+    APPROVAL: 'approval',
+    CLOSED: 'closed',
+} as const;
+
+export const TASK_STAGE_ACTIONS = {
+    VIEW: 'view',
+    CREATE: 'create',
+    ASSIGN: 'assign',
+    DELEGATE: 'delegate',
+    UPDATE: 'update',
+    COMPLETE: 'complete',
+    REQUEST_HELP: 'request_help',
+    VERIFY: 'verify',
+    APPROVE: 'approve',
+    REJECT: 'reject',
+    COMMENT: 'comment',
+    ATTACH: 'attach',
+    DELETE: 'delete',
+} as const;
+
 export const DATA_ISOLATION_MODES = {
     SHARED: 'shared',
     ISOLATED: 'isolated',
     HYBRID: 'hybrid',
 } as const;
+
+
 
 
 
