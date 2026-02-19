@@ -180,9 +180,7 @@ export function useModulePermissions(): UseModulePermissionsReturn {
                         };
                     })
                     // Only keep modules that have at least one granted action
-                    .filter((perm: ModulePermission) => perm.granted_actions.length > 0)
-                    // NCR permissions are sourced from ncr_stage_permissions only.
-                    .filter((perm: ModulePermission) => perm.module_code !== 'ncr');
+                    .filter((perm: ModulePermission) => perm.granted_actions.length > 0);
 
                 console.log('[Permissions] Final filtered permissions from RPC:', modulePerms);
                 baseModulePermissions = modulePerms;
@@ -238,7 +236,6 @@ export function useModulePermissions(): UseModulePermissionsReturn {
 
                 roleModulePermsData?.forEach(perm => {
                     if (!perm.module_code) return;
-                    if (perm.module_code === 'ncr') return;
 
                     const existing = modulePermissions.get(perm.module_code);
                     const grantedActions = perm.granted_actions || [];
@@ -405,13 +402,22 @@ export function useModulePermissions(): UseModulePermissionsReturn {
             )).sort();
 
             const mergedPermissions = [...baseModulePermissions];
+            const ncrPermission = mergedPermissions.find((perm) => perm.module_code === 'ncr');
+
             if (ncrModuleActions.length > 0) {
-                mergedPermissions.push({
-                    module_code: 'ncr',
-                    granted_actions: ncrModuleActions,
-                    data_isolation_mode: 'hybrid',
-                    can_see_all_departments: false,
-                });
+                if (ncrPermission) {
+                    ncrPermission.granted_actions = Array.from(new Set([
+                        ...ncrPermission.granted_actions,
+                        ...ncrModuleActions,
+                    ])).sort();
+                } else {
+                    mergedPermissions.push({
+                        module_code: 'ncr',
+                        granted_actions: ncrModuleActions,
+                        data_isolation_mode: 'hybrid',
+                        can_see_all_departments: false,
+                    });
+                }
             }
             if (!isCurrentRequest()) return;
             setPermissions(mergedPermissions);
