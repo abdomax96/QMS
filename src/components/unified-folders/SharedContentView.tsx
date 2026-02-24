@@ -4,10 +4,9 @@
  */
 
 import React, { useState } from 'react';
-import { ShareIcon, FunnelIcon, BuildingOfficeIcon, UserIcon, ShieldCheckIcon } from '@heroicons/react/24/outline';
+import { ShareIcon, BuildingOfficeIcon, UserIcon, ShieldCheckIcon } from '@heroicons/react/24/outline';
 import { cn } from '../../utils';
 import { useContentSharing } from '../../hooks/useContentSharing';
-import FolderCard from './FolderCard';
 
 type ShareFilter = 'all' | 'department' | 'user' | 'role';
 
@@ -43,8 +42,8 @@ export const SharedContentView: React.FC = () => {
 
     if (loading) {
         return (
-            <div className="space-y-6">
-                <div className="flex items-center justify-between">
+            <div className="space-y-5 sm:space-y-6">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="h-8 w-48 bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
                     <div className="h-10 w-32 bg-slate-200 dark:bg-slate-700 rounded animate-pulse" />
                 </div>
@@ -61,18 +60,18 @@ export const SharedContentView: React.FC = () => {
     }
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-5 sm:space-y-6">
             {/* Header */}
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-corporate bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-corporate bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center flex-shrink-0">
                         <ShareIcon className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                     </div>
-                    <div>
-                        <h2 className="text-xl font-semibold text-slate-900 dark:text-white">
+                    <div className="min-w-0">
+                        <h2 className="text-lg sm:text-xl font-semibold text-slate-900 dark:text-white truncate">
                             المحتوى المشترك معي
                         </h2>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">
+                        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
                             {sharedWithMe.length} عنصر مشترك
                         </p>
                     </div>
@@ -80,34 +79,36 @@ export const SharedContentView: React.FC = () => {
             </div>
 
             {/* Filters */}
-            <div className="flex items-center gap-2 overflow-x-auto pb-2">
-                {filters.map((filter) => (
-                    <button
-                        key={filter.value}
-                        onClick={() => setActiveFilter(filter.value)}
-                        className={cn(
-                            'flex items-center gap-2 px-4 py-2 rounded-corporate-lg border-2 transition-all whitespace-nowrap',
-                            activeFilter === filter.value
-                                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300'
-                                : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 text-slate-600 dark:text-slate-400'
-                        )}
-                    >
-                        <filter.icon className="w-4 h-4" />
-                        <span className="text-sm font-medium">{filter.label}</span>
-                        {filter.count !== undefined && (
-                            <span
-                                className={cn(
-                                    'px-2 py-0.5 rounded-full text-xs font-semibold',
-                                    activeFilter === filter.value
-                                        ? 'bg-primary-600 text-white'
-                                        : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-400'
-                                )}
-                            >
-                                {filter.count}
-                            </span>
-                        )}
-                    </button>
-                ))}
+            <div className="overflow-x-auto pb-2 -mx-1 px-1">
+                <div className="flex items-center gap-2 min-w-max">
+                    {filters.map((filter) => (
+                        <button
+                            key={filter.value}
+                            onClick={() => setActiveFilter(filter.value)}
+                            className={cn(
+                                'min-h-[40px] flex items-center gap-2 px-3 sm:px-4 py-2 rounded-corporate-lg border-2 transition-all whitespace-nowrap',
+                                activeFilter === filter.value
+                                    ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300'
+                                    : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 text-slate-600 dark:text-slate-400'
+                            )}
+                        >
+                            <filter.icon className="w-4 h-4" />
+                            <span className="text-xs sm:text-sm font-medium">{filter.label}</span>
+                            {filter.count !== undefined && (
+                                <span
+                                    className={cn(
+                                        'px-2 py-0.5 rounded-full text-xs font-semibold',
+                                        activeFilter === filter.value
+                                            ? 'bg-primary-600 text-white'
+                                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-400'
+                                    )}
+                                >
+                                    {filter.count}
+                                </span>
+                            )}
+                        </button>
+                    ))}
+                </div>
             </div>
 
             {/* Content Grid */}
@@ -171,10 +172,10 @@ const SharedItemCard: React.FC<{ share: any }> = ({ share }) => {
     return (
         <div className="group relative bg-white dark:bg-slate-800 rounded-corporate-lg border-2 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500 hover:shadow-soft-lg transition-all duration-200 cursor-pointer overflow-hidden">
             {/* Header */}
-            <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-gradient-to-br from-blue-50/50 to-white dark:from-blue-950/20 dark:to-slate-800">
+            <div className="p-3 sm:p-4 border-b border-slate-100 dark:border-slate-700 bg-gradient-to-br from-blue-50/50 to-white dark:from-blue-950/20 dark:to-slate-800">
                 <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3 flex-1 min-w-0">
-                        <div className="flex-shrink-0 w-12 h-12 rounded-corporate bg-blue-500 text-white flex items-center justify-center text-2xl shadow-sm">
+                        <div className="flex-shrink-0 w-10 h-10 sm:w-12 sm:h-12 rounded-corporate bg-blue-500 text-white flex items-center justify-center text-xl sm:text-2xl shadow-sm">
                             {share.content_type === 'folder' && '📁'}
                             {share.content_type === 'form_template' && '📋'}
                             {share.content_type === 'form_instance' && '📊'}
@@ -193,8 +194,8 @@ const SharedItemCard: React.FC<{ share: any }> = ({ share }) => {
             </div>
 
             {/* Info */}
-            <div className="p-4 space-y-2">
-                <div className="flex items-center justify-between text-xs">
+            <div className="p-3 sm:p-4 space-y-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-xs">
                     <span className="text-slate-500 dark:text-slate-400">{getShareTypeLabel()}</span>
                     <span className="px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 font-medium">
                         {getPermissionLabel()}

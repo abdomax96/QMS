@@ -7,5 +7,6 @@ export { default as Select } from './Select';
 
 export { default as Toast, ToastContainer, useToast } from './Toast';
 export { default as ErrorBoundary } from './ErrorBoundary';
+export { default as RouteErrorElement } from './RouteErrorElement';
 export { default as RichTextEditor } from './RichTextEditor';
 export * from './LoadingStates';

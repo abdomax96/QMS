@@ -67,6 +67,32 @@ const permissionLevels: { value: PermissionLevel; label: string; color: string }
     { value: 'full', label: 'صلاحيات كاملة', color: 'red' },
 ];
 
+const SHARE_LEVEL_STYLES: Record<ShareType, { selected: string; icon: string }> = {
+    department: {
+        selected: 'border-blue-500 bg-blue-50 dark:bg-blue-900/20',
+        icon: 'text-blue-600 dark:text-blue-400',
+    },
+    user: {
+        selected: 'border-green-500 bg-green-50 dark:bg-green-900/20',
+        icon: 'text-green-600 dark:text-green-400',
+    },
+    role: {
+        selected: 'border-purple-500 bg-purple-50 dark:bg-purple-900/20',
+        icon: 'text-purple-600 dark:text-purple-400',
+    },
+    public: {
+        selected: 'border-slate-500 bg-slate-100 dark:bg-slate-900/30',
+        icon: 'text-slate-600 dark:text-slate-300',
+    },
+};
+
+const PERMISSION_LEVEL_STYLES: Record<PermissionLevel, string> = {
+    view: 'bg-slate-100 dark:bg-slate-900/40 text-slate-700 dark:text-slate-300 border-2 border-slate-500',
+    comment: 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 border-2 border-blue-500',
+    edit: 'bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 border-2 border-amber-500',
+    full: 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300 border-2 border-red-500',
+};
+
 export const ShareDialog: React.FC<ShareDialogProps> = ({
     isOpen,
     onClose,
@@ -128,57 +154,58 @@ export const ShareDialog: React.FC<ShareDialogProps> = ({
             />
 
             {/* Dialog */}
-            <div className="flex min-h-full items-center justify-center p-4">
-                <div className="relative w-full max-w-2xl bg-white dark:bg-slate-800 rounded-corporate-lg shadow-soft-xl">
+            <div className="flex min-h-full items-end sm:items-center justify-center p-0 sm:p-4">
+                <div className="relative w-full sm:max-w-2xl h-[100dvh] sm:h-auto max-h-[100dvh] sm:max-h-[90vh] bg-white dark:bg-slate-800 rounded-none sm:rounded-corporate-lg shadow-soft-xl flex flex-col">
                     {/* Header */}
-                    <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-700">
+                    <div className="flex items-center justify-between p-4 sm:p-6 border-b border-slate-200 dark:border-slate-700 sticky top-0 bg-white dark:bg-slate-800 z-10">
                         <div className="flex items-center gap-3">
                             <div className="w-10 h-10 rounded-corporate bg-primary-100 dark:bg-primary-900/50 flex items-center justify-center text-xl">
                                 <ShareIcon className="w-5 h-5 text-primary-600 dark:text-primary-400" />
                             </div>
-                            <div>
-                                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+                            <div className="min-w-0">
+                                <h2 className="text-base sm:text-lg font-semibold text-slate-900 dark:text-white">
                                     مشاركة المحتوى
                                 </h2>
-                                <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5 flex items-center gap-2">
+                                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5 flex items-center gap-2 truncate">
                                     <span>{getContentIcon()}</span>
-                                    <span>{contentName}</span>
+                                    <span className="truncate">{contentName}</span>
                                 </p>
                             </div>
                         </div>
                         <button
                             onClick={onClose}
-                            className="p-2 rounded-corporate hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                            className="min-h-[40px] min-w-[40px] p-2 rounded-corporate hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                         >
                             <XMarkIcon className="w-5 h-5 text-slate-500" />
                         </button>
                     </div>
 
                     {/* Body */}
-                    <div className="p-6 space-y-6">
+                    <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 sm:space-y-6">
                         {/* Share Level Selection */}
                         <div>
                             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
                                 مستوى المشاركة
                             </label>
-                            <div className="grid grid-cols-3 gap-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                                 {shareLevels.map((level) => (
                                     <button
                                         key={level.type}
                                         onClick={() => setShareType(level.type)}
                                         className={cn(
-                                            'p-4 rounded-corporate-lg border-2 transition-all duration-200',
+                                            'p-3 sm:p-4 rounded-corporate-lg border-2 transition-all duration-200 text-right sm:text-center',
                                             shareType === level.type
-                                                ? `border-${level.color}-500 bg-${level.color}-50 dark:bg-${level.color}-900/20`
+                                                ? SHARE_LEVEL_STYLES[level.type].selected
                                                 : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
                                         )}
                                     >
                                         <level.icon
                                             className={cn(
-                                                'w-6 h-6 mx-auto mb-2',
+                                                'w-5 h-5 sm:w-6 sm:h-6 mb-2',
                                                 shareType === level.type
-                                                    ? `text-${level.color}-600 dark:text-${level.color}-400`
-                                                    : 'text-slate-400'
+                                                    ? SHARE_LEVEL_STYLES[level.type].icon
+                                                    : 'text-slate-400',
+                                                'mx-0 sm:mx-auto'
                                             )}
                                         />
                                         <div className="text-xs font-medium text-slate-900 dark:text-white mb-1">
@@ -209,15 +236,15 @@ export const ShareDialog: React.FC<ShareDialogProps> = ({
                             <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                                 مستوى الصلاحيات
                             </label>
-                            <div className="grid grid-cols-4 gap-2">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                                 {permissionLevels.map((level) => (
                                     <button
                                         key={level.value}
                                         onClick={() => setPermissionLevel(level.value)}
                                         className={cn(
-                                            'p-2 rounded-corporate text-sm font-medium transition-all',
+                                            'min-h-[40px] p-2 rounded-corporate text-xs sm:text-sm font-medium transition-all',
                                             permissionLevel === level.value
-                                                ? `bg-${level.color}-100 dark:bg-${level.color}-900/50 text-${level.color}-700 dark:text-${level.color}-300 border-2 border-${level.color}-500`
+                                                ? PERMISSION_LEVEL_STYLES[level.value]
                                                 : 'bg-slate-50 dark:bg-slate-700 text-slate-600 dark:text-slate-400 border-2 border-transparent hover:border-slate-300'
                                         )}
                                     >
@@ -256,18 +283,18 @@ export const ShareDialog: React.FC<ShareDialogProps> = ({
                     </div>
 
                     {/* Footer */}
-                    <div className="flex items-center justify-end gap-3 p-6 border-t border-slate-200 dark:border-slate-700">
+                    <div className="flex items-center justify-end gap-3 p-4 sm:p-6 border-t border-slate-200 dark:border-slate-700 sticky bottom-0 bg-white dark:bg-slate-800">
                         <button
                             onClick={onClose}
                             disabled={loading}
-                            className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-corporate transition-colors disabled:opacity-50"
+                            className="min-h-[40px] px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-corporate transition-colors disabled:opacity-50"
                         >
                             إلغاء
                         </button>
                         <button
                             onClick={handleShare}
                             disabled={loading}
-                            className="px-6 py-2 text-sm font-medium text-white bg-gradient-primary hover:shadow-glow-primary rounded-corporate transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="min-h-[40px] px-6 py-2 text-sm font-medium text-white bg-gradient-primary hover:shadow-glow-primary rounded-corporate transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {loading ? 'جاري المشاركة...' : 'مشاركة'}
                         </button>

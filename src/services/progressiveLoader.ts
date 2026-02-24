@@ -20,6 +20,26 @@ export interface ProgressiveLoadProgress {
 export type ProgressCallback = (progress: ProgressiveLoadProgress) => void;
 
 class ProgressiveLoaderService {
+    private mapTemplateRow(row: any): any {
+        return {
+            ...row,
+            folder_id: row.unified_folder_id || row.folder_id || null,
+            archived: row.archived || false
+        };
+    }
+
+    private mapInstanceRow(row: any): any {
+        return {
+            ...row,
+            id: row.id,
+            instance_id: row.id,
+            folder_id: row.unified_folder_id || row.folder_id || null,
+            template_version: row.template_version || '1.0',
+            form_data: row.form_data || { report_date: '', sections: {} },
+            archived: row.archived || false
+        };
+    }
+
     /**
      * المرحلة 1: تحميل البيانات الأساسية (Essential)
      * - بروفايل المستخدم
@@ -48,39 +68,59 @@ class ProgressiveLoaderService {
             onProgress?.({
                 stage: 'essential',
                 progress: 40,
-                message: 'جاري تحميل الصلاحيات...'
+                message: 'جاري تحميل الملف الشخصي والصلاحيات...'
             });
 
-            // جلب بروفايل المستخدم
-            const { data: userProfile } = await supabase
+            const userProfilePromise = supabase
                 .from('users')
                 .select('id, email, name, department_id') // ROOT FIX: Use department_id, remove is_deleted
                 .eq('id', user.id)
                 .single();
 
-            // جلب أدوار المستخدم
-            const { data: userRoles } = await supabase
+            const userRolesPromise = supabase
                 .from('user_roles')
                 .select('role_id') // ROOT FIX: Correct column name
                 .eq('user_id', user.id);
 
+            const permissionsPromise = supabase
+                .rpc('get_user_module_permissions', { user_uuid: user.id }) // ROOT FIX: Correct parameter
+                .then(({ data, error }) => {
+                    if (error) {
+                        logger.warn('[ProgressiveLoader] RPC access failed, using fallback:', error);
+                        return [];
+                    }
+                    return data || [];
+                })
+                .catch((rpcError) => {
+                    logger.warn('[ProgressiveLoader] RPC access failed, using fallback:', rpcError);
+                    return [];
+                });
+
             onProgress?.({
                 stage: 'essential',
                 progress: 70,
-                message: 'جاري تحميل صلاحيات الوحدات...'
+                message: 'جاري مزامنة صلاحيات الوحدات...'
             });
 
-            // جلب صلاحيات الوحدات
-            const roleCodes = userRoles?.map(r => r.role_id) || [];
-            // Handle RPC 404 gracefully
-            let permissions: any[] = [];
-            try {
-                const { data } = await supabase
-                    .rpc('get_user_module_permissions', { user_uuid: user.id }); // ROOT FIX: Correct parameter
-                permissions = data || [];
-            } catch (rpcError) {
-                logger.warn('[ProgressiveLoader] RPC access failed, using fallback:', rpcError);
+            const [
+                { data: userProfile, error: userProfileError },
+                { data: userRoles, error: userRolesError },
+                permissions,
+            ] = await Promise.all([
+                userProfilePromise,
+                userRolesPromise,
+                permissionsPromise,
+            ]);
+
+            if (userProfileError) {
+                logger.warn('[ProgressiveLoader] Failed to load user profile essentials:', userProfileError);
             }
+
+            if (userRolesError) {
+                logger.warn('[ProgressiveLoader] Failed to load user roles essentials:', userRolesError);
+            }
+
+            const roleCodes = userRoles?.map(r => r.role_id) || [];
 
             onProgress?.({
                 stage: 'essential',
@@ -221,7 +261,7 @@ class ProgressiveLoaderService {
     /**
      * تحميل نماذج مجلد معين عند الحاجة
      */
-    async loadFolderTemplates(folderId: string, page: number = 1, limit: number = 20): Promise<{
+    async loadFolderTemplates(folderId: string | null, page: number = 1, limit: number = 20): Promise<{
         data: any[];
         hasMore: boolean;
         total: number;
@@ -230,29 +270,92 @@ class ProgressiveLoaderService {
             const from = (page - 1) * limit;
             const to = from + limit - 1;
 
-            // جلب العدد الكلي - استخدام unified_folder_id
-            const { count } = await supabase
+            let countQuery = supabase
                 .from('form_templates')
                 .select('*', { count: 'exact', head: true })
-                .eq('unified_folder_id', folderId)
-                .eq('archived', false); // ROOT FIX: Use archived
+                .eq('archived', false);
 
-            // جلب الصفحة المطلوبة - استخدام unified_folder_id
-            const { data } = await supabase
+            if (folderId) {
+                countQuery = countQuery.or(`unified_folder_id.eq.${folderId},folder_id.eq.${folderId}`);
+            } else {
+                countQuery = countQuery.or('unified_folder_id.is.null,folder_id.is.null');
+            }
+
+            const { count } = await countQuery;
+
+            let pageQuery = supabase
                 .from('form_templates')
                 .select('*')
-                .eq('unified_folder_id', folderId)
                 .eq('archived', false) // ROOT FIX: Use archived
                 .order('updated_at', { ascending: false })
                 .range(from, to);
 
+            if (folderId) {
+                pageQuery = pageQuery.or(`unified_folder_id.eq.${folderId},folder_id.eq.${folderId}`);
+            } else {
+                pageQuery = pageQuery.or('unified_folder_id.is.null,folder_id.is.null');
+            }
+
+            const { data } = await pageQuery;
+
             return {
-                data: data || [],
+                data: (data || []).map((row) => this.mapTemplateRow(row)),
                 hasMore: (count || 0) > (page * limit),
                 total: count || 0
             };
         } catch (error) {
-            logger.error(`[ProgressiveLoader] Error loading templates for folder ${folderId}:`, error);
+            logger.error(`[ProgressiveLoader] Error loading templates for folder ${folderId || '__root__'}:`, error);
+            return { data: [], hasMore: false, total: 0 };
+        }
+    }
+
+    /**
+     * تحميل تقارير مجلد معين عند الحاجة
+     */
+    async loadFolderInstances(folderId: string | null, page: number = 1, limit: number = 20): Promise<{
+        data: any[];
+        hasMore: boolean;
+        total: number;
+    }> {
+        try {
+            const from = (page - 1) * limit;
+            const to = from + limit - 1;
+
+            let countQuery = supabase
+                .from('form_instances')
+                .select('*', { count: 'exact', head: true })
+                .eq('archived', false);
+
+            if (folderId) {
+                countQuery = countQuery.or(`unified_folder_id.eq.${folderId},folder_id.eq.${folderId}`);
+            } else {
+                countQuery = countQuery.or('unified_folder_id.is.null,folder_id.is.null');
+            }
+
+            const { count } = await countQuery;
+
+            let pageQuery = supabase
+                .from('form_instances')
+                .select('*')
+                .eq('archived', false)
+                .order('updated_at', { ascending: false })
+                .range(from, to);
+
+            if (folderId) {
+                pageQuery = pageQuery.or(`unified_folder_id.eq.${folderId},folder_id.eq.${folderId}`);
+            } else {
+                pageQuery = pageQuery.or('unified_folder_id.is.null,folder_id.is.null');
+            }
+
+            const { data } = await pageQuery;
+
+            return {
+                data: (data || []).map((row) => this.mapInstanceRow(row)),
+                hasMore: (count || 0) > (page * limit),
+                total: count || 0
+            };
+        } catch (error) {
+            logger.error(`[ProgressiveLoader] Error loading instances for folder ${folderId || '__root__'}:`, error);
             return { data: [], hasMore: false, total: 0 };
         }
     }
@@ -286,7 +389,7 @@ class ProgressiveLoaderService {
                 .range(from, to);
 
             return {
-                data: data || [],
+                data: (data || []).map((row) => this.mapInstanceRow(row)),
                 hasMore: (count || 0) > (page * limit),
                 total: count || 0
             };

@@ -35,6 +35,7 @@ interface QuickAccessSidebarProps {
     onArchiveClick?: () => void;
     isCollapsed?: boolean;
     onToggleCollapse?: () => void;
+    solidBackground?: boolean;
 }
 
 const STORAGE_KEY_RECENT = 'qms-recent-items';
@@ -74,6 +75,7 @@ const QuickAccessSidebar: React.FC<QuickAccessSidebarProps> = ({
     onArchiveClick,
     isCollapsed = false,
     onToggleCollapse,
+    solidBackground = false,
 }) => {
     const [expandedSections, setExpandedSections] = useState({
         pinned: true,
@@ -130,7 +132,12 @@ const QuickAccessSidebar: React.FC<QuickAccessSidebarProps> = ({
 
     return (
         <div
-            className="w-64 bg-transparent border-l border-black/5 dark:border-white/5 flex flex-col h-full"
+            className={cn(
+                "w-64 border-l border-black/5 dark:border-white/5 flex flex-col h-full",
+                solidBackground
+                    ? "bg-white/95 dark:bg-gray-900/95 backdrop-blur-md shadow-xl"
+                    : "bg-transparent"
+            )}
             onContextMenu={(e) => e.preventDefault()}
         >
             {/* Header */}
@@ -198,7 +205,7 @@ const QuickAccessSidebar: React.FC<QuickAccessSidebarProps> = ({
                                 <button
                                     onClick={() => {
                                         // Navigate to home/root folders
-                                        window.location.href = '/folders';
+                                        window.location.href = '/forms&reports';
                                     }}
                                     className="flex-1 flex items-center gap-3 text-sm text-right"
                                 >

@@ -178,6 +178,32 @@ select {
   animation: flash 0.6s ease-in-out;
 }
 
+/* Keep report preview content RTL while moving the app scroll axis to standard direction */
+body.report-preview-active main {
+  direction: ltr !important;
+}
+
+body.report-preview-active .report-print-root {
+  direction: rtl !important;
+}
+
+body.report-preview-clean-a4 {
+  background: #f1f5f9 !important;
+}
+
+body.report-preview-clean-a4 .a4-clean-shell {
+  padding: 12px 0;
+}
+
+body.report-preview-clean-a4 .a4-clean-root {
+  overflow: visible;
+  direction: rtl;
+}
+
+body.report-preview-clean-a4 .a4-clean-table {
+  direction: rtl;
+}
+
 /* Print styles */
 @media print {
 
@@ -217,13 +243,14 @@ select {
     padding: 0 !important;
   }
 
-  /* Add border-spacing to create visual gap at top of continued tables */
-  table {
+  /* Add border-spacing to create visual gap at top of continued tables
+     (disabled for clean A4 report mode to keep preview/print parity). */
+  body:not(.report-preview-clean-a4) table {
     border-spacing: 0 !important;
   }
 
   /* Add top border to thead for visual separation on new pages */
-  thead tr:first-child th {
+  body:not(.report-preview-clean-a4) thead tr:first-child th {
     border-top: 20px solid transparent !important;
     background-clip: padding-box;
   }
@@ -251,15 +278,15 @@ select {
   }
 
   /* Table styles for print */
-  table {
+  body:not(.report-preview-clean-a4) table {
     border-collapse: collapse !important;
     width: 100% !important;
     table-layout: fixed !important;
     max-width: 100% !important;
   }
 
-  th,
-  td {
+  body:not(.report-preview-clean-a4) th,
+  body:not(.report-preview-clean-a4) td {
     border: 1px solid #374151 !important;
     padding: 2px 3px !important;
     font-size: 11px !important;
@@ -274,24 +301,24 @@ select {
   }
 
   /* Parameter name column - allow more width but still wrap */
-  td:first-child,
-  th:first-child {
+  body:not(.report-preview-clean-a4) td:first-child,
+  body:not(.report-preview-clean-a4) th:first-child {
     word-break: break-word !important;
     text-align: right !important;
   }
 
   /* Repeat table header on each page */
-  thead {
+  body:not(.report-preview-clean-a4) thead {
     display: table-header-group !important;
   }
 
   /* Keep tbody together but allow page breaks between rows */
-  tbody {
+  body:not(.report-preview-clean-a4) tbody {
     display: table-row-group;
   }
 
   /* Allow rows to break across pages if needed */
-  tr {
+  body:not(.report-preview-clean-a4) tr {
     page-break-inside: auto;
   }
 
@@ -335,19 +362,19 @@ select {
   }
 
   /* Force colgroup to be visible in print */
-  colgroup {
+  body:not(.report-preview-clean-a4) colgroup {
     display: table-column-group !important;
   }
 
   /* Make columns distribute properly */
-  col {
+  body:not(.report-preview-clean-a4) col {
     width: auto !important;
   }
 
   /* Specific column width overrides for print */
-  col[style*="width: 300px"],
-  col[style*="width: 150px"],
-  col[style*="width: 100px"] {
+  body:not(.report-preview-clean-a4) col[style*="width: 300px"],
+  body:not(.report-preview-clean-a4) col[style*="width: 150px"],
+  body:not(.report-preview-clean-a4) col[style*="width: 100px"] {
     width: auto !important;
   }
 
@@ -385,11 +412,6 @@ select {
 
   .bg-blue-50 {
     background-color: #eff6ff !important;
-  }
-
-  /* Text sizes for print */
-  .print\\:text-\\[10px\\] {
-    font-size: 10px !important;
   }
 
   /* Remove shadows and rounded corners for cleaner print */
@@ -430,6 +452,132 @@ select {
   img {
     max-width: 100% !important;
     page-break-inside: avoid;
+  }
+
+  /* Report-specific print hardening */
+  .report-print-root,
+  .report-print-root .report-scroll-container,
+  .report-print-root .report-paper,
+  .report-print-root .report-paper-body {
+    overflow: visible !important;
+    max-height: none !important;
+    height: auto !important;
+  }
+
+  .report-print-root table {
+    table-layout: auto !important;
+  }
+
+  .report-print-root .print-table-container table,
+  .report-print-root .recipe-table-container table {
+    table-layout: fixed !important;
+  }
+
+  .report-print-root th,
+  .report-print-root td {
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  .report-print-root .report-quality-block,
+  .report-print-root .report-signatures-block {
+    break-inside: auto !important;
+    page-break-inside: auto !important;
+  }
+
+  .report-print-root .report-signatures-block {
+    break-before: page !important;
+    page-break-before: always !important;
+  }
+
+  .report-print-root,
+  .report-print-root * {
+    scrollbar-width: none !important;
+  }
+
+  .report-print-root *::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+  }
+
+  /* Clean A4 report mode */
+  body.report-preview-clean-a4,
+  body.report-preview-clean-a4 #root,
+  body.report-preview-clean-a4 #root>div {
+    background: white !important;
+    width: 100% !important;
+    overflow: visible !important;
+  }
+
+  body.report-preview-clean-a4 .a4-clean-shell {
+    width: 190mm !important;
+    max-width: 190mm !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+  }
+
+  body.report-preview-clean-a4 .a4-clean-root {
+    border: 1px solid #cbd5e1 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+
+  body.report-preview-clean-a4 .a4-clean-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    table-layout: fixed !important;
+    break-inside: auto !important;
+    page-break-inside: auto !important;
+  }
+
+  body.report-preview-clean-a4 .a4-clean-table thead {
+    display: table-header-group !important;
+  }
+
+  body.report-preview-clean-a4 .a4-clean-table tfoot {
+    display: table-footer-group !important;
+  }
+
+  body.report-preview-clean-a4 .a4-clean-table tr {
+    break-inside: avoid-page !important;
+    page-break-inside: avoid !important;
+  }
+
+  /* Keep table cell sizing from on-screen preview (no forced font/padding overrides). */
+  body.report-preview-clean-a4 .a4-clean-table th,
+  body.report-preview-clean-a4 .a4-clean-table td {
+    text-overflow: clip !important;
+    overflow: visible !important;
+  }
+
+  body.report-preview-clean-a4 .a4-avoid-break {
+    break-inside: avoid-page !important;
+    page-break-inside: avoid !important;
+  }
+
+  body.report-preview-clean-a4 .a4-table-block {
+    break-inside: auto !important;
+    page-break-inside: auto !important;
+  }
+
+  body.report-preview-clean-a4 .a4-force-new-page {
+    break-before: page !important;
+    page-break-before: always !important;
+  }
+
+  body.report-preview-clean-a4,
+  body.report-preview-clean-a4 * {
+    scrollbar-width: none !important;
+  }
+
+  body.report-preview-clean-a4 *::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
   }
 }
 

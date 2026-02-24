@@ -10,6 +10,8 @@
     direction: rtl !important;
     text-align: right !important;
     color: #1f2937;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .dark .document-preview-container {
@@ -63,6 +65,7 @@
     border-collapse: collapse;
     width: 100%;
     margin: 1em 0;
+    table-layout: fixed;
 }
 
 .document-preview-container td,
@@ -70,6 +73,8 @@
     border: 1px solid #374151;
     padding: 8px 12px;
     text-align: right;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .document-preview-container th {
@@ -198,6 +203,93 @@
 .document-preview-container .text-justify,
 .document-preview-container [style*="text-align: justify"] {
     text-align: justify !important;
+}
+
+.document-preview-shell .document-preview-meta-row span {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+/* ================== RESPONSIVE PREVIEW ================== */
+@media (max-width: 1024px) {
+    .document-preview-container {
+        min-height: auto !important;
+        padding: 12px !important;
+        border-radius: 12px;
+    }
+
+    .document-preview-container .document-preview-meta-row {
+        padding: 8px 12px !important;
+        margin-bottom: 12px !important;
+        font-size: 12px !important;
+    }
+
+    .document-preview-container .document-preview-meta-row:last-child {
+        margin-top: 12px !important;
+    }
+
+    .document-preview-container .document-preview-body {
+        padding: 0 12px !important;
+    }
+
+    .document-preview-container h1 {
+        font-size: 16pt;
+    }
+
+    .document-preview-container h2 {
+        font-size: 14pt;
+    }
+
+    .document-preview-container h3 {
+        font-size: 12pt;
+    }
+
+    .document-preview-container table {
+        display: block;
+        overflow-x: auto;
+        white-space: normal;
+    }
+}
+
+@media (max-width: 640px) {
+    .document-preview-shell {
+        max-width: none !important;
+        min-height: auto !important;
+        padding: 8px !important;
+        border-radius: 12px;
+    }
+
+    .document-preview-shell .document-preview-meta-row {
+        display: grid !important;
+        grid-template-columns: 1fr;
+        justify-items: start !important;
+        gap: 6px !important;
+        padding: 8px 10px !important;
+        margin-bottom: 10px !important;
+        font-size: 11px !important;
+    }
+
+    .document-preview-shell .document-preview-footer-row {
+        margin-top: 10px !important;
+    }
+
+    .document-preview-shell .document-preview-title {
+        font-size: 13px !important;
+        line-height: 1.5;
+    }
+
+    .document-preview-shell .document-preview-body {
+        padding: 0 10px !important;
+        font-size: 13px !important;
+        line-height: 1.7 !important;
+    }
+
+    .document-preview-container td,
+    .document-preview-container th {
+        padding: 6px 8px;
+        font-size: 12px;
+    }
 }
 
 /* ================== PRINT STYLES ================== */

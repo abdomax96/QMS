@@ -10,6 +10,8 @@ export const supabaseAnonKey = SUPABASE_ANON_KEY;
 // Debug logging (only in development)
 if (import.meta.env.DEV) {
     console.log('=== Supabase Configuration ===');
+    console.log('ENV MODE:', import.meta.env.MODE);
+    console.log('SUPABASE URL:', SUPABASE_URL || 'NOT SET');
     console.log('VITE_SUPABASE_URL:', SUPABASE_URL ? '✓ Set' : '✗ NOT SET');
     console.log('VITE_SUPABASE_ANON_KEY:', SUPABASE_ANON_KEY ? '✓ Set' : '✗ NOT SET');
 }

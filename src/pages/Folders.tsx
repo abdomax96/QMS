@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import {
     DocumentPlusIcon,
@@ -32,11 +32,14 @@ import {
     XCircleIcon,
     PlayIcon,
     EyeIcon,
+    Bars3Icon,
+    XMarkIcon,
     NoSymbolIcon,
+    ArrowUpTrayIcon,
 } from '@heroicons/react/24/outline';
 import { TableSkeleton } from '../components/common/LoadingStates';
 import useStore from '../store';
-import { cn, formatDate } from '../utils';
+import { cn, formatDate, generateId } from '../utils';
 import FolderDialog from '../components/folders/FolderDialog';
 import SortDropdown from '../components/folders/SortDropdown';
 import type { SortField, SortDirection } from '../components/folders/SortDropdown';
@@ -73,8 +76,10 @@ import { useOpenInTab } from '../hooks/useOpenInTab';
 import { useNavigationHistory } from '../hooks/useNavigationHistory';
 import { useFormsDataIsolation } from '../hooks/useDataIsolation';
 import useLocalStorage from '../hooks/useLocalStorage';
+import { exportTemplateBackupFile, parseTemplateBackupFile } from '../services/templateBackupService';
 
 type ViewMode = 'grid' | 'list' | 'details';
+type MobileContentFilter = 'all' | 'forms' | 'reports';
 
 const FoldersPage: React.FC = () => {
     const navigate = useNavigate();
@@ -115,6 +120,22 @@ const FoldersPage: React.FC = () => {
 
     const { displayLanguage } = useLanguageStore();
 
+    const explorerBasePath = useMemo(
+        () => (location.pathname.startsWith('/forms&reports') ? '/forms&reports' : '/folders'),
+        [location.pathname]
+    );
+
+    const navigateToFolder = useCallback(
+        (folderId: string | null, options?: { replace?: boolean }) => {
+            if (!folderId) {
+                navigate(explorerBasePath, { replace: options?.replace ?? false });
+                return;
+            }
+            navigate(`${explorerBasePath}/${folderId}`, { replace: options?.replace ?? false });
+        },
+        [navigate, explorerBasePath]
+    );
+
     const [templateToDelete, setTemplateToDelete] = useState<string | null>(null);
     const [folderToDelete, setFolderToDelete] = useState<string | null>(null);
 
@@ -125,9 +146,13 @@ const FoldersPage: React.FC = () => {
         type: 'folder' | 'template' | 'instance' | 'empty' | 'templates-area' | 'reports-area';
         item?: any;
     } | null>(null);
+    const templateImportInputRef = useRef<HTMLInputElement | null>(null);
+    const [isTemplateImporting, setIsTemplateImporting] = useState(false);
 
     // Persist view mode to localStorage so it survives page refresh
     const [viewMode, setViewMode] = useLocalStorage<ViewMode>('folders-view-mode', 'grid');
+    const [isMobile, setIsMobile] = useState(false);
+    const [mobileContentFilter, setMobileContentFilter] = useState<MobileContentFilter>('all');
     const [showFolderDialog, setShowFolderDialog] = useState(false);
     const [editingFolder, setEditingFolder] = useState<Folder | null>(null);
     const [parentIdForNewFolder, setParentIdForNewFolder] = useState<string | null>(null);
@@ -197,7 +222,7 @@ const FoldersPage: React.FC = () => {
         recycleBinService.getRecycleBinItems().then(setRecycleBinItems);
     }, []);
 
-    const { openTemplateForEntry, openInstanceForEdit } = useOpenInTab();
+    const { openTemplateForEntry, openInstanceForEdit, openDraftForEdit } = useOpenInTab();
 
     // Navigation History for Back/Forward navigation
     const {
@@ -216,6 +241,42 @@ const FoldersPage: React.FC = () => {
         setRecentItems(loadRecentItems());
     }, []);
 
+    // Responsive mode for mobile-first UX on forms & reports explorer
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const mediaQuery = window.matchMedia('(max-width: 1023px)');
+        const updateViewport = () => setIsMobile(mediaQuery.matches);
+
+        updateViewport();
+        if (mediaQuery.addEventListener) {
+            mediaQuery.addEventListener('change', updateViewport);
+        } else {
+            mediaQuery.addListener(updateViewport);
+        }
+
+        return () => {
+            if (mediaQuery.removeEventListener) {
+                mediaQuery.removeEventListener('change', updateViewport);
+            } else {
+                mediaQuery.removeListener(updateViewport);
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!isMobile) {
+            setShowQuickAccess(false);
+            setMobileContentFilter('all');
+            return;
+        }
+
+        // List mode is dense on small screens; details mode is easier for data-entry users.
+        if (viewMode === 'list') {
+            setViewMode('details');
+        }
+    }, [isMobile, viewMode, setViewMode]);
+
     // Combined Forms & Reports Page - unified view
     // Legacy flags kept for component compatibility but set to show all content
     const isFormsPage = true;  // Always true - we show forms
@@ -227,9 +288,13 @@ const FoldersPage: React.FC = () => {
         console.log('✅ [Folders] Using folders from store:', Object.keys(folders).length);
     }, [folders, location.pathname]);
 
+    // ✅ FIX: Lazy-load folder contents so users always see their templates/reports
+    const { syncFolder, syncTemplate, syncInstance } = useStore();
+    const loadedFolderContentRef = useRef<Set<string>>(new Set());
+    const loadingFolderContentRef = useRef<Set<string>>(new Set());
+
     // ✅ FIX: Load child folders when entering a folder
     // progressiveLoader only loads root folders, so we need to lazy-load children
-    const { syncFolder } = useStore();
     useEffect(() => {
         const loadChildFolders = async () => {
             if (!currentFolderId) return; // Skip for root
@@ -255,10 +320,68 @@ const FoldersPage: React.FC = () => {
         loadChildFolders();
     }, [currentFolderId, syncFolder]);
 
+    useEffect(() => {
+        if (currentFolderId === '__archive__' || currentFolderId === '__recycle_bin__') {
+            return;
+        }
+
+        const folderKey = currentFolderId ?? '__root__';
+        if (loadedFolderContentRef.current.has(folderKey) || loadingFolderContentRef.current.has(folderKey)) {
+            return;
+        }
+
+        let cancelled = false;
+        loadingFolderContentRef.current.add(folderKey);
+
+        const loadFolderContent = async () => {
+            try {
+                console.log('📦 [Folders] Loading folder content:', folderKey);
+                const { progressiveLoader } = await import('../services/progressiveLoader');
+                const [templateResult, instanceResult] = await Promise.all([
+                    progressiveLoader.loadFolderTemplates(currentFolderId, 1, 200),
+                    progressiveLoader.loadFolderInstances(currentFolderId, 1, 200),
+                ]);
+
+                if (cancelled) {
+                    return;
+                }
+
+                templateResult.data.forEach((template) => syncTemplate(template));
+                instanceResult.data.forEach((instance) => syncInstance(instance));
+                loadedFolderContentRef.current.add(folderKey);
+
+                console.log('✅ [Folders] Folder content loaded:', {
+                    folderKey,
+                    templates: templateResult.data.length,
+                    instances: instanceResult.data.length,
+                    hasMoreTemplates: templateResult.hasMore,
+                    hasMoreInstances: instanceResult.hasMore,
+                });
+
+                // If folder contains more than lazy limit, run full sync in background once.
+                if (templateResult.hasMore || instanceResult.hasMore) {
+                    void useStore.getState().fetchAllData();
+                }
+            } catch (error) {
+                console.error('❌ [Folders] Error loading folder content:', error);
+            } finally {
+                loadingFolderContentRef.current.delete(folderKey);
+            }
+        };
+
+        loadFolderContent();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [currentFolderId, syncTemplate, syncInstance]);
+
     // URL Source of Truth: Sync URL params to Store
     useEffect(() => {
-        // Only if we are on the /folders route
-        if (!location.pathname.includes('/folders')) return;
+        let cancelled = false;
+
+        // Only if we are on the explorer route
+        if (!location.pathname.startsWith('/folders') && !location.pathname.startsWith('/forms&reports')) return;
 
         if (paramFolderId) {
             // Handle special virtual folders FIRST (before any folder validation)
@@ -273,17 +396,33 @@ const FoldersPage: React.FC = () => {
                 return;
             }
 
-            // Regular folder: Validate that folder exists before navigating
-            // Wait for folders to be loaded (Object.keys check)
-            if (Object.keys(folders).length > 0 && !folders[paramFolderId]) {
-                // Folder doesn't exist - redirect to root
-                console.warn(`[Folders] Folder ${paramFolderId} not found, redirecting to root`);
-                navigate('/folders', { replace: true });
-                return;
-            }
-
+            // Always trust URL first. This prevents refresh from bouncing to root
+            // before progressive loading fetches child folders.
             if (currentFolderId !== paramFolderId) {
                 setCurrentFolder(paramFolderId);
+            }
+
+            // If folder is not in local cache yet, validate from DB before redirecting.
+            if (!folders[paramFolderId]) {
+                (async () => {
+                    try {
+                        const remoteFolder = await foldersService.getFolder(paramFolderId);
+                        if (cancelled) return;
+
+                        if (remoteFolder) {
+                            syncFolder(remoteFolder);
+                            return;
+                        }
+
+                        // Truly missing folder (or not accessible) => redirect to root.
+                        console.warn(`[Folders] Folder ${paramFolderId} not found in DB, redirecting to root`);
+                        navigateToFolder(null, { replace: true });
+                    } catch (error) {
+                        if (cancelled) return;
+                        console.warn(`[Folders] Folder lookup failed for ${paramFolderId}, redirecting to root`, error);
+                        navigateToFolder(null, { replace: true });
+                    }
+                })();
             }
         } else {
             // Root folder (if path is just /folders)
@@ -291,7 +430,11 @@ const FoldersPage: React.FC = () => {
                 setCurrentFolder(null);
             }
         }
-    }, [paramFolderId, currentFolderId, setCurrentFolder, location.pathname, folders, navigate]);
+
+        return () => {
+            cancelled = true;
+        };
+    }, [paramFolderId, currentFolderId, setCurrentFolder, location.pathname, folders, navigateToFolder, syncFolder]);
 
     // Restore last folder position (Only if no params and we are visiting for the first time or coming from elsewhere)
     // We only rely on URL now, so this legacy restoration might be conflicting if not careful.
@@ -376,10 +519,10 @@ const FoldersPage: React.FC = () => {
     // Get templates and instances for current folder (or special views)
     const templates = isArchiveView
         ? archivedTemplates
-        : (!isRecycleBinView ? getTemplatesInFolder(currentFolderId ?? '') : []);
+        : (!isRecycleBinView ? getTemplatesInFolder(currentFolderId) : []);
     const instances = isArchiveView
         ? archivedInstances
-        : (!isRecycleBinView ? getInstancesInFolder(currentFolderId ?? '') : []);
+        : (!isRecycleBinView ? getInstancesInFolder(currentFolderId) : []);
 
 
     // Helper function to check if date is within range
@@ -538,6 +681,13 @@ const FoldersPage: React.FC = () => {
         return result;
     }, [childFolders, archivedFolders, isArchiveView, searchQuery, filters, sortConfig, filteredTemplates]);
 
+    const showFormsContent = !isMobile || mobileContentFilter !== 'reports';
+    const showReportsContent = !isMobile || mobileContentFilter !== 'forms';
+    const visibleTemplates = showFormsContent ? filteredTemplates : [];
+    const visibleInstances = showReportsContent ? filteredInstances : [];
+    const visibleFolders = showReportsContent ? displayFolders : [];
+    const visibleItemsCount = visibleFolders.length + visibleTemplates.length + visibleInstances.length;
+
     // Handler for removing individual filters
     const handleRemoveFilter = (type: 'dateRange' | 'status' | 'tag', value?: string) => {
         if (type === 'dateRange') {
@@ -567,17 +717,102 @@ const FoldersPage: React.FC = () => {
         navigate(`/forms/new${currentFolderId ? `?folderId=${currentFolderId}` : ''}`);
     };
 
+    const getTemplateImportFolderId = useCallback((): string | null => {
+        if (!currentFolderId) return null;
+        if (currentFolderId === '__archive__' || currentFolderId === '__recycle_bin__') return null;
+        return currentFolderId;
+    }, [currentFolderId]);
+
+    const buildImportedTemplateName = useCallback((baseName: string, folderId: string): string => {
+        const normalizedBaseName = baseName.trim() || 'نموذج مستورد';
+        const existingNames = new Set(
+            Object.values(formTemplates)
+                .filter(t => t.folder_id === folderId && !t.archived)
+                .map(t => t.name.trim())
+        );
+
+        if (!existingNames.has(normalizedBaseName)) {
+            return normalizedBaseName;
+        }
+
+        let candidate = `${normalizedBaseName} (مستورد)`;
+        let counter = 2;
+        while (existingNames.has(candidate)) {
+            candidate = `${normalizedBaseName} (مستورد ${counter})`;
+            counter += 1;
+        }
+
+        return candidate;
+    }, [formTemplates]);
+
+    const handleExportTemplate = useCallback((template: FormTemplate) => {
+        try {
+            exportTemplateBackupFile(template);
+        } catch (error) {
+            console.error('❌ Failed to export template backup:', error);
+            alert('فشل تصدير النموذج. يرجى المحاولة مرة أخرى.');
+        }
+    }, []);
+
+    const handleToolbarImportClick = useCallback(() => {
+        const importFolderId = getTemplateImportFolderId();
+        if (!importFolderId) {
+            alert('يرجى فتح المجلد الذي تريد استيراد النموذج داخله أولاً.');
+            return;
+        }
+        templateImportInputRef.current?.click();
+    }, [getTemplateImportFolderId]);
+
+    const handleTemplateImportFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+        if (!file) return;
+
+        const importFolderId = getTemplateImportFolderId();
+        if (!importFolderId) {
+            alert('يرجى فتح المجلد الذي تريد استيراد النموذج داخله أولاً.');
+            return;
+        }
+
+        setIsTemplateImporting(true);
+        try {
+            const parsedTemplate = await parseTemplateBackupFile(file);
+            const importedTemplate: FormTemplate = {
+                ...parsedTemplate,
+                id: generateId(),
+                name: buildImportedTemplateName(parsedTemplate.name, importFolderId),
+                created_at: new Date().toISOString(),
+                folder_id: importFolderId,
+                unified_folder_id: importFolderId,
+                archived: false,
+                archived_at: undefined,
+                archived_by: undefined,
+                custom_properties: parsedTemplate.custom_properties || {},
+                sections: parsedTemplate.sections || {},
+                version: parsedTemplate.version || 1,
+            };
+
+            await addFormTemplate(importedTemplate);
+            alert(`تم استيراد النموذج "${importedTemplate.name}" بنجاح.`);
+        } catch (error) {
+            console.error('❌ Failed to import template backup:', error);
+            alert('تعذر استيراد الملف. تأكد أنه ملف نسخة احتياطية صالح للنموذج.');
+        } finally {
+            setIsTemplateImporting(false);
+        }
+    }, [addFormTemplate, buildImportedTemplateName, getTemplateImportFolderId]);
+
     const handleFolderDoubleClick = (folderId: string) => {
-        navigate(`/folders/${folderId}`);
+        navigateToFolder(folderId);
     };
 
     const handleGoUp = useCallback(() => {
         if (currentFolder?.parent_id) {
-            navigate(`/folders/${currentFolder.parent_id}`);
+            navigateToFolder(currentFolder.parent_id);
         } else {
-            navigate('/folders');
+            navigateToFolder(null);
         }
-    }, [currentFolder, navigate]);
+    }, [currentFolder, navigateToFolder]);
 
     // Navigation History handlers for Back/Forward
     // Phase 2 Fix: Use browser-native navigation AND keep useNavigationHistory in sync
@@ -1263,10 +1498,10 @@ const FoldersPage: React.FC = () => {
         // Stay in destination folder after paste (Windows Explorer behavior)
         // Only navigate if we pasted to a different folder
         if (destinationFolderId !== currentFolderId) {
-            setCurrentFolder(destinationFolderId);
+            navigateToFolder(destinationFolderId);
         }
 
-    }, [clipboard, folders, currentFolderId, copyFolder, moveFolder, formTemplates, formInstances, duplicateFormTemplate, deselectAll, addAction, setCurrentFolder, moveFormTemplate, moveFormInstance, addFormInstance, user]);
+    }, [clipboard, folders, currentFolderId, copyFolder, moveFolder, formTemplates, formInstances, duplicateFormTemplate, deselectAll, addAction, navigateToFolder, moveFormTemplate, moveFormInstance, addFormInstance, user]);
 
     // Share handler
     const handleShare = useCallback(() => {
@@ -1314,8 +1549,22 @@ const FoldersPage: React.FC = () => {
     }, [selectedItems, selectedCount, deselectAll]);
 
     const handleGoHome = () => {
-        setCurrentFolder(null);
+        navigateToFolder(null);
     };
+
+    const handleQuickAccessItemClick = useCallback((item: any) => {
+        if (item.type === 'folder') {
+            navigateToFolder(item.id);
+        } else if (item.type === 'template') {
+            navigate(`/forms/preview/${item.id}`);
+        } else if (item.type === 'report') {
+            navigate(`/reports/view/${item.id}`);
+        }
+
+        if (isMobile) {
+            setShowQuickAccess(false);
+        }
+    }, [navigate, navigateToFolder, isMobile]);
 
     // Generate smart suggestions
     useEffect(() => {
@@ -1566,7 +1815,7 @@ const FoldersPage: React.FC = () => {
         switch (contextMenu.type) {
             case 'folder':
                 return getFolderMenuItems(contextMenu.item, {
-                    onOpen: () => setCurrentFolder(contextMenu.item.id),
+                    onOpen: () => navigateToFolder(contextMenu.item.id),
                     onRename: () => handleEditFolder(contextMenu.item),
                     onCut: () => {
                         const itemTypes = new Map<string, 'folder' | 'template' | 'instance'>();
@@ -1602,6 +1851,7 @@ const FoldersPage: React.FC = () => {
                             duplicateFormTemplate(contextMenu.item.id);
                         }
                     },
+                    onExport: () => handleExportTemplate(contextMenu.item as FormTemplate),
                     onDelete: () => handleBulkDelete([contextMenu.item.id]),
                 });
 
@@ -1609,7 +1859,10 @@ const FoldersPage: React.FC = () => {
                 return getInstanceMenuItems(contextMenu.item, {
                     onOpen: () => navigate(`/reports/view/${contextMenu.item.instance_id}`),
                     onView: () => navigate(`/reports/view/${contextMenu.item.instance_id}`),
-                    onEdit: () => navigate(`/reports/edit/${contextMenu.item.instance_id}`),
+                    onEdit: () => openDraftForEdit(
+                        contextMenu.item.instance_id,
+                        contextMenu.item.name || contextMenu.item.template_name || ''
+                    ),
                     onCut: () => {
                         const itemTypes = new Map<string, 'folder' | 'template' | 'instance'>();
                         itemTypes.set(contextMenu.item.instance_id, 'instance');
@@ -1718,16 +1971,16 @@ const FoldersPage: React.FC = () => {
         if (e.altKey && e.key === 'ArrowUp') {
             e.preventDefault();
             if (currentFolder?.parent_id) {
-                setCurrentFolder(currentFolder.parent_id);
+                navigateToFolder(currentFolder.parent_id);
             } else if (currentFolderId) {
-                setCurrentFolder(null);
+                navigateToFolder(null);
             }
         }
 
         // Home: Go to root folder
         if (e.key === 'Home' && !e.ctrlKey && !e.shiftKey && !e.altKey) {
             e.preventDefault();
-            setCurrentFolder(null);
+            navigateToFolder(null);
         }
 
         // Escape: Close context menu if open
@@ -1735,7 +1988,7 @@ const FoldersPage: React.FC = () => {
             e.preventDefault();
             closeContextMenu();
         }
-    }, [currentFolder, currentFolderId, setCurrentFolder, contextMenu]);
+    }, [currentFolder, currentFolderId, navigateToFolder, contextMenu]);
 
     useEffect(() => {
         document.addEventListener('keydown', handleKeyDown);
@@ -1744,11 +1997,20 @@ const FoldersPage: React.FC = () => {
 
 
     return (
-        <div className="h-full w-full p-4 bg-gray-100 dark:bg-gray-900 overflow-hidden font-segoe">
-            <div className="flex flex-col h-full w-full bg-win11-bg-light dark:bg-win11-bg-dark backdrop-blur-win11 rounded-win11-xl border border-white/40 dark:border-white/10 shadow-win11 transition-all duration-300 relative">
+        <div className="h-full w-full p-2 sm:p-4 bg-gray-100 dark:bg-gray-900 overflow-hidden font-segoe">
+            <div className="flex flex-col h-full w-full bg-win11-bg-light dark:bg-win11-bg-dark backdrop-blur-win11 rounded-win11-lg sm:rounded-win11-xl border border-white/40 dark:border-white/10 shadow-win11 transition-all duration-300 relative">
 
                 {/* 1. Breadcrumb Row with Right-Click Context Menu */}
-                <div className="h-10 px-4 flex items-center gap-2 border-b border-black/5 dark:border-white/5 bg-white/40 dark:bg-black/20 select-none">
+                <div className="min-h-10 px-2 sm:px-4 py-1 sm:py-0 flex items-center gap-2 border-b border-black/5 dark:border-white/5 bg-white/40 dark:bg-black/20 select-none">
+                    {isMobile && (
+                        <button
+                            onClick={() => setShowQuickAccess(true)}
+                            className="p-1.5 rounded-md hover:bg-black/5 dark:hover:bg-white/5 text-gray-600 dark:text-gray-300"
+                            title="الوصول السريع"
+                        >
+                            <Bars3Icon className="w-5 h-5" />
+                        </button>
+                    )}
                     <button
                         onClick={handleGoUp}
                         disabled={!currentFolderId}
@@ -1763,20 +2025,20 @@ const FoldersPage: React.FC = () => {
                         <ArrowUpIcon className="w-4 h-4" />
                     </button>
 
-                    <div className="h-4 w-px bg-gray-300 dark:bg-gray-600" />
+                    <div className="h-4 w-px bg-gray-300 dark:bg-gray-600 hidden sm:block" />
 
                     <Breadcrumb
                         segments={breadcrumbSegments}
-                        onNavigate={(id) => id ? navigate(`/folders/${id}`) : navigate('/folders')}
+                        onNavigate={(id) => navigateToFolder(id ?? null)}
                         onPaste={handleBreadcrumbPaste}
                         canPaste={clipboard !== null && clipboard.items.length > 0}
                         clipboardType={clipboard?.type || null}
                         clipboardCount={clipboard?.items.length || 0}
-                        className="flex-1"
+                        className="flex-1 min-w-0"
                     />
 
                     {/* Clipboard indicator in breadcrumb */}
-                    {clipboard && clipboard.items.length > 0 && (
+                    {clipboard && clipboard.items.length > 0 && !isMobile && (
                         <div className={cn(
                             "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs",
                             clipboard.type === 'cut'
@@ -1794,35 +2056,53 @@ const FoldersPage: React.FC = () => {
                 </div>
 
                 {/* 2. Command Bar (Toolbar) */}
-                <div className="h-14 px-2 flex items-center gap-1 border-b border-black/5 dark:border-white/5 bg-white/50 dark:bg-black/20 backdrop-blur-md overflow-visible relative z-50">
+                <div className="min-h-14 px-2 py-2 flex flex-wrap items-center gap-1.5 border-b border-black/5 dark:border-white/5 bg-white/50 dark:bg-black/20 backdrop-blur-md overflow-visible relative z-50">
                     {/* New Actions */}
                     <div className="flex items-center gap-1 px-1">
                         {isFormsPage && (
                             <button
                                 onClick={() => handleCreateTemplate()}
                                 disabled={!canCreateTemplate}
-                                className="flex items-center gap-2 px-3 py-1.5 rounded-[4px] hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50 transition-colors"
+                                className="flex items-center gap-2 px-3 py-1.5 rounded-[4px] bg-win11-blue/10 text-win11-blue hover:bg-win11-blue/15 dark:hover:bg-win11-blue/20 disabled:opacity-50 transition-colors"
                             >
                                 <DocumentPlusIcon className="w-5 h-5 text-win11-blue" />
-                                <span className="text-sm">جديد</span>
+                                <span className="text-sm font-medium">نموذج جديد</span>
+                            </button>
+                        )}
+                        {isFormsPage && (
+                            <button
+                                onClick={handleToolbarImportClick}
+                                disabled={!canCreateTemplate || isTemplateImporting}
+                                className="flex items-center gap-2 px-3 py-1.5 rounded-[4px] hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50 transition-colors"
+                                title="استيراد نموذج من ملف نسخة احتياطية"
+                            >
+                                <ArrowUpTrayIcon className={cn("w-5 h-5 text-win11-blue", isTemplateImporting && "animate-pulse")} />
+                                <span className="text-sm">استيراد</span>
                             </button>
                         )}
                         {isFormsPage && (
                             <button
                                 onClick={() => handleCreateFolder(currentFolderId)}
                                 disabled={!canCreateFolder}
-                                className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-[4px] hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50 transition-colors"
+                                className="flex items-center gap-2 px-3 py-1.5 rounded-[4px] hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50 transition-colors"
                             >
                                 <FolderPlusIcon className="w-5 h-5 text-win11-blue" />
-                                <span className="text-sm"></span>
+                                <span className="text-sm">مجلد</span>
                             </button>
                         )}
                     </div>
+                    <input
+                        ref={templateImportInputRef}
+                        type="file"
+                        accept=".json,.qms-template.json,application/json"
+                        className="hidden"
+                        onChange={handleTemplateImportFileChange}
+                    />
 
-                    <div className="h-5 w-px bg-black/10 dark:bg-white/10 mx-1" />
+                    <div className="hidden md:block h-5 w-px bg-black/10 dark:bg-white/10 mx-1" />
 
                     {/* Back/Forward Navigation */}
-                    <div className="flex items-center gap-0.5">
+                    <div className="hidden md:flex items-center gap-0.5">
                         <button
                             onClick={handleGoBack}
                             title={`رجوع (Alt+←)${canGoBack ? '' : ' - لا يوجد'}`}
@@ -1851,10 +2131,10 @@ const FoldersPage: React.FC = () => {
                         </button>
                     </div>
 
-                    <div className="h-5 w-px bg-black/10 dark:bg-white/10 mx-1" />
+                    <div className="hidden lg:block h-5 w-px bg-black/10 dark:bg-white/10 mx-1" />
 
                     {/* Undo/Redo Actions */}
-                    <div className="flex items-center gap-0.5">
+                    <div className="hidden lg:flex items-center gap-0.5">
                         <button
                             onClick={handleUndo}
                             title={`تراجع (Ctrl+Z)${canUndo ? '' : ' - لا يوجد'}`}
@@ -1883,10 +2163,10 @@ const FoldersPage: React.FC = () => {
                         </button>
                     </div>
 
-                    <div className="h-5 w-px bg-black/10 dark:bg-white/10 mx-1" />
+                    <div className="hidden lg:block h-5 w-px bg-black/10 dark:bg-white/10 mx-1" />
 
                     {/* Common Actions (Cut, Copy, Paste, Rename, Share, Delete) */}
-                    <div className="flex items-center gap-0.5">
+                    <div className="hidden lg:flex items-center gap-0.5">
                         <button
                             onClick={handleCut}
                             title="قص (Ctrl+X)"
@@ -1966,11 +2246,11 @@ const FoldersPage: React.FC = () => {
                         </button>
                     </div>
 
-                    <div className="h-5 w-px bg-black/10 dark:bg-white/10 mx-1" />
+                    <div className="hidden lg:block h-5 w-px bg-black/10 dark:bg-white/10 mx-1" />
 
                     {/* Extended Actions (Move, Archive, Tag) - Only visible when selected */}
                     {selectedCount > 0 && (
-                        <div className="flex items-center gap-0.5 animate-fade-in">
+                        <div className="hidden lg:flex items-center gap-0.5 animate-fade-in">
 
                             <button
                                 onClick={handleBulkArchive}
@@ -1992,28 +2272,32 @@ const FoldersPage: React.FC = () => {
 
 
                     {/* Search & Sort */}
-                    <div className="flex-1" />
-                    <div className="w-48 sm:w-64">
+                    <div className="flex-1 hidden md:block" />
+                    <div className="w-full md:w-56 lg:w-64 order-last md:order-none">
                         <AdvancedSearch
                             value={searchQuery}
                             onChange={setSearchQuery}
-                            placeholder="بحث في المجلدات..."
+                            placeholder="بحث في النماذج والتقارير..."
                         />
                     </div>
 
-                    <div className="mx-2" />
+                    <div className="mx-1 hidden md:block" />
 
-                    <div className="flex items-center gap-1">
-                        <SortDropdown
-                            currentSort={sortConfig}
-                            onSortChange={setSortConfig}
-                        />
+                    <div className="flex items-center gap-1 ml-auto md:ml-0">
+                        <div className="hidden sm:block">
+                            <SortDropdown
+                                currentSort={sortConfig}
+                                onSortChange={setSortConfig}
+                            />
+                        </div>
                         <button onClick={() => setViewMode('grid')} className={cn("p-1.5 rounded-[4px] hover:bg-black/5", viewMode === 'grid' && "bg-black/5")}>
                             <Squares2X2Icon className="w-4 h-4" />
                         </button>
-                        <button onClick={() => setViewMode('list')} className={cn("p-1.5 rounded-[4px] hover:bg-black/5", viewMode === 'list' && "bg-black/5")}>
-                            <ListBulletIcon className="w-4 h-4" />
-                        </button>
+                        {!isMobile && (
+                            <button onClick={() => setViewMode('list')} className={cn("p-1.5 rounded-[4px] hover:bg-black/5", viewMode === 'list' && "bg-black/5")}>
+                                <ListBulletIcon className="w-4 h-4" />
+                            </button>
+                        )}
                         <button onClick={() => setViewMode('details')} className={cn("p-1.5 rounded-[4px] hover:bg-black/5", viewMode === 'details' && "bg-black/5")}>
                             <DocumentTextIcon className="w-4 h-4" />
                         </button>
@@ -2027,50 +2311,113 @@ const FoldersPage: React.FC = () => {
                     </div>
                 )}
 
+                {isMobile && !isSpecialView && (
+                    <div className="px-2 py-2 border-b border-black/5 dark:border-white/5 bg-white/20 dark:bg-black/10">
+                        <div className="grid grid-cols-3 gap-1 rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
+                            <button
+                                onClick={() => setMobileContentFilter('all')}
+                                className={cn(
+                                    "px-2 py-1.5 text-xs rounded-md transition-colors",
+                                    mobileContentFilter === 'all'
+                                        ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
+                                        : "text-gray-600 dark:text-gray-300 hover:bg-white/60 dark:hover:bg-gray-700/60"
+                                )}
+                            >
+                                الكل ({filteredTemplates.length + filteredInstances.length + displayFolders.length})
+                            </button>
+                            <button
+                                onClick={() => setMobileContentFilter('forms')}
+                                className={cn(
+                                    "px-2 py-1.5 text-xs rounded-md transition-colors",
+                                    mobileContentFilter === 'forms'
+                                        ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
+                                        : "text-gray-600 dark:text-gray-300 hover:bg-white/60 dark:hover:bg-gray-700/60"
+                                )}
+                            >
+                                النماذج ({filteredTemplates.length})
+                            </button>
+                            <button
+                                onClick={() => setMobileContentFilter('reports')}
+                                className={cn(
+                                    "px-2 py-1.5 text-xs rounded-md transition-colors",
+                                    mobileContentFilter === 'reports'
+                                        ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
+                                        : "text-gray-600 dark:text-gray-300 hover:bg-white/60 dark:hover:bg-gray-700/60"
+                                )}
+                            >
+                                التقارير ({filteredInstances.length + displayFolders.length})
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 {/* Tab Bar for open forms */}
 
 
                 {/* 3. Main Body */}
-                <div className="flex flex-1 overflow-hidden">
+                <div className="flex flex-1 min-h-0 overflow-hidden">
                     {/* Sidebar */}
-                    <QuickAccessSidebar
-                        recentItems={recentItems}
-                        favoriteItems={favoriteItems}
-                        pinnedFolders={[]}
-                        recycleBinCount={recycleBinItems.length}
-                        onRecycleBinClick={() => {
-                            navigate('/folders/__recycle_bin__');
-                        }}
-                        onArchiveClick={() => {
-                            navigate('/folders/__archive__');
-                        }}
-                        onItemClick={(item) => {
-                            if (item.type === 'folder' || item.type === 'report' || item.type === 'template') {
-                                // Handle sidebar navigation logic
-                                if (item.type === 'folder') navigate(`/folders/${item.id}`);
-                                // For templates/reports you might want to open them, not set folder
-                            }
-                        }}
-                        onToggleFavorite={handleToggleFavorite}
-                    />
+                    {!isMobile && (
+                        <QuickAccessSidebar
+                            recentItems={recentItems}
+                            favoriteItems={favoriteItems}
+                            pinnedFolders={[]}
+                            recycleBinCount={recycleBinItems.length}
+                            onRecycleBinClick={() => {
+                                navigateToFolder('__recycle_bin__');
+                            }}
+                            onArchiveClick={() => {
+                                navigateToFolder('__archive__');
+                            }}
+                            onItemClick={handleQuickAccessItemClick}
+                            onToggleFavorite={handleToggleFavorite}
+                            solidBackground={true}
+                        />
+                    )}
 
                     {/* Content */}
                     <div className="flex-1 flex flex-col overflow-hidden bg-white/40 dark:bg-black/20 relative">
 
 
                         <div
-                            className="flex-1 overflow-y-auto p-4 content-area"
+                            className="flex-1 overflow-y-auto p-2 sm:p-4 content-area"
                             onClick={() => deselectAll()}
                             onContextMenu={(e) => {
                                 // Prevent default browser context menu
                                 e.preventDefault();
                             }}
                         >
+                            {isMobile && !isSpecialView && (
+                                <div className="mb-3 grid grid-cols-2 gap-2">
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleCreateTemplate();
+                                        }}
+                                        className="flex items-center justify-center gap-2 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 px-3 py-2 text-sm font-medium text-blue-700 dark:text-blue-300"
+                                    >
+                                        <DocumentPlusIcon className="w-4 h-4" />
+                                        نموذج جديد
+                                    </button>
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleCreateFolder(currentFolderId);
+                                        }}
+                                        disabled={!canCreateFolder}
+                                        className="flex items-center justify-center gap-2 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-sm font-medium text-amber-700 dark:text-amber-300 disabled:opacity-50"
+                                    >
+                                        <FolderPlusIcon className="w-4 h-4" />
+                                        مجلد جديد
+                                    </button>
+                                </div>
+                            )}
+
                             {/* Special Views - Archive */}
                             {isArchiveView && (
                                 <div onClick={(e) => e.stopPropagation()} className="space-y-4">
                                     {/* Header */}
-                                    <div className="flex items-center justify-between mb-6">
+                                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
                                         <div className="flex items-center gap-3">
                                             <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
                                                 <ArchiveBoxIcon className="w-6 h-6 text-amber-600" />
@@ -2096,6 +2443,91 @@ const FoldersPage: React.FC = () => {
                                     {/* Items list */}
                                     {(archivedFolders.length > 0 || archivedTemplates.length > 0 || archivedInstances.length > 0) && (
                                         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                                            {isMobile && (
+                                                <div className="space-y-2 p-3">
+                                                    {archivedFolders.map(folder => (
+                                                        <div key={folder.id} className="rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+                                                            <div className="mb-2 flex items-center gap-2">
+                                                                <FolderIcon className="w-5 h-5 text-amber-500" />
+                                                                <span className="truncate text-sm font-semibold text-gray-900 dark:text-white">{folder.name}</span>
+                                                            </div>
+                                                            <div className="mb-3 text-xs text-gray-500 dark:text-gray-400">
+                                                                <span>النوع: مجلد</span>
+                                                                <span className="mx-1">•</span>
+                                                                <span>تاريخ الأرشفة: {folder.archived_at ? formatDate(folder.archived_at) : '-'}</span>
+                                                            </div>
+                                                            <button
+                                                                onClick={async () => {
+                                                                    try {
+                                                                        await updateFolder(folder.id, { archived: false, archived_at: undefined, archived_by: undefined });
+                                                                    } catch (err) {
+                                                                        console.error('Error unarchiving folder:', err);
+                                                                    }
+                                                                }}
+                                                                className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                                                            >
+                                                                <ArrowUturnLeftIcon className="h-4 w-4" />
+                                                                إلغاء الأرشفة
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                    {archivedTemplates.map(template => (
+                                                        <div key={template.id} className="rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+                                                            <div className="mb-2 flex items-center gap-2">
+                                                                <DocumentTextIcon className="w-5 h-5 text-blue-500" />
+                                                                <span className="truncate text-sm font-semibold text-gray-900 dark:text-white">{template.name}</span>
+                                                            </div>
+                                                            <div className="mb-3 text-xs text-gray-500 dark:text-gray-400">
+                                                                <span>النوع: نموذج</span>
+                                                                <span className="mx-1">•</span>
+                                                                <span>تاريخ الأرشفة: {(template as any).archived_at ? formatDate((template as any).archived_at) : '-'}</span>
+                                                            </div>
+                                                            <button
+                                                                onClick={async () => {
+                                                                    try {
+                                                                        await updateFormTemplate(template.id, { archived: false, archived_at: undefined, archived_by: undefined } as any);
+                                                                    } catch (err) {
+                                                                        console.error('Error unarchiving template:', err);
+                                                                    }
+                                                                }}
+                                                                className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                                                            >
+                                                                <ArrowUturnLeftIcon className="h-4 w-4" />
+                                                                إلغاء الأرشفة
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                    {archivedInstances.map(instance => (
+                                                        <div key={instance.instance_id} className="rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+                                                            <div className="mb-2 flex items-center gap-2">
+                                                                <ClipboardDocumentCheckIcon className="w-5 h-5 text-green-500" />
+                                                                <span className="truncate text-sm font-semibold text-gray-900 dark:text-white">
+                                                                    {formTemplates[instance.template_id]?.name || 'تقرير'}
+                                                                </span>
+                                                            </div>
+                                                            <div className="mb-3 text-xs text-gray-500 dark:text-gray-400">
+                                                                <span>النوع: تقرير</span>
+                                                                <span className="mx-1">•</span>
+                                                                <span>تاريخ الأرشفة: {(instance as any).archived_at ? formatDate((instance as any).archived_at) : '-'}</span>
+                                                            </div>
+                                                            <button
+                                                                onClick={async () => {
+                                                                    try {
+                                                                        await updateFormInstance(instance.instance_id, { archived: false, archived_at: undefined, archived_by: undefined } as any);
+                                                                    } catch (err) {
+                                                                        console.error('Error unarchiving instance:', err);
+                                                                    }
+                                                                }}
+                                                                className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                                                            >
+                                                                <ArrowUturnLeftIcon className="h-4 w-4" />
+                                                                إلغاء الأرشفة
+                                                            </button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {!isMobile && (
                                             <table className="w-full">
                                                 <thead className="bg-gray-50 dark:bg-gray-700">
                                                     <tr>
@@ -2200,6 +2632,7 @@ const FoldersPage: React.FC = () => {
                                                     ))}
                                                 </tbody>
                                             </table>
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -2209,7 +2642,7 @@ const FoldersPage: React.FC = () => {
                             {isRecycleBinView && (
                                 <div onClick={(e) => e.stopPropagation()} className="space-y-4">
                                     {/* Header */}
-                                    <div className="flex items-center justify-between mb-6">
+                                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
                                         <div className="flex items-center gap-3">
                                             <div className="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg">
                                                 <TrashIcon className="w-6 h-6 text-red-600" />
@@ -2266,6 +2699,71 @@ const FoldersPage: React.FC = () => {
                                     {/* Items list */}
                                     {!recycleBinLoading && recycleBinItemsData.length > 0 && (
                                         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                                            {isMobile && (
+                                                <div className="space-y-2 p-3">
+                                                    {recycleBinItemsData.map(item => (
+                                                        <div key={item.id} className="rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+                                                            <div className="mb-2 flex items-center gap-2">
+                                                                {item.type === 'folder' ? (
+                                                                    <FolderIcon className="w-5 h-5 text-amber-500" />
+                                                                ) : item.type === 'template' ? (
+                                                                    <DocumentTextIcon className="w-5 h-5 text-blue-500" />
+                                                                ) : (
+                                                                    <ClipboardDocumentCheckIcon className="w-5 h-5 text-green-500" />
+                                                                )}
+                                                                <span className="truncate text-sm font-semibold text-gray-900 dark:text-white">{item.name}</span>
+                                                            </div>
+                                                            <div className="mb-3 text-xs text-gray-500 dark:text-gray-400">
+                                                                <span>النوع: {item.type === 'folder' ? 'مجلد' : item.type === 'template' ? 'نموذج' : 'تقرير'}</span>
+                                                                <span className="mx-1">•</span>
+                                                                <span>تاريخ الحذف: {formatDate(item.deletedAt)}</span>
+                                                            </div>
+                                                            <div className="flex flex-wrap gap-2">
+                                                                <button
+                                                                    onClick={async () => {
+                                                                        try {
+                                                                            if (item.type === 'folder' && item.data) {
+                                                                                await addFolder(item.data);
+                                                                            } else if (item.type === 'template' && item.data) {
+                                                                                await addFormTemplate(item.data);
+                                                                            } else if (item.type === 'instance' && item.data) {
+                                                                                await addFormInstance(item.data);
+                                                                            }
+                                                                            await recycleBinService.removeFromRecycleBin(item.id);
+                                                                            setRecycleBinItemsData(prev => prev.filter(i => i.id !== item.id));
+                                                                        } catch (err) {
+                                                                            console.error('Error restoring item:', err);
+                                                                        }
+                                                                    }}
+                                                                    className="inline-flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 dark:border-green-800 dark:bg-green-900/30 dark:text-green-300"
+                                                                >
+                                                                    <ArrowUturnLeftIcon className="h-4 w-4" />
+                                                                    استعادة
+                                                                </button>
+                                                                <button
+                                                                    onClick={async () => {
+                                                                        if (window.confirm('هل تريد حذف هذا العنصر نهائياً؟')) {
+                                                                            try {
+                                                                                const removed = await recycleBinService.permanentlyDeleteItem(item);
+                                                                                if (removed) {
+                                                                                    setRecycleBinItemsData(prev => prev.filter(i => i.id !== item.id));
+                                                                                }
+                                                                            } catch (err) {
+                                                                                console.error('Error deleting item:', err);
+                                                                            }
+                                                                        }
+                                                                    }}
+                                                                    className="inline-flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300"
+                                                                >
+                                                                    <TrashIcon className="h-4 w-4" />
+                                                                    حذف نهائياً
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {!isMobile && (
                                             <table className="w-full">
                                                 <thead className="bg-gray-50 dark:bg-gray-700">
                                                     <tr>
@@ -2344,6 +2842,7 @@ const FoldersPage: React.FC = () => {
                                                     ))}
                                                 </tbody>
                                             </table>
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -2353,9 +2852,9 @@ const FoldersPage: React.FC = () => {
                             {!isSpecialView && viewMode === 'list' && (
                                 <div onClick={(e) => e.stopPropagation()}>
                                     <ListView
-                                        folders={displayFolders}
-                                        templates={filteredTemplates}
-                                        instances={filteredInstances}
+                                        folders={visibleFolders}
+                                        templates={visibleTemplates}
+                                        instances={visibleInstances}
                                         formTemplates={formTemplates}
                                         onFolderClick={(id, e) => {
                                             if (handleItemClick(id, 'folder', e)) return;
@@ -2375,14 +2874,14 @@ const FoldersPage: React.FC = () => {
                                         onFolderDoubleClick={handleFolderDoubleClick}
                                         onTemplateDoubleClick={(id) => {
                                             if (window.confirm('هل تريد إنشاء تقرير جديد من هذا النموذج؟')) {
-                                                const template = filteredTemplates.find(t => t.id === id);
+                                                const template = visibleTemplates.find(t => t.id === id);
                                                 if (template) openTemplateForEntry(id, template.name);
                                             } else {
                                                 navigate(`/forms/preview/${id}`);
                                             }
                                         }}
                                         onInstanceDoubleClick={(id) => {
-                                            const instance = filteredInstances.find(i => i.instance_id === id);
+                                            const instance = visibleInstances.find(i => i.instance_id === id);
                                             if (instance) {
                                                 const template = formTemplates[instance.template_id];
                                                 const name = template ? `تقرير - ${template.name}` : 'تقرير';
@@ -2408,17 +2907,17 @@ const FoldersPage: React.FC = () => {
                             {!isSpecialView && viewMode === 'details' && (
                                 <div onClick={(e) => e.stopPropagation()}>
                                     <DetailsView
-                                        folders={displayFolders}
-                                        templates={filteredTemplates}
-                                        instances={filteredInstances}
+                                        folders={visibleFolders}
+                                        templates={visibleTemplates}
+                                        instances={visibleInstances}
                                         formTemplates={formTemplates}
                                         onFolderClick={handleFolderDoubleClick}
                                         onTemplateClick={(id) => {
-                                            const template = filteredTemplates.find(t => t.id === id);
+                                            const template = visibleTemplates.find(t => t.id === id);
                                             if (template) openTemplateForEntry(id, template.name);
                                         }}
                                         onInstanceClick={(id) => {
-                                            const instance = filteredInstances.find(i => i.instance_id === id);
+                                            const instance = visibleInstances.find(i => i.instance_id === id);
                                             if (instance) {
                                                 const template = formTemplates[instance.template_id];
                                                 const name = template ? `تقرير - ${template.name}` : 'تقرير';
@@ -2446,9 +2945,9 @@ const FoldersPage: React.FC = () => {
                             )}
 
                             {!isSpecialView && viewMode === 'grid' && (
-                                <div className="flex flex-col pb-20" onClick={(e) => e.stopPropagation()}>
+                                <div className="flex flex-col pb-10 sm:pb-20" onClick={(e) => e.stopPropagation()}>
                                     {/* Templates Section - Always visible when on forms page */}
-                                    {isFormsPage && (
+                                    {isFormsPage && showFormsContent && (
                                         <div
                                             className="min-h-[150px] pb-4"
                                             onContextMenu={(e) => {
@@ -2458,16 +2957,16 @@ const FoldersPage: React.FC = () => {
                                             }}
                                         >
                                             <div className="px-3 py-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg mb-3">
-                                                <h2 className="text-sm font-semibold text-blue-700 dark:text-blue-300">النماذج ({filteredTemplates.length})</h2>
+                                                <h2 className="text-sm font-semibold text-blue-700 dark:text-blue-300">النماذج ({visibleTemplates.length})</h2>
                                             </div>
-                                            {filteredTemplates.length > 0 ? (
-                                                <div className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] md:grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-2 sm:gap-4">
-                                                    {filteredTemplates.map((template) => (
+                                            {visibleTemplates.length > 0 ? (
+                                                <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(120px,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2 sm:gap-4">
+                                                    {visibleTemplates.map((template) => (
                                                         <div
                                                             key={template.id}
                                                             data-item="template"
                                                             className={cn(
-                                                                'group relative aspect-square rounded-win11-lg p-4 select-none',
+                                                                'group relative aspect-[0.95] sm:aspect-square rounded-win11-lg p-3 sm:p-4 select-none',
                                                                 'flex flex-col items-center justify-center gap-2',
                                                                 'cursor-pointer transition-all duration-200',
                                                                 isSelected(template.id)
@@ -2518,12 +3017,12 @@ const FoldersPage: React.FC = () => {
                                     )}
 
                                     {/* Divider between Templates and Reports */}
-                                    {isFormsPage && isReportsPage && (
+                                    {isFormsPage && isReportsPage && showFormsContent && showReportsContent && (
                                         <div className="border-t-2 border-gray-300 dark:border-gray-600 my-4"></div>
                                     )}
 
                                     {/* Reports Section - Always visible when on reports page */}
-                                    {isReportsPage && (
+                                    {isReportsPage && showReportsContent && (
                                         <div
                                             className="min-h-[150px] flex-1"
                                             onContextMenu={(e) => {
@@ -2534,20 +3033,20 @@ const FoldersPage: React.FC = () => {
                                         >
                                             <div className="px-3 py-2 bg-green-50 dark:bg-green-900/20 rounded-lg mb-3">
                                                 <h2 className="text-sm font-semibold text-green-700 dark:text-green-300">
-                                                    التقارير ({filteredInstances.length + displayFolders.length})
+                                                    التقارير ({visibleInstances.length + visibleFolders.length})
                                                 </h2>
                                             </div>
-                                            {(filteredInstances.length > 0 || displayFolders.length > 0) ? (
-                                                <div className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] md:grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-2 sm:gap-4">
+                                            {(visibleInstances.length > 0 || visibleFolders.length > 0) ? (
+                                                <div className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(120px,1fr))] lg:grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2 sm:gap-4">
                                                     {/* Show instances first */}
-                                                    {filteredInstances.map((instance) => {
+                                                    {visibleInstances.map((instance) => {
                                                         const template = formTemplates[instance.template_id];
                                                         return (
                                                             <div
                                                                 key={instance.instance_id}
                                                                 data-item="instance"
                                                                 className={cn(
-                                                                    'group relative aspect-square rounded-win11-lg p-4',
+                                                                    'group relative aspect-[0.95] sm:aspect-square rounded-win11-lg p-3 sm:p-4',
                                                                     'flex flex-col items-center justify-center gap-2',
                                                                     'cursor-pointer transition-all duration-200',
                                                                     isSelected(instance.instance_id)
@@ -2631,12 +3130,12 @@ const FoldersPage: React.FC = () => {
                                                     })}
 
                                                     {/* Then show folders under Reports */}
-                                                    {displayFolders.map((folder) => (
+                                                    {visibleFolders.map((folder) => (
                                                         <div
                                                             key={folder.id}
                                                             data-item="folder"
                                                             className={cn(
-                                                                'group relative aspect-square rounded-win11-lg p-4 select-none',
+                                                                'group relative aspect-[0.95] sm:aspect-square rounded-win11-lg p-3 sm:p-4 select-none',
                                                                 'flex flex-col items-center justify-center gap-2',
                                                                 'cursor-pointer transition-all duration-200',
                                                                 isSelected(folder.id)
@@ -2684,8 +3183,8 @@ const FoldersPage: React.FC = () => {
                 </div>
 
                 {/* 4. Status Bar */}
-                <div className="h-8 px-4 flex items-center gap-4 bg-white/40 dark:bg-black/20 border-t border-black/5 dark:border-white/5 text-xs text-gray-500 dark:text-gray-400 select-none">
-                    <span>{displayFolders.length + filteredTemplates.length + filteredInstances.length} عنصر</span>
+                <div className="hidden sm:flex h-8 px-4 items-center gap-4 bg-white/40 dark:bg-black/20 border-t border-black/5 dark:border-white/5 text-xs text-gray-500 dark:text-gray-400 select-none">
+                    <span>{visibleItemsCount} عنصر</span>
                     <div className="h-3 w-px bg-gray-300 dark:bg-gray-600" />
                     <span>{selectedCount} محدد</span>
 
@@ -2720,6 +3219,37 @@ const FoldersPage: React.FC = () => {
                         <ListBulletIcon className="w-3 h-3" />
                     </button>
                 </div>
+
+                {isMobile && showQuickAccess && (
+                    <div className="fixed inset-0 z-[90] bg-black/40 backdrop-blur-[1px] lg:hidden" onClick={() => setShowQuickAccess(false)}>
+                        <div className="absolute right-0 top-0 h-full w-[18rem]" onClick={(e) => e.stopPropagation()}>
+                            <button
+                                onClick={() => setShowQuickAccess(false)}
+                                className="absolute top-2 left-2 z-10 p-1.5 rounded-md bg-white/90 dark:bg-gray-800/90 text-gray-700 dark:text-gray-200 shadow-md"
+                                title="إغلاق"
+                            >
+                                <XMarkIcon className="w-4 h-4" />
+                            </button>
+                            <QuickAccessSidebar
+                                recentItems={recentItems}
+                                favoriteItems={favoriteItems}
+                                pinnedFolders={[]}
+                                recycleBinCount={recycleBinItems.length}
+                                onRecycleBinClick={() => {
+                                    navigateToFolder('__recycle_bin__');
+                                    setShowQuickAccess(false);
+                                }}
+                                onArchiveClick={() => {
+                                    navigateToFolder('__archive__');
+                                    setShowQuickAccess(false);
+                                }}
+                                onItemClick={handleQuickAccessItemClick}
+                                onToggleFavorite={handleToggleFavorite}
+                                solidBackground={true}
+                            />
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Dialogs */}

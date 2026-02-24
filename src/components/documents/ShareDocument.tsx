@@ -240,24 +240,24 @@ const ShareDocument: React.FC<ShareDocumentProps> = ({
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={onClose}>
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4 bg-black/50" onClick={onClose}>
             <div
-                className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden"
+                className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[calc(100vh-1rem)] sm:max-h-[90vh] overflow-hidden flex flex-col"
                 onClick={e => e.stopPropagation()}
                 dir="rtl"
             >
                 {/* Header */}
-                <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 bg-gradient-to-l from-primary-50 to-white dark:from-gray-800 dark:to-gray-900">
+                <div className="flex items-center justify-between p-3 sm:p-4 border-b border-gray-200 dark:border-gray-700 bg-gradient-to-l from-primary-50 to-white dark:from-gray-800 dark:to-gray-900">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-900/50 flex items-center justify-center">
-                            <ShareIcon className="w-5 h-5 text-primary-600" />
+                        <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-primary-100 dark:bg-primary-900/50 flex items-center justify-center shrink-0">
+                            <ShareIcon className="w-4 h-4 sm:w-5 sm:h-5 text-primary-600" />
                         </div>
-                        <div>
-                            <h3 className="text-lg font-bold text-gray-900 dark:text-white">مشاركة المستند</h3>
-                            <p className="text-sm text-gray-500 truncate max-w-xs">{documentTitle}</p>
+                        <div className="min-w-0">
+                            <h3 className="text-base sm:text-lg font-bold text-gray-900 dark:text-white">مشاركة المستند</h3>
+                            <p className="text-xs sm:text-sm text-gray-500 truncate max-w-[62vw] sm:max-w-xs">{documentTitle}</p>
                         </div>
                     </div>
-                    <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
+                    <button onClick={onClose} className="min-h-[40px] min-w-[40px] p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
                         <XMarkIcon className="w-5 h-5" />
                     </button>
                 </div>
@@ -265,14 +265,14 @@ const ShareDocument: React.FC<ShareDocumentProps> = ({
                 {loading ? (
                     <FormSkeleton />
                 ) : (
-                    <div className="overflow-y-auto max-h-[calc(90vh-140px)]">
+                    <div className="flex-1 overflow-y-auto">
                         {/* Share Form */}
-                        <div className="p-4 space-y-4">
+                        <div className="p-3 sm:p-4 space-y-4">
                             {/* Share Type Toggle */}
                             <div className="flex items-center gap-2 p-1 bg-gray-100 dark:bg-gray-700 rounded-xl">
                                 <button
                                     onClick={() => setShareType('department')}
-                                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors ${shareType === 'department'
+                                    className={`flex-1 min-h-[40px] flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 rounded-lg text-xs sm:text-sm transition-colors ${shareType === 'department'
                                         ? 'bg-white dark:bg-gray-600 shadow text-primary-600'
                                         : 'text-gray-600 dark:text-gray-400'
                                         }`}
@@ -282,7 +282,7 @@ const ShareDocument: React.FC<ShareDocumentProps> = ({
                                 </button>
                                 <button
                                     onClick={() => setShareType('user')}
-                                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors ${shareType === 'user'
+                                    className={`flex-1 min-h-[40px] flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 rounded-lg text-xs sm:text-sm transition-colors ${shareType === 'user'
                                         ? 'bg-white dark:bg-gray-600 shadow text-primary-600'
                                         : 'text-gray-600 dark:text-gray-400'
                                         }`}
@@ -300,7 +300,7 @@ const ShareDocument: React.FC<ShareDocumentProps> = ({
                                     placeholder={shareType === 'department' ? 'بحث عن قسم...' : 'بحث عن مستخدم...'}
                                     value={searchQuery}
                                     onChange={e => setSearchQuery(e.target.value)}
-                                    className="w-full pr-10 pl-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800"
+                                    className="w-full pr-10 pl-4 py-2.5 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800"
                                 />
                             </div>
 
@@ -308,58 +308,66 @@ const ShareDocument: React.FC<ShareDocumentProps> = ({
                             <div className="border border-gray-200 dark:border-gray-700 rounded-xl max-h-48 overflow-y-auto">
                                 {shareType === 'department' ? (
                                     <div className="divide-y divide-gray-100 dark:divide-gray-700">
-                                        {filteredDepts.map(dept => (
-                                            <label
-                                                key={dept.id}
-                                                className={`flex items-center gap-3 p-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 ${selectedDeptId === dept.id ? 'bg-primary-50 dark:bg-primary-900/20' : ''
-                                                    }`}
-                                            >
-                                                <input
-                                                    type="radio"
-                                                    name="department"
-                                                    checked={selectedDeptId === dept.id}
-                                                    onChange={() => setSelectedDeptId(dept.id)}
-                                                    className="text-primary-600"
-                                                />
-                                                <div
-                                                    className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm"
-                                                    style={{ backgroundColor: dept.color || '#6B7280' }}
+                                        {filteredDepts.length === 0 ? (
+                                            <div className="p-4 text-center text-sm text-gray-500">لا توجد أقسام مطابقة</div>
+                                        ) : (
+                                            filteredDepts.map(dept => (
+                                                <label
+                                                    key={dept.id}
+                                                    className={`flex items-center gap-3 p-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 ${selectedDeptId === dept.id ? 'bg-primary-50 dark:bg-primary-900/20' : ''
+                                                        }`}
                                                 >
-                                                    {dept.name.charAt(0)}
-                                                </div>
-                                                <div>
-                                                    <div className="font-medium text-gray-900 dark:text-white">
-                                                        {dept.name_ar || dept.name}
+                                                    <input
+                                                        type="radio"
+                                                        name="department"
+                                                        checked={selectedDeptId === dept.id}
+                                                        onChange={() => setSelectedDeptId(dept.id)}
+                                                        className="text-primary-600"
+                                                    />
+                                                    <div
+                                                        className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm shrink-0"
+                                                        style={{ backgroundColor: dept.color || '#6B7280' }}
+                                                    >
+                                                        {dept.name.charAt(0)}
                                                     </div>
-                                                    <div className="text-xs text-gray-500">{dept.code}</div>
-                                                </div>
-                                            </label>
-                                        ))}
+                                                    <div className="min-w-0">
+                                                        <div className="font-medium text-gray-900 dark:text-white truncate">
+                                                            {dept.name_ar || dept.name}
+                                                        </div>
+                                                        <div className="text-xs text-gray-500">{dept.code}</div>
+                                                    </div>
+                                                </label>
+                                            ))
+                                        )}
                                     </div>
                                 ) : (
                                     <div className="divide-y divide-gray-100 dark:divide-gray-700">
-                                        {filteredUsers.map(user => (
-                                            <label
-                                                key={user.id}
-                                                className={`flex items-center gap-3 p-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 ${selectedUserId === user.id ? 'bg-primary-50 dark:bg-primary-900/20' : ''
-                                                    }`}
-                                            >
-                                                <input
-                                                    type="radio"
-                                                    name="user"
-                                                    checked={selectedUserId === user.id}
-                                                    onChange={() => setSelectedUserId(user.id)}
-                                                    className="text-primary-600"
-                                                />
-                                                <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
-                                                    <UserIcon className="w-4 h-4 text-gray-500" />
-                                                </div>
-                                                <div>
-                                                    <div className="font-medium text-gray-900 dark:text-white">{user.name}</div>
-                                                    <div className="text-xs text-gray-500">{user.email}</div>
-                                                </div>
-                                            </label>
-                                        ))}
+                                        {filteredUsers.length === 0 ? (
+                                            <div className="p-4 text-center text-sm text-gray-500">لا يوجد مستخدمون مطابقون</div>
+                                        ) : (
+                                            filteredUsers.map(user => (
+                                                <label
+                                                    key={user.id}
+                                                    className={`flex items-center gap-3 p-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 ${selectedUserId === user.id ? 'bg-primary-50 dark:bg-primary-900/20' : ''
+                                                        }`}
+                                                >
+                                                    <input
+                                                        type="radio"
+                                                        name="user"
+                                                        checked={selectedUserId === user.id}
+                                                        onChange={() => setSelectedUserId(user.id)}
+                                                        className="text-primary-600"
+                                                    />
+                                                    <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center shrink-0">
+                                                        <UserIcon className="w-4 h-4 text-gray-500" />
+                                                    </div>
+                                                    <div className="min-w-0">
+                                                        <div className="font-medium text-gray-900 dark:text-white truncate">{user.name}</div>
+                                                        <div className="text-xs text-gray-500 truncate">{user.email}</div>
+                                                    </div>
+                                                </label>
+                                            ))
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -369,12 +377,12 @@ const ShareDocument: React.FC<ShareDocumentProps> = ({
                                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                                     مستوى الصلاحية
                                 </label>
-                                <div className="flex gap-2">
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                     {Object.entries(PermissionLabels).map(([key, label]) => (
                                         <button
                                             key={key}
                                             onClick={() => setPermissionLevel(key as 'view' | 'edit' | 'full')}
-                                            className={`flex-1 px-3 py-2 text-sm rounded-lg border-2 transition-colors ${permissionLevel === key
+                                            className={`min-h-[40px] px-3 py-2 text-sm rounded-lg border-2 transition-colors ${permissionLevel === key
                                                 ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 text-primary-700'
                                                 : 'border-gray-200 dark:border-gray-600 hover:border-gray-300'
                                                 }`}
@@ -394,7 +402,7 @@ const ShareDocument: React.FC<ShareDocumentProps> = ({
                                     type="date"
                                     value={expiresAt}
                                     onChange={e => setExpiresAt(e.target.value)}
-                                    className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800"
+                                    className="w-full px-3 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800"
                                 />
                             </div>
 
@@ -407,7 +415,7 @@ const ShareDocument: React.FC<ShareDocumentProps> = ({
                                     value={note}
                                     onChange={e => setNote(e.target.value)}
                                     placeholder="أضف ملاحظة للمشاركة..."
-                                    className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 resize-none"
+                                    className="w-full px-3 py-2.5 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 resize-none"
                                     rows={2}
                                 />
                             </div>
@@ -416,7 +424,7 @@ const ShareDocument: React.FC<ShareDocumentProps> = ({
                             <button
                                 onClick={handleShare}
                                 disabled={saving || (!selectedDeptId && !selectedUserId)}
-                                className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-primary-600 text-white rounded-xl hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="w-full min-h-[44px] flex items-center justify-center gap-2 px-4 py-3 bg-primary-600 text-white rounded-xl hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 {saving ? (
                                     <InlineLoading text="جاري المشاركة..." />
@@ -429,7 +437,7 @@ const ShareDocument: React.FC<ShareDocumentProps> = ({
 
                         {/* Existing Shares */}
                         {existingShares.length > 0 && (
-                            <div className="border-t border-gray-200 dark:border-gray-700 p-4">
+                            <div className="border-t border-gray-200 dark:border-gray-700 p-3 sm:p-4">
                                 <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">
                                     <InformationCircleIcon className="w-4 h-4" />
                                     المشاركات الحالية ({existingShares.length})
@@ -438,54 +446,45 @@ const ShareDocument: React.FC<ShareDocumentProps> = ({
                                     {existingShares.map(share => (
                                         <div
                                             key={share.id}
-                                            className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl"
+                                            className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl"
                                         >
-                                            <div className="flex items-center gap-3">
+                                            <div className="flex items-start gap-3 min-w-0">
                                                 {share.shared_with_department_id ? (
-                                                    <>
-                                                        <div
-                                                            className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm"
-                                                            style={{ backgroundColor: share.department?.color || '#6B7280' }}
-                                                        >
-                                                            <BuildingOfficeIcon className="w-4 h-4" />
-                                                        </div>
-                                                        <div>
-                                                            <div className="font-medium text-gray-900 dark:text-white text-sm">
-                                                                {share.department?.name_ar || share.department?.name || 'قسم'}
-                                                            </div>
-                                                            <div className="text-xs text-gray-500">
-                                                                {PermissionLabels[share.permission_level]?.ar}
-                                                            </div>
-                                                        </div>
-                                                    </>
+                                                    <div
+                                                        className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm shrink-0"
+                                                        style={{ backgroundColor: share.department?.color || '#6B7280' }}
+                                                    >
+                                                        <BuildingOfficeIcon className="w-4 h-4" />
+                                                    </div>
                                                 ) : (
-                                                    <>
-                                                        <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-600 flex items-center justify-center">
-                                                            <UserIcon className="w-4 h-4 text-gray-500" />
-                                                        </div>
-                                                        <div>
-                                                            <div className="font-medium text-gray-900 dark:text-white text-sm">
-                                                                {share.user?.name || 'مستخدم'}
-                                                            </div>
-                                                            <div className="text-xs text-gray-500">
-                                                                {PermissionLabels[share.permission_level]?.ar}
-                                                            </div>
-                                                        </div>
-                                                    </>
+                                                    <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-600 flex items-center justify-center shrink-0">
+                                                        <UserIcon className="w-4 h-4 text-gray-500" />
+                                                    </div>
                                                 )}
-                                                {share.expires_at && (
-                                                    <span className="flex items-center gap-1 text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">
-                                                        <ClockIcon className="w-3 h-3" />
-                                                        {new Date(share.expires_at).toLocaleDateString('ar')}
-                                                    </span>
-                                                )}
+                                                <div className="min-w-0 space-y-1">
+                                                    <div className="font-medium text-gray-900 dark:text-white text-sm truncate">
+                                                        {share.shared_with_department_id
+                                                            ? (share.department?.name_ar || share.department?.name || 'قسم')
+                                                            : (share.user?.name || 'مستخدم')}
+                                                    </div>
+                                                    <div className="text-xs text-gray-500">
+                                                        {PermissionLabels[share.permission_level]?.ar}
+                                                    </div>
+                                                    {share.expires_at && (
+                                                        <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full">
+                                                            <ClockIcon className="w-3 h-3" />
+                                                            {new Date(share.expires_at).toLocaleDateString('ar')}
+                                                        </span>
+                                                    )}
+                                                </div>
                                             </div>
                                             <button
                                                 onClick={() => removeShare(share.id)}
-                                                className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg"
+                                                className="self-end sm:self-auto min-h-[36px] px-3 sm:px-1.5 text-red-600 hover:bg-red-50 rounded-lg inline-flex items-center gap-1.5"
                                                 title="إلغاء المشاركة"
                                             >
                                                 <TrashIcon className="w-4 h-4" />
+                                                <span className="sm:hidden text-xs">إلغاء</span>
                                             </button>
                                         </div>
                                     ))}

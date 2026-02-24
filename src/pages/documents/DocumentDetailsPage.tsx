@@ -66,6 +66,9 @@ export default function DocumentDetailsPage() {
     const [loading, setLoading] = useState(true);
     const [showEditModal, setShowEditModal] = useState(false);
     const [showVersions, setShowVersions] = useState(false);
+    const [showMobileDetails, setShowMobileDetails] = useState(false);
+    const [showMobileVariables, setShowMobileVariables] = useState(false);
+    const [showMobileActions, setShowMobileActions] = useState(false);
     const [actionLoading, setActionLoading] = useState<string | null>(null);
 
     // Editor State
@@ -94,6 +97,10 @@ export default function DocumentDetailsPage() {
         if (!id) return;
         fetchDocument();
     }, [id]);
+
+    useEffect(() => {
+        setShowMobileActions(false);
+    }, [isEditing, document?.status]);
 
     const fetchDocument = async () => {
         if (!id) return;
@@ -432,22 +439,27 @@ export default function DocumentDetailsPage() {
     const statusConfig = STATUS_CONFIG[document.status as keyof typeof STATUS_CONFIG] || STATUS_CONFIG.draft;
     const StatusIcon = statusConfig.icon;
     const isDraft = document.status === 'draft' || document.status === 'pending_review' || (latestVersion?.status === 'draft');
+    const metadataRows = [
+        { label: 'النوع', value: TYPE_LABELS[document.type] || '-' },
+        { label: 'القسم', value: document.department?.name || '-' },
+        { label: 'التصنيف', value: document.category || '-' }
+    ];
 
     return (
         <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden"> {/* Full height minus header, no scroll */}
             {/* Top Bar - Always visible */}
-            <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between shrink-0 z-10">
-                <div className="flex items-center gap-4">
+            <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-3 sm:px-6 py-3 sm:py-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between shrink-0 z-10">
+                <div className="flex items-start sm:items-center gap-3 sm:gap-4 min-w-0 w-full lg:w-auto">
                     <button
                         onClick={() => navigate('/documents')}
-                        className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
+                        className="p-1.5 sm:p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"
                         title="عودة للقائمة"
                     >
                         <ArrowRightIcon className="w-5 h-5 text-gray-500" />
                     </button>
-                    <div>
-                        <div className="flex items-center gap-2">
-                            <h1 className="text-xl font-bold text-gray-900 dark:text-white truncate max-w-md" title={document.title}>
+                    <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <h1 className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white truncate max-w-[65vw] sm:max-w-md" title={document.title}>
                                 {document.title}
                             </h1>
                             <span className={cn("px-2.5 py-0.5 rounded-full text-xs font-medium flex items-center gap-1", statusConfig.bgClass)}>
@@ -455,153 +467,315 @@ export default function DocumentDetailsPage() {
                                 {statusConfig.label}
                             </span>
                         </div>
-                        <p className="text-sm text-gray-500 font-mono">
+                        <p className="text-xs sm:text-sm text-gray-500 font-mono">
                             {document.document_number} • الإصدار {document.current_version}
                         </p>
                     </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                    {/* Print Button (Preview Mode) */}
-                    {!isEditing && (
-                        <button
-                            onClick={handlePrint}
-                            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors text-gray-600 dark:text-gray-400"
-                            title="طباعة"
-                        >
-                            <PrinterIcon className="w-5 h-5" />
-                        </button>
-                    )}
-
-                    {/* View/Edit Toggle */}
-                    <div className="bg-gray-100 dark:bg-gray-700 p-1 rounded-lg flex items-center">
-                        <button
-                            onClick={() => setIsEditing(false)}
-                            className={cn(
-                                "px-3 py-1.5 rounded-md text-sm font-medium transition-all",
-                                !isEditing
-                                    ? "bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm"
-                                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
-                            )}
-                        >
-                            معاينة
-                        </button>
-                        {(can('documents', 'edit') || can('documents', 'edit_after_approval')) && (
+                <div className="w-full lg:w-auto flex flex-col gap-2">
+                    <div className="flex items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1 lg:overflow-visible lg:pb-0 lg:mx-0 lg:px-0">
+                        {/* Print Button (Preview Mode) */}
+                        {!isEditing && (
                             <button
-                                onClick={() => setIsEditing(true)}
-                                disabled={!isDraft && !can('documents', 'edit_after_approval')} // Allow editing approved docs with edit_after_approval permission
-                                className={cn(
-                                    "px-3 py-1.5 rounded-md text-sm font-medium transition-all",
-                                    isEditing
-                                        ? "bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm"
-                                        : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300",
-                                    (!isDraft && !can('documents', 'edit_after_approval')) && "opacity-50 cursor-not-allowed"
-                                )}
-                                title={(!isDraft && !can('documents', 'edit_after_approval')) ? "يمكن تعديل المسودات فقط" : ""}
+                                onClick={handlePrint}
+                                className="min-h-[40px] min-w-[40px] p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors text-gray-600 dark:text-gray-400"
+                                title="طباعة"
                             >
-                                تحرير
+                                <PrinterIcon className="w-5 h-5" />
                             </button>
                         )}
+
+                        {/* View/Edit Toggle */}
+                        <div className="bg-gray-100 dark:bg-gray-700 p-1 rounded-lg flex items-center">
+                            <button
+                                onClick={() => setIsEditing(false)}
+                                className={cn(
+                                    "px-3 py-1.5 rounded-md text-sm font-medium transition-all",
+                                    !isEditing
+                                        ? "bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm"
+                                        : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+                                )}
+                            >
+                                معاينة
+                            </button>
+                            {(can('documents', 'edit') || can('documents', 'edit_after_approval')) && (
+                                <button
+                                    onClick={() => setIsEditing(true)}
+                                    disabled={!isDraft && !can('documents', 'edit_after_approval')}
+                                    className={cn(
+                                        "px-3 py-1.5 rounded-md text-sm font-medium transition-all",
+                                        isEditing
+                                            ? "bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm"
+                                            : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300",
+                                        (!isDraft && !can('documents', 'edit_after_approval')) && "opacity-50 cursor-not-allowed"
+                                    )}
+                                    title={(!isDraft && !can('documents', 'edit_after_approval')) ? "يمكن تعديل المسودات فقط" : ""}
+                                >
+                                    تحرير
+                                </button>
+                            )}
+                        </div>
+
+                        <button
+                            type="button"
+                            onClick={() => setShowMobileActions((prev) => !prev)}
+                            className="lg:hidden min-h-[40px] px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-sm text-gray-700 dark:text-gray-200 inline-flex items-center gap-1.5"
+                        >
+                            الإجراءات
+                            <ChevronDownIcon className={cn("w-4 h-4 transition-transform", showMobileActions && "rotate-180")} />
+                        </button>
                     </div>
 
-                    <div className="w-px h-6 bg-gray-300 dark:bg-gray-600 mx-2" />
+                    <div className={cn("lg:hidden", !showMobileActions && "hidden")}>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {isEditing ? (
+                                <>
+                                    <button
+                                        onClick={handleSaveContent}
+                                        disabled={actionLoading === 'save' || !hasUnsavedChanges}
+                                        className={cn(
+                                            "min-h-[40px] w-full px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors inline-flex items-center justify-center gap-2 text-sm font-medium",
+                                            (actionLoading === 'save' || !hasUnsavedChanges) && "opacity-50 cursor-not-allowed"
+                                        )}
+                                    >
+                                        {actionLoading === 'save' ? 'جاري الحفظ...' : 'حفظ المسودة'}
+                                    </button>
+                                    <button
+                                        onClick={handleSubmitForReview}
+                                        disabled={actionLoading === 'submit'}
+                                        className={cn(
+                                            "min-h-[40px] w-full px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors inline-flex items-center justify-center gap-2 text-sm font-medium",
+                                            actionLoading === 'submit' && "opacity-50 cursor-not-allowed"
+                                        )}
+                                    >
+                                        <PaperAirplaneIcon className="w-4 h-4" />
+                                        إرسال للمراجعة
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    {can('documents', 'edit') && (
+                                        <button
+                                            onClick={() => setShowEditModal(true)}
+                                            className="min-h-[40px] w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors inline-flex items-center justify-center gap-2 text-sm font-medium"
+                                        >
+                                            <PencilIcon className="w-4 h-4" />
+                                            تعديل البيانات
+                                        </button>
+                                    )}
 
-                    {/* Workflow Actions */}
-                    {isEditing ? (
-                        <>
-                            <button
-                                onClick={handleSaveContent}
-                                disabled={actionLoading === 'save' || !hasUnsavedChanges}
-                                className={cn(
-                                    "px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center gap-2 text-sm font-medium",
-                                    (actionLoading === 'save' || !hasUnsavedChanges) && "opacity-50 cursor-not-allowed"
-                                )}
-                            >
-                                {actionLoading === 'save' ? 'جاري الحفظ...' : 'حفظ المسودة'}
-                            </button>
-                            <button
-                                onClick={handleSubmitForReview}
-                                disabled={actionLoading === 'submit'}
-                                className={cn(
-                                    "px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors flex items-center gap-2 text-sm font-medium",
-                                    actionLoading === 'submit' && "opacity-50 cursor-not-allowed"
-                                )}
-                            >
-                                <PaperAirplaneIcon className="w-4 h-4" />
-                                إرسال للمراجعة
-                            </button>
-                        </>
-                    ) : (
-                        <>
-                            {/* Edit Metadata Button */}
-                            {can('documents', 'edit') && (
-                                <button
-                                    onClick={() => setShowEditModal(true)}
-                                    className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors text-gray-600 dark:text-gray-400"
-                                    title="تعديل البيانات الأساسية"
-                                >
-                                    <PencilIcon className="w-5 h-5" />
-                                </button>
+                                    {document.status === 'approved' && can('documents', 'edit') && (
+                                        <button
+                                            onClick={handleCreateNewVersion}
+                                            disabled={actionLoading === 'new_version'}
+                                            className={cn(
+                                                "min-h-[40px] w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors inline-flex items-center justify-center gap-2 text-sm font-medium",
+                                                actionLoading === 'new_version' && "opacity-50 cursor-not-allowed"
+                                            )}
+                                        >
+                                            <DocumentPlusIcon className="w-4 h-4" />
+                                            إصدار جديد
+                                        </button>
+                                    )}
+                                </>
                             )}
 
-                            {/* Create New Version Button - Only for Approved documents */}
-                            {document.status === 'approved' && can('documents', 'edit') && (
+                            {document.status === 'pending_review' && !isEditing && can('documents', 'approve') && (
+                                <>
+                                    <button
+                                        onClick={handleApprove}
+                                        disabled={actionLoading === 'approve'}
+                                        className={cn(
+                                            "min-h-[40px] w-full px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors inline-flex items-center justify-center gap-2 text-sm font-medium",
+                                            actionLoading === 'approve' && "opacity-50 cursor-not-allowed"
+                                        )}
+                                    >
+                                        <CheckCircleIcon className="w-4 h-4" />
+                                        اعتماد
+                                    </button>
+                                    <button
+                                        onClick={handleReject}
+                                        disabled={actionLoading === 'reject'}
+                                        className={cn(
+                                            "min-h-[40px] w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors inline-flex items-center justify-center gap-2 text-sm font-medium",
+                                            actionLoading === 'reject' && "opacity-50 cursor-not-allowed"
+                                        )}
+                                    >
+                                        <ExclamationCircleIcon className="w-4 h-4" />
+                                        رفض
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="hidden lg:flex items-center gap-2 min-w-max lg:min-w-0">
+                        {isEditing ? (
+                            <>
                                 <button
-                                    onClick={handleCreateNewVersion}
-                                    disabled={actionLoading === 'new_version'}
+                                    onClick={handleSaveContent}
+                                    disabled={actionLoading === 'save' || !hasUnsavedChanges}
                                     className={cn(
-                                        "px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 text-sm font-medium",
-                                        actionLoading === 'new_version' && "opacity-50 cursor-not-allowed"
+                                        "min-h-[40px] whitespace-nowrap px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center gap-2 text-sm font-medium",
+                                        (actionLoading === 'save' || !hasUnsavedChanges) && "opacity-50 cursor-not-allowed"
                                     )}
                                 >
-                                    <DocumentPlusIcon className="w-4 h-4" />
-                                    إصدار جديد
+                                    {actionLoading === 'save' ? 'جاري الحفظ...' : 'حفظ المسودة'}
                                 </button>
-                            )}
-                        </>
-                    )}
+                                <button
+                                    onClick={handleSubmitForReview}
+                                    disabled={actionLoading === 'submit'}
+                                    className={cn(
+                                        "min-h-[40px] whitespace-nowrap px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors flex items-center gap-2 text-sm font-medium",
+                                        actionLoading === 'submit' && "opacity-50 cursor-not-allowed"
+                                    )}
+                                >
+                                    <PaperAirplaneIcon className="w-4 h-4" />
+                                    إرسال للمراجعة
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                {can('documents', 'edit') && (
+                                    <button
+                                        onClick={() => setShowEditModal(true)}
+                                        className="min-h-[40px] min-w-[40px] p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors text-gray-600 dark:text-gray-400"
+                                        title="تعديل البيانات الأساسية"
+                                    >
+                                        <PencilIcon className="w-5 h-5" />
+                                    </button>
+                                )}
 
-                    {/* Approval Actions */}
-                    {document.status === 'pending_review' && !isEditing && can('documents', 'approve') && (
-                        <>
-                            <button
-                                onClick={handleApprove}
-                                disabled={actionLoading === 'approve'}
-                                className={cn(
-                                    "px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors flex items-center gap-2 text-sm font-medium",
-                                    actionLoading === 'approve' && "opacity-50 cursor-not-allowed"
+                                {document.status === 'approved' && can('documents', 'edit') && (
+                                    <button
+                                        onClick={handleCreateNewVersion}
+                                        disabled={actionLoading === 'new_version'}
+                                        className={cn(
+                                            "min-h-[40px] whitespace-nowrap px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 text-sm font-medium",
+                                            actionLoading === 'new_version' && "opacity-50 cursor-not-allowed"
+                                        )}
+                                    >
+                                        <DocumentPlusIcon className="w-4 h-4" />
+                                        إصدار جديد
+                                    </button>
                                 )}
-                            >
-                                <CheckCircleIcon className="w-4 h-4" />
-                                اعتماد
-                            </button>
-                            <button
-                                onClick={handleReject}
-                                disabled={actionLoading === 'reject'}
-                                className={cn(
-                                    "px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center gap-2 text-sm font-medium",
-                                    actionLoading === 'reject' && "opacity-50 cursor-not-allowed"
-                                )}
-                            >
-                                <ExclamationCircleIcon className="w-4 h-4" />
-                                رفض
-                            </button>
-                        </>
-                    )}
+                            </>
+                        )}
+
+                        {document.status === 'pending_review' && !isEditing && can('documents', 'approve') && (
+                            <>
+                                <button
+                                    onClick={handleApprove}
+                                    disabled={actionLoading === 'approve'}
+                                    className={cn(
+                                        "min-h-[40px] whitespace-nowrap px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors flex items-center gap-2 text-sm font-medium",
+                                        actionLoading === 'approve' && "opacity-50 cursor-not-allowed"
+                                    )}
+                                >
+                                    <CheckCircleIcon className="w-4 h-4" />
+                                    اعتماد
+                                </button>
+                                <button
+                                    onClick={handleReject}
+                                    disabled={actionLoading === 'reject'}
+                                    className={cn(
+                                        "min-h-[40px] whitespace-nowrap px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center gap-2 text-sm font-medium",
+                                        actionLoading === 'reject' && "opacity-50 cursor-not-allowed"
+                                    )}
+                                >
+                                    <ExclamationCircleIcon className="w-4 h-4" />
+                                    رفض
+                                </button>
+                            </>
+                        )}
+                    </div>
                 </div>
             </div>
 
             {/* Main Content Area */}
-            <div className="flex-1 overflow-hidden bg-gray-50 dark:bg-gray-900 flex">
+            <div className="flex-1 overflow-hidden bg-gray-50 dark:bg-gray-900 flex flex-col xl:flex-row">
 
                 {/* Editor / Viewer */}
                 <div className={
                     cn(
-                        "flex-1 relative bg-gray-100 dark:bg-gray-900 flex flex-col",
-                        isEditing ? "overflow-hidden p-0 min-h-0" : "overflow-auto p-6"
+                        "flex-1 min-w-0 relative bg-gray-100 dark:bg-gray-900 flex flex-col",
+                        isEditing ? "overflow-hidden p-0 min-h-0" : "overflow-auto p-3 sm:p-6"
                     )
                 }>
-                    <div className={cn("flex justify-center", isEditing && "h-full flex-1 min-h-0")}>
+                    {!isEditing && (
+                        <div className="xl:hidden mb-3 sm:mb-4 space-y-3">
+                            <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                                <button
+                                    onClick={() => setShowMobileDetails(prev => !prev)}
+                                    className="w-full px-4 py-3 flex items-center justify-between text-sm font-semibold text-gray-900 dark:text-white"
+                                >
+                                    <span>تفاصيل الوثيقة</span>
+                                    <ChevronDownIcon className={cn("w-4 h-4 transition-transform", showMobileDetails && "rotate-180")} />
+                                </button>
+                                {showMobileDetails && (
+                                    <div className="px-4 pb-4 space-y-3 text-sm border-t border-gray-100 dark:border-gray-700">
+                                        {metadataRows.map((row) => (
+                                            <div key={row.label} className="flex justify-between gap-3 pt-3">
+                                                <span className="text-gray-500">{row.label}:</span>
+                                                <span className="text-gray-900 dark:text-white font-medium text-left">{row.value}</span>
+                                            </div>
+                                        ))}
+                                        <div className="pt-3 border-t border-gray-100 dark:border-gray-700">
+                                            <span className="block text-gray-500 mb-1">الوصف:</span>
+                                            <p className="text-gray-900 dark:text-white leading-relaxed">{document.description || '-'}</p>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                                <button
+                                    onClick={() => setShowMobileVariables(prev => !prev)}
+                                    className="w-full px-4 py-3 flex items-center justify-between text-sm font-semibold text-gray-900 dark:text-white"
+                                >
+                                    <span>المتغيرات</span>
+                                    <ChevronDownIcon className={cn("w-4 h-4 transition-transform", showMobileVariables && "rotate-180")} />
+                                </button>
+                                {showMobileVariables && (
+                                    <div className="px-4 pb-4 border-t border-gray-100 dark:border-gray-700">
+                                        <DocumentVariables
+                                            documentId={document.id}
+                                            companyId={document.company_id}
+                                            canEdit={isDraft || can('documents', 'edit_after_approval')}
+                                        />
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                                <button
+                                    onClick={() => setShowVersions(prev => !prev)}
+                                    className="w-full px-4 py-3 flex items-center justify-between text-sm font-semibold text-gray-900 dark:text-white"
+                                >
+                                    <span>سجل الإصدارات ({versions.length})</span>
+                                    <ChevronDownIcon className={cn("w-4 h-4 transition-transform", showVersions && "rotate-180")} />
+                                </button>
+                                {showVersions && (
+                                    <div className="px-4 pb-4 border-t border-gray-100 dark:border-gray-700 space-y-2">
+                                        {versions.map((version) => (
+                                            <div key={version.id} className="text-sm p-3 rounded-lg bg-gray-50 dark:bg-gray-700/30 border border-gray-100 dark:border-gray-700">
+                                                <div className="flex items-center justify-between mb-1">
+                                                    <span className="font-medium text-gray-900 dark:text-white">v{version.version}</span>
+                                                    <span className="text-xs text-gray-500">{new Date(version.created_at).toLocaleDateString('ar-EG')}</span>
+                                                </div>
+                                                <p className="text-gray-600 dark:text-gray-400 text-xs line-clamp-2">
+                                                    {version.changes_summary || 'تحديث تلقائي'}
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className={cn("w-full flex justify-center", isEditing && "h-full flex-1 min-h-0")}>
                         {isEditing ? (
                             <div className="w-full h-full flex flex-col min-h-0">
                                 <TinyMCEDocumentEditor
@@ -631,10 +805,11 @@ export default function DocumentDetailsPage() {
                         ) : (
                             /* A4 Preview Container - Matching TinyMCE Editor Styling */
                             <div
-                                className="document-preview-container bg-white dark:bg-gray-800 shadow-lg"
+                                className="document-preview-container document-preview-shell w-full max-w-[210mm] bg-white dark:bg-gray-800 shadow-lg"
                                 dir="rtl"
                                 style={{
-                                    width: '210mm',
+                                    width: '100%',
+                                    maxWidth: '210mm',
                                     minHeight: '297mm',
                                     padding: '10mm', // Simulating @page margin
                                     boxSizing: 'border-box',
@@ -649,21 +824,26 @@ export default function DocumentDetailsPage() {
                                 }}
                             >
                                 {/* WYSIWYG Header - Matches Print Styles */}
-                                <div style={{
+                                <div
+                                    className="document-preview-meta-row document-preview-header-row"
+                                    style={{
                                     display: 'flex',
                                     justifyContent: 'space-between',
                                     alignItems: 'center',
+                                    flexWrap: 'wrap',
+                                    gap: '8px',
                                     padding: '10px 10mm',
                                     borderBottom: '2px solid #374151',
                                     marginBottom: '20px'
-                                }}>
+                                    }}
+                                >
                                     <span>رقم الوثيقة: {document.document_number || '---'}</span>
-                                    <span style={{ fontSize: '14px', fontWeight: 'bold' }}>{document.title || 'عنوان الوثيقة'}</span>
+                                    <span className="document-preview-title" style={{ fontSize: '14px', fontWeight: 'bold' }}>{document.title || 'عنوان الوثيقة'}</span>
                                     <span>الإصدار: {document.current_version || 1}</span>
                                 </div>
 
                                 {/* Content */}
-                                <div style={{ padding: '0 10mm', flex: 1 }}>
+                                <div className="document-preview-body" style={{ padding: '0 10mm', flex: 1 }}>
                                     {latestVersion?.content ? (
                                         <div
                                             className="preview-content"
@@ -683,17 +863,22 @@ export default function DocumentDetailsPage() {
 
 
                                 {/* WYSIWYG Footer - Matches Print Styles */}
-                                <div style={{
+                                <div
+                                    className="document-preview-meta-row document-preview-footer-row"
+                                    style={{
                                     display: 'flex',
                                     justifyContent: 'space-between',
                                     alignItems: 'center',
+                                    flexWrap: 'wrap',
+                                    gap: '8px',
                                     padding: '10px 10mm',
                                     borderTop: '2px solid #374151',
                                     marginTop: '20px',
                                     backgroundColor: 'white',
                                     fontSize: '14px',
                                     fontWeight: 'bold'
-                                }}>
+                                    }}
+                                >
                                     <span>{selectedCompany?.name || 'الشركة'}</span>
                                     <span>تاريخ الطباعة: {new Date().toLocaleDateString('ar-EG')}</span>
                                 </div>
@@ -711,18 +896,12 @@ export default function DocumentDetailsPage() {
                                 <div>
                                     <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">تفاصيل الوثيقة</h3>
                                     <div className="space-y-3 text-sm">
-                                        <div className="flex justify-between">
-                                            <span className="text-gray-500">النوع:</span>
-                                            <span className="text-gray-900 dark:text-white font-medium">{TYPE_LABELS[document.type]}</span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                            <span className="text-gray-500">القسم:</span>
-                                            <span className="text-gray-900 dark:text-white font-medium">{document.department?.name || '-'}</span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                            <span className="text-gray-500">التصنيف:</span>
-                                            <span className="text-gray-900 dark:text-white font-medium">{document.category || '-'}</span>
-                                        </div>
+                                        {metadataRows.map((row) => (
+                                            <div key={row.label} className="flex justify-between gap-3">
+                                                <span className="text-gray-500">{row.label}:</span>
+                                                <span className="text-gray-900 dark:text-white font-medium text-left">{row.value}</span>
+                                            </div>
+                                        ))}
                                         <div className="pt-2 border-t border-gray-100 dark:border-gray-700">
                                             <span className="block text-gray-500 mb-1">الوصف:</span>
                                             <p className="text-gray-900 dark:text-white leading-relaxed">{document.description || '-'}</p>

@@ -63,19 +63,28 @@ export function useSessionHealth(options: UseSessionHealthOptions = {}) {
 
         const checkPromise = (async (): Promise<boolean> => {
             try {
-                // FORCE LOGGING: Override debug flag for investigation
-                console.log('[SessionHealth] 🔍 Checking session health...');
+                if (debug) {
+                    console.log('[SessionHealth] 🔍 Checking session health...');
+                }
 
                 const { data: { session }, error } = await supabase.auth.getSession();
 
                 if (error) {
                     console.warn('[SessionHealth] ❌ Session error:', error.message);
+                    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                        if (debug) {
+                            console.log('[SessionHealth] Offline during session check, keeping current state');
+                        }
+                        return true;
+                    }
                     // ✅ FIXED: Don't override authStore state - let Supabase's onAuthStateChange handle it
                     return false;
                 }
 
                 if (!session) {
-                    console.log('[SessionHealth] ⚠️ No session found - Invalid');
+                    if (debug) {
+                        console.log('[SessionHealth] ⚠️ No session found - Invalid');
+                    }
                     // ✅ FIXED: Don't override authStore state - let Supabase's onAuthStateChange handle it
                     return false;
                 }
@@ -84,21 +93,33 @@ export function useSessionHealth(options: UseSessionHealthOptions = {}) {
                 const expiresAt = session.expires_at ? session.expires_at * 1000 : 0;
                 const timeUntilExpiry = expiresAt - Date.now();
 
-                console.log(`[SessionHealth] ℹ️ Session info: User=${session.user.id}, ExpiresIn=${Math.round(timeUntilExpiry / 1000)}s`);
+                if (debug) {
+                    console.log(`[SessionHealth] ℹ️ Session info: User=${session.user.id}, ExpiresIn=${Math.round(timeUntilExpiry / 1000)}s`);
+                }
 
                 if (expiresAt && timeUntilExpiry < TOKEN_REFRESH_THRESHOLD_MS) {
-                    console.log('[SessionHealth] ⏳ Token expiring soon, refreshing...');
+                    if (debug) {
+                        console.log('[SessionHealth] ⏳ Token expiring soon, refreshing...');
+                    }
 
                     const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
 
                     if (refreshError) {
                         console.warn('[SessionHealth] ❌ Token refresh failed:', refreshError.message);
+                        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                            if (debug) {
+                                console.log('[SessionHealth] Offline during token refresh, keeping current state');
+                            }
+                            return true;
+                        }
                         // ✅ FIXED: Don't override authStore state - let Supabase's onAuthStateChange handle it
                         return false;
                     }
 
                     if (refreshData.session) {
-                        console.log('[SessionHealth] ✅ Token refreshed successfully');
+                        if (debug) {
+                            console.log('[SessionHealth] ✅ Token refreshed successfully');
+                        }
                         useAuthStore.setState({ session: refreshData.session });
                     }
                 }
@@ -108,6 +129,12 @@ export function useSessionHealth(options: UseSessionHealthOptions = {}) {
 
             } catch (err) {
                 console.error('[SessionHealth] 💥 Unexpected error:', err);
+                if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                    if (debug) {
+                        console.log('[SessionHealth] Offline during unexpected error, keeping current state');
+                    }
+                    return true;
+                }
                 return false;
             }
         })();
@@ -150,6 +177,33 @@ export function useSessionHealth(options: UseSessionHealthOptions = {}) {
             }
         });
     }, [location.pathname, checkSessionHealth, navigate, skipPaths, debug, location]);
+
+    // Periodic health checks while staying on the same page (prevents long-idle stale sessions).
+    useEffect(() => {
+        if (skipPaths.some(path => location.pathname.startsWith(path))) {
+            return;
+        }
+
+        const intervalId = window.setInterval(() => {
+            if (document.visibilityState !== 'visible') {
+                return;
+            }
+
+            checkSessionHealth().then((isHealthy) => {
+                if (!isHealthy) {
+                    console.warn('[SessionHealth] 🚫 Periodic check failed, redirecting to login');
+                    navigate('/login', {
+                        state: { from: location, reason: 'session_invalid' },
+                        replace: true
+                    });
+                }
+            });
+        }, SESSION_CHECK_INTERVAL_MS);
+
+        return () => {
+            clearInterval(intervalId);
+        };
+    }, [checkSessionHealth, location, navigate, skipPaths]);
 
     return {
         /** Manually trigger a session health check */

@@ -27,6 +27,15 @@ interface SelectedBatch {
     quantity?: number;
 }
 
+type RecipeColumnKey =
+    | 'ingredient'
+    | 'quantity'
+    | 'unit'
+    | 'batch'
+    | 'productionDate'
+    | 'expiryDate'
+    | 'actions';
+
 const RecipeTraceabilityTable: React.FC<RecipeTraceabilityTableProps> = ({
     table,
     tableData,
@@ -37,6 +46,7 @@ const RecipeTraceabilityTable: React.FC<RecipeTraceabilityTableProps> = ({
     const [selectedRecipeId, setSelectedRecipeId] = useState<string>('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [isMobileViewport, setIsMobileViewport] = useState(false);
 
     // Batches state per ingredient
     const [availableBatches, setAvailableBatches] = useState<Record<string, MaterialBatch[]>>({});
@@ -48,6 +58,24 @@ const RecipeTraceabilityTable: React.FC<RecipeTraceabilityTableProps> = ({
     const allowMultipleBatches = table.features?.allow_multiple_batches !== false;
     const showExpiryWarning = table.features?.show_expiry_warning !== false;
     const expiryWarningDays = table.expiry_warning_days || 30;
+
+    // Track viewport size to activate mobile card layout.
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const mediaQuery = window.matchMedia('(max-width: 1023px)');
+        const handleViewportChange = () => setIsMobileViewport(mediaQuery.matches);
+
+        handleViewportChange();
+
+        if (typeof mediaQuery.addEventListener === 'function') {
+            mediaQuery.addEventListener('change', handleViewportChange);
+            return () => mediaQuery.removeEventListener('change', handleViewportChange);
+        }
+
+        mediaQuery.addListener(handleViewportChange);
+        return () => mediaQuery.removeListener(handleViewportChange);
+    }, []);
 
     // Load recipes when product changes
     useEffect(() => {
@@ -228,6 +256,31 @@ const RecipeTraceabilityTable: React.FC<RecipeTraceabilityTableProps> = ({
         }
     };
 
+    const allColumnKeys: RecipeColumnKey[] = allowMultipleBatches
+        ? ['ingredient', 'quantity', 'unit', 'batch', 'productionDate', 'expiryDate', 'actions']
+        : ['ingredient', 'quantity', 'unit', 'batch', 'productionDate', 'expiryDate'];
+
+    const columnLabels: Record<RecipeColumnKey, string> = {
+        ingredient: 'الخامة',
+        quantity: 'الكمية',
+        unit: 'الوحدة',
+        batch: 'رقم الباتش',
+        productionDate: 'تاريخ الإنتاج',
+        expiryDate: 'تاريخ الانتهاء',
+        actions: 'إجراءات',
+    };
+
+    const columnHeaderClass: Record<RecipeColumnKey, string> = {
+        ingredient: 'border border-gray-300 dark:border-gray-600 px-3 py-2 text-right text-sm font-medium print:w-[22%] print:text-[8px] print:px-1 print:py-1',
+        quantity: 'border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-sm font-medium w-24 print:w-[10%] print:text-[8px] print:px-1 print:py-1',
+        unit: 'border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-sm font-medium w-20 print:w-[8%] print:text-[8px] print:px-1 print:py-1',
+        batch: 'border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-sm font-medium print:w-[20%] print:text-[8px] print:px-1 print:py-1',
+        productionDate: 'border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-sm font-medium print:w-[18%] print:text-[8px] print:px-1 print:py-1',
+        expiryDate: 'border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-sm font-medium print:w-[18%] print:text-[8px] print:px-1 print:py-1',
+        actions: 'border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-sm font-medium w-20 print:hidden',
+    };
+
+
     if (!productId) {
         return (
             <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-lg p-4">
@@ -282,7 +335,7 @@ const RecipeTraceabilityTable: React.FC<RecipeTraceabilityTableProps> = ({
     return (
         <div className="space-y-4">
             {/* Recipe Selector */}
-            <div className="flex items-center gap-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
                 <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
                     اختر الوصفة:
                 </label>
@@ -307,7 +360,7 @@ const RecipeTraceabilityTable: React.FC<RecipeTraceabilityTableProps> = ({
                             <h5 className="font-medium text-blue-800 dark:text-blue-300 mb-2 text-sm">
                                 📋 خطوات الخلط ({selectedRecipe.mixing_steps.length} خطوات)
                             </h5>
-                            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                                 {selectedRecipe.mixing_steps.map((step, index) => (
                                     <div key={index} className="flex gap-2 p-2 bg-white dark:bg-gray-800 rounded border border-blue-100 dark:border-blue-800">
                                         <span className="flex-shrink-0 w-5 h-5 flex items-center justify-center bg-blue-500 text-white text-xs rounded-full font-bold">
@@ -331,29 +384,10 @@ const RecipeTraceabilityTable: React.FC<RecipeTraceabilityTableProps> = ({
                     )}
 
                     {/* Ingredients Table */}
-                    <div className="overflow-x-auto print-table-container">
-                        <table className="min-w-full border-collapse print:table-fixed print:w-full">
-                            <thead>
-                                <tr className="bg-gray-100 dark:bg-gray-700">
-                                    <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-right text-sm font-medium print:w-[22%] print:text-[8px] print:px-1 print:py-1">الخامة</th>
-                                    <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-sm font-medium w-24 print:w-[10%] print:text-[8px] print:px-1 print:py-1">الكمية</th>
-                                    <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-sm font-medium w-20 print:w-[8%] print:text-[8px] print:px-1 print:py-1">الوحدة</th>
-                                    <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-sm font-medium print:w-[20%] print:text-[8px] print:px-1 print:py-1">رقم الباتش</th>
-                                    <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-sm font-medium print:w-[18%] print:text-[8px] print:px-1 print:py-1">تاريخ الإنتاج</th>
-                                    <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-sm font-medium print:w-[18%] print:text-[8px] print:px-1 print:py-1">تاريخ الانتهاء</th>
-                                    {allowMultipleBatches && (
-                                        <th className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-sm font-medium w-20 print:hidden">إجراءات</th>
-                                    )}
-                                </tr>
-                            </thead>
-                            <tbody>
+                    <div className="space-y-2 print:space-y-0">
+                        {isMobileViewport && (
+                            <div className="space-y-3 print:hidden">
                                 {(() => {
-                                    // Debug logging
-                                    console.log('RecipeTable - selectedRecipe:', selectedRecipe?.name);
-                                    console.log('RecipeTable - ingredients:', selectedRecipe?.ingredients?.length || 0);
-                                    console.log('RecipeTable - tableData:', tableData?.length || 0);
-
-                                    // Use ingredients from selectedRecipe OR fallback to tableData
                                     const ingredients = selectedRecipe?.ingredients && selectedRecipe.ingredients.length > 0
                                         ? selectedRecipe.ingredients
                                         : tableData?.filter((row: any) => Array.isArray(row))?.map((row: any) => ({
@@ -365,16 +399,13 @@ const RecipeTraceabilityTable: React.FC<RecipeTraceabilityTableProps> = ({
 
                                     if (ingredients.length === 0) {
                                         return (
-                                            <tr>
-                                                <td colSpan={allowMultipleBatches ? 7 : 6} className="border border-gray-300 dark:border-gray-600 px-4 py-8 text-center text-gray-500">
-                                                    لا توجد مكونات في هذه الوصفة. يرجى إضافة مكونات للوصفة.
-                                                </td>
-                                            </tr>
+                                            <div className="rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-8 text-center text-sm text-gray-500">
+                                                لا توجد مكونات في هذه الوصفة. يرجى إضافة مكونات للوصفة.
+                                            </div>
                                         );
                                     }
 
                                     return ingredients.map((ingredient: any, ingIndex: number) => {
-                                        // Get batches array - if empty, provide a default empty batch slot
                                         const batchesFromData = tableData?.[ingIndex]?.[3];
                                         const ingredientBatches: SelectedBatch[] = (Array.isArray(batchesFromData) && batchesFromData.length > 0)
                                             ? batchesFromData
@@ -383,117 +414,277 @@ const RecipeTraceabilityTable: React.FC<RecipeTraceabilityTableProps> = ({
                                         const batches = rawMaterialId ? availableBatches[rawMaterialId] || [] : [];
                                         const isLoadingBatches = rawMaterialId ? loadingBatches[rawMaterialId] : false;
 
-                                        return ingredientBatches.map((selectedBatch, batchIdx) => (
-                                            <tr key={`${ingIndex}-${batchIdx}`} className="hover:bg-gray-50 dark:hover:bg-gray-750">
-                                                {/* Only show ingredient info on first row */}
-                                                {batchIdx === 0 ? (
-                                                    <>
+                                        return (
+                                            <div
+                                                key={ingIndex}
+                                                className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3 space-y-3"
+                                            >
+                                                <div className="flex items-start justify-between gap-2">
+                                                    <div className="min-w-0 space-y-1">
+                                                        <h6 className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                                                            {ingredient.ingredient_name}
+                                                        </h6>
+                                                        <div className="flex flex-wrap gap-1.5 text-[11px]">
+                                                            <span className="rounded-full bg-gray-100 dark:bg-gray-700 px-2 py-0.5 text-gray-700 dark:text-gray-200">
+                                                                الكمية: {ingredient.quantity ?? '-'}
+                                                            </span>
+                                                            <span className="rounded-full bg-gray-100 dark:bg-gray-700 px-2 py-0.5 text-gray-700 dark:text-gray-200">
+                                                                الوحدة: {ingredient.unit ?? '-'}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    {allowMultipleBatches && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleAddBatchSlot(ingIndex)}
+                                                            className="shrink-0 rounded-md border border-primary-200 dark:border-primary-800 bg-primary-50 dark:bg-primary-900/20 px-2 py-1 text-[11px] font-medium text-primary-700 dark:text-primary-300"
+                                                            title="إضافة باتش آخر"
+                                                        >
+                                                            + باتش
+                                                        </button>
+                                                    )}
+                                                </div>
+
+                                                <div className="space-y-2">
+                                                    {ingredientBatches.map((selectedBatch, batchIdx) => (
+                                                        <div
+                                                            key={`${ingIndex}-${batchIdx}`}
+                                                            className="rounded-md border border-gray-200 dark:border-gray-700 p-2.5 space-y-2"
+                                                        >
+                                                            <div className="flex items-center justify-between">
+                                                                <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400">
+                                                                    الباتش #{batchIdx + 1}
+                                                                </span>
+                                                                {allowMultipleBatches && ingredientBatches.length > 1 && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleRemoveBatch(ingIndex, batchIdx)}
+                                                                        className="text-[11px] font-medium text-red-600 dark:text-red-400"
+                                                                        title="حذف الباتش"
+                                                                    >
+                                                                        حذف
+                                                                    </button>
+                                                                )}
+                                                            </div>
+
+                                                            <div className="space-y-1">
+                                                                <label className="block text-[11px] font-medium text-gray-600 dark:text-gray-300">
+                                                                    رقم الباتش
+                                                                </label>
+                                                                <select
+                                                                    value={selectedBatch.receivingId || ''}
+                                                                    onChange={(e) => {
+                                                                        const batch = batches.find(b => b.id === e.target.value);
+                                                                        handleBatchSelect(ingIndex, batchIdx, batch || null);
+                                                                    }}
+                                                                    onFocus={() => {
+                                                                        if (rawMaterialId && !batches.length && !isLoadingBatches) {
+                                                                            loadBatchesForIngredient(ingredient);
+                                                                        }
+                                                                    }}
+                                                                    className="w-full min-h-[38px] px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700"
+                                                                >
+                                                                    <option value="">اختر الباتش...</option>
+                                                                    {isLoadingBatches && <option disabled>جاري التحميل...</option>}
+                                                                    {batches.map(batch => (
+                                                                        <option key={batch.id} value={batch.id}>
+                                                                            {batch.batchNumber} - {batch.supplierName}
+                                                                        </option>
+                                                                    ))}
+                                                                </select>
+                                                            </div>
+
+                                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                                <div className="rounded-md border border-gray-200 dark:border-gray-700 px-2 py-1.5">
+                                                                    <p className="text-[11px] text-gray-500 dark:text-gray-400">تاريخ الإنتاج</p>
+                                                                    <p className="text-xs text-gray-700 dark:text-gray-200 mt-0.5">
+                                                                        {selectedBatch.productionDate || '-'}
+                                                                    </p>
+                                                                </div>
+                                                                <div className={cn(
+                                                                    'rounded-md border px-2 py-1.5',
+                                                                    isExpired(selectedBatch.expiryDate)
+                                                                        ? 'border-red-300 dark:border-red-700 bg-red-100 dark:bg-red-900/30'
+                                                                        : isExpiryNear(selectedBatch.expiryDate)
+                                                                            ? 'border-amber-300 dark:border-amber-700 bg-amber-100 dark:bg-amber-900/30'
+                                                                            : 'border-gray-200 dark:border-gray-700'
+                                                                )}>
+                                                                    <p className="text-[11px] text-gray-500 dark:text-gray-400">تاريخ الانتهاء</p>
+                                                                    <p className={cn(
+                                                                        'text-xs mt-0.5',
+                                                                        isExpired(selectedBatch.expiryDate)
+                                                                            ? 'text-red-700 dark:text-red-300 font-medium'
+                                                                            : isExpiryNear(selectedBatch.expiryDate)
+                                                                                ? 'text-amber-700 dark:text-amber-300'
+                                                                                : 'text-gray-700 dark:text-gray-200'
+                                                                    )}>
+                                                                        {selectedBatch.expiryDate || '-'}
+                                                                        {selectedBatch.expiryDate && isExpired(selectedBatch.expiryDate) && ' ⚠️ منتهي'}
+                                                                        {selectedBatch.expiryDate && isExpiryNear(selectedBatch.expiryDate) && !isExpired(selectedBatch.expiryDate) && ' ⏰'}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        );
+                                    });
+                                })()}
+                            </div>
+                        )}
+                        <div className={cn('overflow-x-auto print-table-container', isMobileViewport && 'hidden')}>
+                            <table className="min-w-full border-collapse print:table-fixed print:w-full">
+                                <thead>
+                                    <tr className="bg-gray-100 dark:bg-gray-700">
+                                        {allColumnKeys.map((columnKey) => (
+                                            <th key={columnKey} className={columnHeaderClass[columnKey]}>
+                                                {columnLabels[columnKey]}
+                                            </th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {(() => {
+                                        // Use ingredients from selectedRecipe OR fallback to tableData
+                                        const ingredients = selectedRecipe?.ingredients && selectedRecipe.ingredients.length > 0
+                                            ? selectedRecipe.ingredients
+                                            : tableData?.filter((row: any) => Array.isArray(row))?.map((row: any) => ({
+                                                ingredient_name: row[0],
+                                                quantity: row[1],
+                                                unit: row[2],
+                                                material_id: null
+                                            })) || [];
+
+                                        if (ingredients.length === 0) {
+                                            return (
+                                                <tr>
+                                                    <td colSpan={allColumnKeys.length} className="border border-gray-300 dark:border-gray-600 px-4 py-8 text-center text-gray-500">
+                                                        لا توجد مكونات في هذه الوصفة. يرجى إضافة مكونات للوصفة.
+                                                    </td>
+                                                </tr>
+                                            );
+                                        }
+
+                                        return ingredients.map((ingredient: any, ingIndex: number) => {
+                                            // Get batches array - if empty, provide a default empty batch slot
+                                            const batchesFromData = tableData?.[ingIndex]?.[3];
+                                            const ingredientBatches: SelectedBatch[] = (Array.isArray(batchesFromData) && batchesFromData.length > 0)
+                                                ? batchesFromData
+                                                : [{ batchNumber: '', receivingId: '' }];
+                                            const rawMaterialId = ingredient.material_id;
+                                            const batches = rawMaterialId ? availableBatches[rawMaterialId] || [] : [];
+                                            const isLoadingBatches = rawMaterialId ? loadingBatches[rawMaterialId] : false;
+
+                                            return ingredientBatches.map((selectedBatch, batchIdx) => (
+                                                <tr key={`${ingIndex}-${batchIdx}`} className="hover:bg-gray-50 dark:hover:bg-gray-750">
+                                                    {batchIdx === 0 && (
                                                         <td
                                                             className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm font-medium"
                                                             rowSpan={ingredientBatches.length}
                                                         >
                                                             {ingredient.ingredient_name}
                                                         </td>
+                                                    )}
+                                                    {batchIdx === 0 && (
                                                         <td
                                                             className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-sm"
                                                             rowSpan={ingredientBatches.length}
                                                         >
                                                             {ingredient.quantity}
                                                         </td>
+                                                    )}
+                                                    {batchIdx === 0 && (
                                                         <td
                                                             className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-sm"
                                                             rowSpan={ingredientBatches.length}
                                                         >
                                                             {ingredient.unit}
                                                         </td>
-                                                    </>
-                                                ) : null}
-
-                                                {/* Batch Selection */}
-                                                <td className="border border-gray-300 dark:border-gray-600 px-2 py-1">
-                                                    <select
-                                                        value={selectedBatch.receivingId || ''}
-                                                        onChange={(e) => {
-                                                            const batch = batches.find(b => b.id === e.target.value);
-                                                            handleBatchSelect(ingIndex, batchIdx, batch || null);
-                                                        }}
-                                                        onFocus={() => {
-                                                            if (rawMaterialId && !batches.length && !isLoadingBatches) {
-                                                                loadBatchesForIngredient(ingredient);
-                                                            }
-                                                        }}
-                                                        className="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded dark:bg-gray-700"
-                                                    >
-                                                        <option value="">اختر الباتش...</option>
-                                                        {isLoadingBatches && <option disabled>جاري التحميل...</option>}
-                                                        {batches.map(batch => (
-                                                            <option key={batch.id} value={batch.id}>
-                                                                {batch.batchNumber} - {batch.supplierName}
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                </td>
-
-                                                {/* Production Date */}
-                                                <td className="border border-gray-300 dark:border-gray-600 px-2 py-1 text-center">
-                                                    {selectedBatch.productionDate ? (
-                                                        <span className="text-sm">{selectedBatch.productionDate}</span>
-                                                    ) : (
-                                                        <span className="text-xs text-gray-400">-</span>
                                                     )}
-                                                </td>
 
-                                                {/* Expiry Date */}
-                                                <td className={cn(
-                                                    "border border-gray-300 dark:border-gray-600 px-2 py-1 text-center",
-                                                    isExpired(selectedBatch.expiryDate) && "bg-red-100 dark:bg-red-900",
-                                                    isExpiryNear(selectedBatch.expiryDate) && !isExpired(selectedBatch.expiryDate) && "bg-amber-100 dark:bg-amber-900"
-                                                )}>
-                                                    {selectedBatch.expiryDate ? (
-                                                        <span className={cn(
-                                                            "text-sm",
-                                                            isExpired(selectedBatch.expiryDate) && "text-red-700 dark:text-red-300 font-medium",
-                                                            isExpiryNear(selectedBatch.expiryDate) && !isExpired(selectedBatch.expiryDate) && "text-amber-700 dark:text-amber-300"
-                                                        )}>
-                                                            {selectedBatch.expiryDate}
-                                                            {isExpired(selectedBatch.expiryDate) && " ⚠️ منتهي"}
-                                                            {isExpiryNear(selectedBatch.expiryDate) && !isExpired(selectedBatch.expiryDate) && " ⏰"}
-                                                        </span>
-                                                    ) : (
-                                                        <span className="text-xs text-gray-400">-</span>
-                                                    )}
-                                                </td>
+                                                    <td className="border border-gray-300 dark:border-gray-600 px-2 py-1">
+                                                        <select
+                                                            value={selectedBatch.receivingId || ''}
+                                                            onChange={(e) => {
+                                                                const batch = batches.find(b => b.id === e.target.value);
+                                                                handleBatchSelect(ingIndex, batchIdx, batch || null);
+                                                            }}
+                                                            onFocus={() => {
+                                                                if (rawMaterialId && !batches.length && !isLoadingBatches) {
+                                                                    loadBatchesForIngredient(ingredient);
+                                                                }
+                                                            }}
+                                                            className="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded dark:bg-gray-700"
+                                                        >
+                                                            <option value="">اختر الباتش...</option>
+                                                            {isLoadingBatches && <option disabled>جاري التحميل...</option>}
+                                                            {batches.map(batch => (
+                                                                <option key={batch.id} value={batch.id}>
+                                                                    {batch.batchNumber} - {batch.supplierName}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                    </td>
 
-                                                {/* Actions */}
-                                                {allowMultipleBatches && (
                                                     <td className="border border-gray-300 dark:border-gray-600 px-2 py-1 text-center">
-                                                        {batchIdx === ingredientBatches.length - 1 ? (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => handleAddBatchSlot(ingIndex)}
-                                                                className="text-primary-600 hover:text-primary-700 text-sm"
-                                                                title="إضافة باتش آخر"
-                                                            >
-                                                                +
-                                                            </button>
+                                                        {selectedBatch.productionDate ? (
+                                                            <span className="text-sm">{selectedBatch.productionDate}</span>
                                                         ) : (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => handleRemoveBatch(ingIndex, batchIdx)}
-                                                                className="text-red-600 hover:text-red-700 text-sm"
-                                                                title="حذف الباتش"
-                                                            >
-                                                                ✕
-                                                            </button>
+                                                            <span className="text-xs text-gray-400">-</span>
                                                         )}
                                                     </td>
-                                                )}
-                                            </tr>
-                                        ));
-                                    });
-                                })()}
-                            </tbody>
-                        </table>
+
+                                                    <td className={cn(
+                                                        "border border-gray-300 dark:border-gray-600 px-2 py-1 text-center",
+                                                        isExpired(selectedBatch.expiryDate) && "bg-red-100 dark:bg-red-900",
+                                                        isExpiryNear(selectedBatch.expiryDate) && !isExpired(selectedBatch.expiryDate) && "bg-amber-100 dark:bg-amber-900"
+                                                    )}>
+                                                        {selectedBatch.expiryDate ? (
+                                                            <span className={cn(
+                                                                "text-sm",
+                                                                isExpired(selectedBatch.expiryDate) && "text-red-700 dark:text-red-300 font-medium",
+                                                                isExpiryNear(selectedBatch.expiryDate) && !isExpired(selectedBatch.expiryDate) && "text-amber-700 dark:text-amber-300"
+                                                            )}>
+                                                                {selectedBatch.expiryDate}
+                                                                {isExpired(selectedBatch.expiryDate) && " ⚠️ منتهي"}
+                                                                {isExpiryNear(selectedBatch.expiryDate) && !isExpired(selectedBatch.expiryDate) && " ⏰"}
+                                                            </span>
+                                                        ) : (
+                                                            <span className="text-xs text-gray-400">-</span>
+                                                        )}
+                                                    </td>
+
+                                                    {allowMultipleBatches && (
+                                                        <td className="border border-gray-300 dark:border-gray-600 px-2 py-1 text-center">
+                                                            {batchIdx === ingredientBatches.length - 1 ? (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleAddBatchSlot(ingIndex)}
+                                                                    className="text-primary-600 hover:text-primary-700 text-sm"
+                                                                    title="إضافة باتش آخر"
+                                                                >
+                                                                    +
+                                                                </button>
+                                                            ) : (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleRemoveBatch(ingIndex, batchIdx)}
+                                                                    className="text-red-600 hover:text-red-700 text-sm"
+                                                                    title="حذف الباتش"
+                                                                >
+                                                                    ✕
+                                                                </button>
+                                                            )}
+                                                        </td>
+                                                    )}
+                                                </tr>
+                                            ));
+                                        });
+                                    })()}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
 
                     {/* Recipe Notes */}

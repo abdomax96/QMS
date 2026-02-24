@@ -203,31 +203,35 @@ const TaskDetailsPage: React.FC = () => {
     };
 
     return (
-        <div className="p-6 max-w-5xl mx-auto">
+        <div className="p-3 sm:p-4 lg:p-6 max-w-5xl mx-auto">
             {/* Header */}
-            <div className="flex items-center gap-4 mb-6">
-                <button
-                    onClick={() => navigate('/tasks')}
-                    className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
-                >
-                    <ArrowRightIcon className="w-5 h-5" />
-                </button>
-                <div className="flex-1">
-                    <div className="flex items-center gap-3">
-                        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">{task.title}</h1>
-                        {task.task_number && (
-                            <span className="text-sm text-gray-500 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded">
-                                #{task.task_number}
-                            </span>
-                        )}
-                    </div>
-                    <div className="flex items-center gap-3 mt-1 text-sm text-gray-500">
-                        {task.created_by_name && <span>أنشأها {task.created_by_name}</span>}
-                        <span>•</span>
-                        <span>{formatTimeAgo(task.created_at)}</span>
+            <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mb-6">
+                <div className="flex items-start gap-3 sm:gap-4 flex-1 min-w-0">
+                    <button
+                        onClick={() => navigate('/tasks')}
+                        className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg shrink-0"
+                    >
+                        <ArrowRightIcon className="w-5 h-5" />
+                    </button>
+                    <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                            <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white break-words">
+                                {task.title}
+                            </h1>
+                            {task.task_number && (
+                                <span className="text-xs sm:text-sm text-gray-500 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded">
+                                    #{task.task_number}
+                                </span>
+                            )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-1 text-xs sm:text-sm text-gray-500">
+                            {task.created_by_name && <span>أنشأها {task.created_by_name}</span>}
+                            {task.created_by_name && <span className="hidden sm:inline">•</span>}
+                            <span>{formatTimeAgo(task.created_at)}</span>
+                        </div>
                     </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 sm:self-start">
                     <button
                         onClick={() => setShowDeleteConfirm(true)}
                         className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 rounded-lg"
@@ -259,7 +263,7 @@ const TaskDetailsPage: React.FC = () => {
                     />
 
                     {/* Description */}
-                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 sm:p-6">
                         <h3 className="font-semibold text-gray-900 dark:text-white mb-3">الوصف</h3>
                         <p className="text-gray-600 dark:text-gray-400 whitespace-pre-wrap">
                             {task.description || 'لا يوجد وصف'}
@@ -267,7 +271,7 @@ const TaskDetailsPage: React.FC = () => {
                     </div>
 
                     {/* Checklist */}
-                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 sm:p-6">
                         <div className="flex items-center justify-between mb-4">
                             <h3 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2">
                                 <CheckCircleIcon className="w-5 h-5" />
@@ -309,7 +313,7 @@ const TaskDetailsPage: React.FC = () => {
                                     </span>
                                     <button
                                         onClick={() => handleRemoveChecklistItem(item.id)}
-                                        className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+                                        className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
                                     >
                                         <XMarkIcon className="w-4 h-4" />
                                     </button>
@@ -318,7 +322,7 @@ const TaskDetailsPage: React.FC = () => {
                         </div>
 
                         {/* Add Checklist Item */}
-                        <div className="flex gap-2">
+                        <div className="flex flex-col sm:flex-row gap-2">
                             <input
                                 type="text"
                                 value={newChecklistItem}
@@ -329,7 +333,7 @@ const TaskDetailsPage: React.FC = () => {
                             />
                             <button
                                 onClick={handleAddChecklistItem}
-                                className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+                                className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 sm:w-auto"
                             >
                                 <PlusIcon className="w-5 h-5" />
                             </button>
@@ -337,7 +341,7 @@ const TaskDetailsPage: React.FC = () => {
                     </div>
 
                     {/* Comments */}
-                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 sm:p-6">
                         <h3 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2 mb-4">
                             <ChatBubbleLeftIcon className="w-5 h-5" />
                             التعليقات ({comments.length})
@@ -351,7 +355,7 @@ const TaskDetailsPage: React.FC = () => {
                                         {(comment.author_name || '؟').split(' ').map(n => n[0]).join('').slice(0, 2)}
                                     </div>
                                     <div className="flex-1">
-                                        <div className="flex items-center gap-2 mb-1">
+                                        <div className="flex flex-wrap items-center gap-2 mb-1">
                                             <span className="font-medium text-gray-900 dark:text-white">{comment.author_name || 'مجهول'}</span>
                                             <span className="text-xs text-gray-500">{formatTimeAgo(comment.created_at)}</span>
                                             {comment.edited && (
@@ -384,7 +388,7 @@ const TaskDetailsPage: React.FC = () => {
                                     <button
                                         onClick={handleAddComment}
                                         disabled={!newComment.trim()}
-                                        className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+                                        className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 w-full sm:w-auto"
                                     >
                                         إرسال
                                     </button>
@@ -395,14 +399,14 @@ const TaskDetailsPage: React.FC = () => {
 
                     {/* Stage History */}
                     {stageHistory.length > 0 && (
-                        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+                        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 sm:p-6">
                             <h3 className="font-semibold text-gray-900 dark:text-white mb-4">سجل المراحل</h3>
                             <div className="space-y-3">
                                 {stageHistory.map((entry) => (
                                     <div key={entry.id} className="flex items-start gap-3 text-sm">
                                         <div className="w-2 h-2 rounded-full bg-primary-500 mt-2 shrink-0"></div>
                                         <div className="flex-1">
-                                            <div className="flex items-center gap-2">
+                                            <div className="flex flex-wrap items-center gap-2">
                                                 <span className="font-medium text-gray-700 dark:text-gray-300">
                                                     {entry.changed_by_name || 'النظام'}
                                                 </span>
@@ -590,10 +594,10 @@ const TaskDetailsPage: React.FC = () => {
             {/* Delete Confirmation Modal */}
             {showDeleteConfirm && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-                    <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-sm w-full">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl p-4 sm:p-6 max-w-sm w-full">
                         <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">حذف المهمة</h3>
                         <p className="text-gray-600 dark:text-gray-400 mb-6">هل أنت متأكد من حذف هذه المهمة؟ لا يمكن التراجع عن هذا الإجراء.</p>
-                        <div className="flex gap-3 justify-end">
+                        <div className="flex flex-col-reverse sm:flex-row gap-3 justify-end">
                             <button
                                 onClick={() => setShowDeleteConfirm(false)}
                                 className="px-4 py-2 text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"

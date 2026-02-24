@@ -58,16 +58,17 @@ const StaticTabs: React.FC<StaticTabsProps> = ({
 }) => {
     return (
         <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-            <div className="overflow-x-auto">
-                <div className="flex px-4">
+            <div className="overflow-x-auto overscroll-x-contain">
+                <div className="flex w-max min-w-full gap-1 px-2 sm:px-4 sm:gap-2 snap-x snap-mandatory">
                     {tabs.map((tab) => (
                         <button
                             key={tab.id}
                             onClick={() => onTabChange(tab.id)}
+                            aria-current={activeTab === tab.id ? 'page' : undefined}
                             className={cn(
-                                'flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors',
+                                'snap-start min-h-[42px] flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-medium whitespace-nowrap border-b-2 rounded-t-md transition-colors',
                                 activeTab === tab.id
-                                    ? 'border-primary-600 text-primary-600 dark:text-primary-400 dark:border-primary-400'
+                                    ? 'border-primary-600 text-primary-600 dark:text-primary-400 dark:border-primary-400 bg-primary-50/70 dark:bg-primary-900/20'
                                     : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:border-gray-300'
                             )}
                         >

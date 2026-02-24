@@ -11,15 +11,40 @@
  * @date 2026-01-22
  */
 
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { cn } from '../../utils';
 import type { PresenceUser } from '../../services/realtimeCollaborationService';
+import type { CollaborationConnectionStatus } from '../../hooks/useFormCollaboration';
+
+export interface CollaborationActivityItem {
+    id: string;
+    changedByName: string;
+    changedAt: string;
+    scope: 'cell' | 'table_notes' | 'basic_field' | 'section' | 'other';
+    description: string;
+    details?: string;
+    sectionId?: string | null;
+    tableId?: string | null;
+    rowIndex?: number | null;
+    colIndex?: number | null;
+    changePath?: string[] | null;
+}
 
 interface CollaborationPanelProps {
     /** List of active users */
     activeUsers: PresenceUser[];
     /** Connection status */
     isConnected: boolean;
+    /** Detailed connection status */
+    connectionStatus?: CollaborationConnectionStatus;
+    /** Retry count */
+    reconnectAttempt?: number;
+    /** Trigger immediate reconnect */
+    onReconnect?: () => void;
+    /** Recent collaboration activity */
+    activityItems?: CollaborationActivityItem[];
+    /** Handle click on activity item (navigate to change location) */
+    onActivityItemClick?: (item: CollaborationActivityItem) => void;
     /** CSS class name */
     className?: string;
 }
@@ -30,129 +55,234 @@ interface CollaborationPanelProps {
 export function CollaborationPanel({
     activeUsers,
     isConnected,
+    connectionStatus: _connectionStatus,
+    reconnectAttempt: _reconnectAttempt = 0,
+    onReconnect: _onReconnect,
+    activityItems = [],
+    onActivityItemClick,
     className,
 }: CollaborationPanelProps) {
-    // Don't show if not connected and no users
-    if (!isConnected && activeUsers.length === 0) {
+    const [isActivityVisible, setIsActivityVisible] = useState(false);
+
+    const uniqueActiveUsers = useMemo(() => {
+        const byUser = new Map<string, PresenceUser>();
+
+        activeUsers.forEach((user, index) => {
+            const userId = String(user?.user_id || '').trim();
+            const fallbackKey = `anon:${index}`;
+            const key = userId || fallbackKey;
+            const existing = byUser.get(key);
+
+            if (!existing) {
+                byUser.set(key, user);
+                return;
+            }
+
+            const existingTs = Date.parse(existing.joined_at || '');
+            const nextTs = Date.parse(user.joined_at || '');
+            if (!Number.isNaN(nextTs) && (Number.isNaN(existingTs) || nextTs > existingTs)) {
+                byUser.set(key, user);
+            }
+        });
+
+        return Array.from(byUser.values());
+    }, [activeUsers]);
+
+    useEffect(() => {
+        if (activityItems.length === 0 && isActivityVisible) {
+            setIsActivityVisible(false);
+        }
+    }, [activityItems.length, isActivityVisible]);
+
+    // Don't show if no signal to display
+    if (!isConnected && uniqueActiveUsers.length === 0 && activityItems.length === 0) {
         return null;
     }
 
     return (
         <div
             className={cn(
-                'fixed top-20 left-4 z-50 max-w-xs',
+                'relative z-20 w-full max-w-xs px-3 pt-2 pb-1',
                 'print:hidden',
                 className
             )}
         >
-            {/* Connection Status Badge */}
-            <div
-                className={cn(
-                    'mb-2 px-3 py-1.5 rounded-full text-xs font-medium shadow-sm',
-                    'flex items-center gap-2 w-fit',
-                    isConnected
-                        ? 'bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-700'
-                        : 'bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700'
-                )}
-            >
-                <span
-                    className={cn(
-                        'w-2 h-2 rounded-full',
-                        isConnected ? 'bg-green-500 animate-pulse' : 'bg-gray-400'
-                    )}
-                />
-                <span>{isConnected ? 'متصل' : 'غير متصل'}</span>
-            </div>
+            {(uniqueActiveUsers.length > 0 || activityItems.length > 0) && (
+                <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="flex items-center min-w-0">
+                        {uniqueActiveUsers.slice(0, 8).map((user, index) => (
+                            <div
+                                key={`${user.user_id || 'user'}:${user.joined_at || index}:${index}`}
+                                className={cn(
+                                    'relative group',
+                                    index > 0 && '-ml-1.5 sm:-ml-2'
+                                )}
+                            >
+                                <div
+                                    className={cn(
+                                        'w-8 h-8 sm:w-10 sm:h-10 rounded-full border-2 border-white dark:border-gray-900 shadow-sm',
+                                        'overflow-hidden bg-gray-100 dark:bg-gray-700 flex items-center justify-center'
+                                    )}
+                                    title={user.user_name || 'مستخدم'}
+                                >
+                                    {user.user_avatar ? (
+                                        <img
+                                            src={user.user_avatar}
+                                            alt={user.user_name || 'User avatar'}
+                                            className="w-full h-full object-cover"
+                                            loading="lazy"
+                                        />
+                                    ) : (
+                                        <div
+                                            className={cn(
+                                                'w-full h-full flex items-center justify-center text-white text-[10px] sm:text-xs font-bold',
+                                                'bg-gradient-to-br',
+                                                getAvatarColor(index)
+                                            )}
+                                        >
+                                            {getInitials(user.user_name || 'مستخدم')}
+                                        </div>
+                                    )}
+                                </div>
 
-            {/* Active Users List */}
-            {activeUsers.length > 0 && (
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-                    {/* Header */}
-                    <div className="px-4 py-2 bg-gray-50 dark:bg-gray-750 border-b border-gray-200 dark:border-gray-700">
-                        <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                                <div
+                                    className={cn(
+                                        'pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2',
+                                        'px-2 py-1 rounded-md text-[11px] whitespace-nowrap',
+                                        'bg-gray-900 text-white shadow-lg',
+                                        'opacity-0 group-hover:opacity-100 transition-opacity duration-150'
+                                    )}
+                                >
+                                    {user.user_name || 'مستخدم'}
+                                </div>
+                            </div>
+                        ))}
+
+                        {uniqueActiveUsers.length > 8 && (
+                            <div
+                                className={cn(
+                                    'relative -ml-1.5 sm:-ml-2 w-8 h-8 sm:w-10 sm:h-10 rounded-full border-2 border-white dark:border-gray-900',
+                                    'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200',
+                                    'text-[10px] sm:text-xs font-bold flex items-center justify-center shadow-sm'
+                                )}
+                                title={`+${uniqueActiveUsers.length - 8} مستخدم`}
+                            >
+                                +{uniqueActiveUsers.length - 8}
+                            </div>
+                        )}
+                    </div>
+
+                    {activityItems.length > 0 && (
+                        <button
+                            type="button"
+                            onClick={() => setIsActivityVisible((prev) => !prev)}
+                            title={isActivityVisible ? 'إخفاء آخر التعديلات' : 'إظهار آخر التعديلات'}
+                            className={cn(
+                                'w-8 h-8 rounded-full border shadow-sm shrink-0',
+                                'flex items-center justify-center transition-colors',
+                                'bg-white dark:bg-gray-800',
+                                'border-gray-200 dark:border-gray-700',
+                                'text-gray-600 dark:text-gray-300',
+                                'hover:bg-gray-50 dark:hover:bg-gray-700'
+                            )}
+                        >
                             <svg
-                                className="w-4 h-4 text-blue-500"
+                                className="w-4 h-4"
                                 fill="none"
                                 stroke="currentColor"
                                 viewBox="0 0 24 24"
+                                strokeWidth={2}
                             >
                                 <path
                                     strokeLinecap="round"
                                     strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
+                                    d="M12 8v4l2.5 2.5M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                                 />
                             </svg>
-                            <span>المتعاونون ({activeUsers.length})</span>
+                        </button>
+                    )}
+                </div>
+            )}
+
+            {activityItems.length > 0 && isActivityVisible && (
+                <div className="absolute left-0 top-full mt-1 min-w-[280px] max-w-[90vw] bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden z-50">
+                    <div className="px-4 py-2 bg-gray-50 dark:bg-gray-750 border-b border-gray-200 dark:border-gray-700">
+                        <h3 className="text-sm font-bold text-gray-900 dark:text-white">
+                            آخر التعديلات
                         </h3>
                     </div>
-
-                    {/* Users List */}
-                    <div className="max-h-64 overflow-y-auto">
-                        {activeUsers.map((user, index) => (
-                            <div
-                                key={user.user_id}
-                                className={cn(
-                                    'px-4 py-3 flex items-center gap-3',
-                                    'hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors',
-                                    index !== activeUsers.length - 1 &&
-                                    'border-b border-gray-100 dark:border-gray-700'
-                                )}
-                            >
-                                {/* Avatar */}
-                                <div
-                                    className={cn(
-                                        'w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold',
-                                        'bg-gradient-to-br',
-                                        getAvatarColor(index)
-                                    )}
-                                    title={user.user_name}
-                                >
-                                    {getInitials(user.user_name)}
-                                </div>
-
-                                {/* User Info */}
-                                <div className="flex-1 min-w-0">
-                                    <div className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                                        {user.user_name}
-                                    </div>
-                                    {user.current_cell && (
-                                        <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1 mt-0.5">
-                                            <svg
-                                                className="w-3 h-3"
-                                                fill="none"
-                                                stroke="currentColor"
-                                                viewBox="0 0 24 24"
-                                            >
-                                                <path
-                                                    strokeLinecap="round"
-                                                    strokeLinejoin="round"
-                                                    strokeWidth={2}
-                                                    d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
-                                                />
-                                            </svg>
-                                            <span>
-                                                يحرر: {user.current_cell.tableId}[
-                                                {user.current_cell.rowIndex},{user.current_cell.colIndex}
-                                                ]
+                    <div className="max-h-56 overflow-y-auto">
+                        {activityItems.map((item, index) => (
+                            (() => {
+                                const isNavigable =
+                                    Boolean(onActivityItemClick) && isNavigableActivityItem(item);
+                                const content = (
+                                    <>
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="font-medium text-gray-900 dark:text-white truncate">
+                                                {item.changedByName}
+                                            </span>
+                                            <span className="text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                                                {formatTime(item.changedAt)}
                                             </span>
                                         </div>
-                                    )}
-                                    {!user.current_cell && (
-                                        <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                                            يشاهد
+                                        <div className="mt-1 text-gray-600 dark:text-gray-300">
+                                            {item.description}
                                         </div>
-                                    )}
-                                </div>
+                                        {item.details && (
+                                            <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400" dir="ltr">
+                                                {item.details}
+                                            </div>
+                                        )}
+                                    </>
+                                );
+                                const rowClassName = cn(
+                                    'px-4 py-2.5 text-xs w-full text-right',
+                                    index !== activityItems.length - 1 &&
+                                        'border-b border-gray-100 dark:border-gray-700',
+                                    isNavigable &&
+                                        'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/60 transition-colors'
+                                );
 
-                                {/* Online Indicator */}
-                                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                            </div>
+                                if (isNavigable) {
+                                    return (
+                                        <button
+                                            key={item.id}
+                                            type="button"
+                                            onClick={() => onActivityItemClick?.(item)}
+                                            className={rowClassName}
+                                            title="الانتقال إلى الخلية المعدلة"
+                                        >
+                                            {content}
+                                        </button>
+                                    );
+                                }
+
+                                return (
+                                    <div key={item.id} className={rowClassName}>
+                                        {content}
+                                    </div>
+                                );
+                            })()
                         ))}
                     </div>
                 </div>
             )}
         </div>
+    );
+}
+
+function isNavigableActivityItem(item: CollaborationActivityItem): boolean {
+    return (
+        item.scope === 'cell' &&
+        Boolean(item.sectionId) &&
+        Boolean(item.tableId) &&
+        typeof item.rowIndex === 'number' &&
+        Number.isInteger(item.rowIndex) &&
+        item.rowIndex >= 0 &&
+        typeof item.colIndex === 'number' &&
+        Number.isInteger(item.colIndex) &&
+        item.colIndex >= 0
     );
 }
 
@@ -182,6 +312,22 @@ function getAvatarColor(index: number): string {
         'from-red-500 to-red-600',
     ];
     return colors[index % colors.length];
+}
+
+function formatTime(isoString: string): string {
+    if (!isoString) {
+        return '--:--';
+    }
+
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) {
+        return '--:--';
+    }
+
+    return date.toLocaleTimeString('ar-EG', {
+        hour: '2-digit',
+        minute: '2-digit',
+    });
 }
 
 export default CollaborationPanel;

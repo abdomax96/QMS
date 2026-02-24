@@ -15,6 +15,7 @@ import {
     ArchiveBoxIcon,
     ShareIcon,
     InformationCircleIcon,
+    ArrowDownTrayIcon,
 } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import { cn } from '../../utils';
@@ -234,6 +235,7 @@ export const getTemplateMenuItems = (
         onCut: () => void;
         onCopy: () => void;
         onDuplicate: () => void;
+        onExport?: () => void;
         onDelete: () => void;
         onAddToFavorites?: () => void;
     },
@@ -283,6 +285,12 @@ export const getTemplateMenuItems = (
             icon: <DocumentDuplicateIcon className="w-4 h-4" />,
             onClick: handlers.onDuplicate,
         },
+        ...(handlers.onExport ? [{
+            id: 'export',
+            label: 'تصدير',
+            icon: <ArrowDownTrayIcon className="w-4 h-4" />,
+            onClick: handlers.onExport,
+        }] : []),
         {
             id: 'divider2',
             label: '',

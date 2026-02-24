@@ -27,7 +27,7 @@ export const FolderGrid = () => {
             <div className="bg-white border-b px-6 py-4 flex items-center justify-between sticky top-0 z-10">
                 <div className="flex items-center space-x-reverse space-x-2 text-sm text-gray-600">
                     <button
-                        onClick={() => navigate('/folders')}
+                        onClick={() => navigate('/forms&reports')}
                         className={`hover:text-blue-600 transition-colors ${!currentFolderId ? 'font-bold text-gray-900' : ''}`}
                     >
                         الرئيسية

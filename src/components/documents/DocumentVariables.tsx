@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { PlusIcon, TrashIcon, CalculatorIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, TrashIcon, CalculatorIcon, ClipboardDocumentIcon, CheckIcon } from '@heroicons/react/24/outline';
 import { variableService } from '../../services/variableService';
 import type { DocumentVariable } from '../../types/variables';
 import { useToastStore } from '../../store/toastStore';
@@ -14,6 +14,7 @@ const DocumentVariables: React.FC<DocumentVariablesProps> = ({ documentId, compa
     const [variables, setVariables] = useState<DocumentVariable[]>([]);
     const [loading, setLoading] = useState(true);
     const [isAdding, setIsAdding] = useState(false);
+    const [copiedVariableName, setCopiedVariableName] = useState<string | null>(null);
     const [newVariable, setNewVariable] = useState({ name: '', value: '', unit: '' });
     const { addToast } = useToastStore();
 
@@ -75,7 +76,19 @@ const DocumentVariables: React.FC<DocumentVariablesProps> = ({ documentId, compa
         }
     };
 
-    if (loading) return <div className="animate-pulse h-20 bg-gray-100 rounded-lg"></div>;
+    const handleCopyVariable = async (name: string) => {
+        const variableToken = `{Global:${name}}`;
+        try {
+            await navigator.clipboard.writeText(variableToken);
+            setCopiedVariableName(name);
+            setTimeout(() => setCopiedVariableName((current) => (current === name ? null : current)), 1200);
+        } catch (error) {
+            console.error('Error copying variable token:', error);
+            addToast({ type: 'error', message: 'تعذر نسخ المتغير' });
+        }
+    };
+
+    if (loading) return <div className="animate-pulse h-20 bg-gray-100 dark:bg-gray-700/50 rounded-lg"></div>;
 
     return (
         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -98,26 +111,43 @@ const DocumentVariables: React.FC<DocumentVariablesProps> = ({ documentId, compa
                 )}
 
                 {variables.map((v) => (
-                    <div key={v.id} className="p-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                        <div>
-                            <div className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
-                                <span className="select-all cursor-pointer font-mono text-xs bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded" title="انقر للنسخ">
-                                    {`{global:${v.name}}`}
-                                </span>
+                    <div key={v.id} className="p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                            <div className="min-w-0">
+                                <div className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
+                                    <span className="select-all cursor-pointer font-mono text-xs bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded break-all" title="صيغة المتغير">
+                                        {`{Global:${v.name}}`}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleCopyVariable(v.name)}
+                                        className="min-h-[30px] min-w-[30px] p-1 rounded-md text-slate-500 hover:text-primary-600 hover:bg-slate-100 dark:hover:bg-slate-700"
+                                        title="نسخ المتغير"
+                                    >
+                                        {copiedVariableName === v.name ? (
+                                            <CheckIcon className="w-4 h-4 text-emerald-600" />
+                                        ) : (
+                                            <ClipboardDocumentIcon className="w-4 h-4" />
+                                        )}
+                                    </button>
+                                </div>
+                                <div className="text-sm text-gray-500 mt-1">
+                                    <span className="font-semibold text-primary-600 break-words">{v.value}</span>
+                                    {v.unit && <span className="text-xs text-gray-400 ms-1">{v.unit}</span>}
+                                </div>
                             </div>
-                            <div className="text-sm text-gray-500 mt-1">
-                                <span className="font-semibold text-primary-600">{v.value}</span>
-                                {v.unit && <span className="text-xs text-gray-400 ms-1">{v.unit}</span>}
-                            </div>
+                            {canEdit && (
+                                <div className="flex justify-end sm:justify-start">
+                                    <button
+                                        onClick={() => handleDelete(v.id, v.name)}
+                                        className="min-h-[36px] px-3 sm:px-2 p-1.5 text-sm text-red-600 sm:text-gray-400 hover:text-red-500 bg-red-50 sm:bg-transparent hover:bg-red-100 sm:hover:bg-red-50 dark:bg-red-900/20 sm:dark:bg-transparent dark:hover:bg-red-900/30 rounded-lg transition-colors inline-flex items-center gap-1.5"
+                                    >
+                                        <TrashIcon className="w-4 h-4" />
+                                        <span className="sm:hidden">حذف</span>
+                                    </button>
+                                </div>
+                            )}
                         </div>
-                        {canEdit && (
-                            <button
-                                onClick={() => handleDelete(v.id, v.name)}
-                                className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-                            >
-                                <TrashIcon className="w-4 h-4" />
-                            </button>
-                        )}
                     </div>
                 ))}
 
@@ -131,7 +161,7 @@ const DocumentVariables: React.FC<DocumentVariablesProps> = ({ documentId, compa
                                 value={newVariable.name}
                                 onChange={(e) => setNewVariable({ ...newVariable, name: e.target.value.replace(/\s+/g, '_') })}
                             />
-                            <div className="flex gap-2">
+                            <div className="flex flex-col sm:flex-row gap-2">
                                 <input
                                     type="text"
                                     placeholder="القيمة"
@@ -142,7 +172,7 @@ const DocumentVariables: React.FC<DocumentVariablesProps> = ({ documentId, compa
                                 <input
                                     type="text"
                                     placeholder="الوحدة"
-                                    className="w-16 text-xs px-2 py-1.5 rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-700 focus:ring-1 focus:ring-primary-500"
+                                    className="w-full sm:w-20 text-xs px-2 py-1.5 rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-700 focus:ring-1 focus:ring-primary-500"
                                     value={newVariable.unit}
                                     onChange={(e) => setNewVariable({ ...newVariable, unit: e.target.value })}
                                 />
@@ -150,13 +180,13 @@ const DocumentVariables: React.FC<DocumentVariablesProps> = ({ documentId, compa
                             <div className="flex justify-end gap-2 mt-2">
                                 <button
                                     onClick={() => setIsAdding(false)}
-                                    className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700"
+                                    className="min-h-[36px] px-3 py-1 text-xs text-gray-500 hover:text-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
                                 >
                                     إلغاء
                                 </button>
                                 <button
                                     onClick={handleAdd}
-                                    className="px-2 py-1 text-xs bg-primary-600 text-white rounded hover:bg-primary-700"
+                                    className="min-h-[36px] px-3 py-1 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700"
                                 >
                                     حفظ
                                 </button>

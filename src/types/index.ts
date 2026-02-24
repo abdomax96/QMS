@@ -169,6 +169,7 @@ export type CellDataType =
   | 'boolean-check'  // ✔ مقبول / ✖ مرفوض
   | 'boolean-yesno'  // نعم / لا
   | 'dropdown'       // قائمة منسدلة
+  | 'user-directory' // دليل المستخدمين
   | 'image'          // صورة
   | 'long-text';     // نص طويل
 
@@ -182,6 +183,8 @@ export interface TableParameter {
   unit?: string;
   critical_level?: 'ccp' | 'oprp' | 'normal';
   options?: string[]; // For dropdown type
+  user_directory_department_id?: string;
+  user_directory_role_id?: string;
   default_value?: any;
   formula?: string; // معادلة حسابية، مثل: "{معلمة2} * {ثابت1}" أو "{جدول1.معلمة1} + {جدول2.معلمة3}"
   is_calculated?: boolean; // هل هذه معلمة محسوبة تلقائياً
@@ -197,12 +200,25 @@ export interface TableColumn {
   max?: number | string;
   step?: number | string;
   options?: string[];
+  user_directory_department_id?: string;
+  user_directory_role_id?: string;
   compute?: string;
   width?: number;
+  align?: 'right' | 'center' | 'left';
   required?: boolean;
   default_value?: any;
   format?: string; // تنسيق التاريخ/الوقت
   enable_abc_logic?: boolean; // تفعيل منطق التقييم ABC
+}
+
+export interface TableHeaderCell {
+  label: string;
+  col_span?: number;
+  row_span?: number;
+  align?: 'right' | 'center' | 'left';
+  background_color?: string;
+  text_color?: string;
+  class_name?: string;
 }
 
 export interface TableFeatures {
@@ -247,7 +263,9 @@ export interface Table {
     max?: number;
   };
   features?: TableFeatures;
-  header_rows?: any[][];
+  header_rows?: TableHeaderCell[][];
+  show_row_numbers?: boolean;
+  row_header_label?: string;
   sections?: Array<{ title: string; rows: number }>;
   items?: ChecklistItem[];
   ingredients?: RecipeItem[];

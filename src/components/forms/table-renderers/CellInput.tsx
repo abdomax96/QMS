@@ -169,6 +169,22 @@ const CellInput: React.FC<CellInputProps> = ({
                 </select>
             );
 
+        case 'user-directory':
+            return (
+                <select
+                    value={value ?? ''}
+                    onChange={(e) => onChange(e.target.value || undefined)}
+                    {...commonProps}
+                >
+                    <option value="">اختر مستخدم...</option>
+                    {(dropdownOptions || []).map((opt) => (
+                        <option key={opt} value={opt}>
+                            {opt}
+                        </option>
+                    ))}
+                </select>
+            );
+
         case 'grade': {
             // Check for consecutive B grades (non-conforming)
             const adjacentValues = options.adjacentValues;

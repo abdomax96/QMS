@@ -55,7 +55,7 @@ const TaskWorkflowPanel: React.FC<TaskWorkflowPanelProps> = ({
     };
 
     return (
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 sm:p-5">
             {/* Stage Progress Bar */}
             <div className="flex items-center justify-between mb-4">
                 <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
@@ -67,62 +67,64 @@ const TaskWorkflowPanel: React.FC<TaskWorkflowPanelProps> = ({
             </div>
 
             {/* Stages Visualization */}
-            <div className="flex items-center gap-1 mb-5">
-                {TASK_STAGE_ORDER.map((stage, idx) => {
-                    const stageInfo = TASK_STAGE_LABELS[stage];
-                    const isCompleted = (task.completed_stages || []).includes(stage) || idx < currentIndex;
-                    const isCurrent = stage === task.current_stage;
+            <div className="overflow-x-auto pb-1">
+                <div className="flex items-center gap-1 mb-5 min-w-[520px] sm:min-w-0">
+                    {TASK_STAGE_ORDER.map((stage, idx) => {
+                        const stageInfo = TASK_STAGE_LABELS[stage];
+                        const isCompleted = (task.completed_stages || []).includes(stage) || idx < currentIndex;
+                        const isCurrent = stage === task.current_stage;
 
-                    return (
-                        <React.Fragment key={stage}>
-                            {idx > 0 && (
-                                <div
-                                    className={`flex-1 h-0.5 transition-colors ${
-                                        isCompleted ? 'bg-emerald-500' : 'bg-gray-200 dark:bg-gray-700'
-                                    }`}
-                                />
-                            )}
-                            <div className="flex flex-col items-center min-w-0">
-                                <div
-                                    className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
-                                        isCompleted
-                                            ? 'bg-emerald-100 dark:bg-emerald-900/40'
-                                            : isCurrent
-                                                ? 'ring-2 ring-offset-2 dark:ring-offset-gray-800'
-                                                : 'bg-gray-100 dark:bg-gray-700'
-                                    }`}
-                                    style={isCurrent
-                                        ? ({ backgroundColor: `${stageInfo.color}20`, '--tw-ring-color': stageInfo.color } as React.CSSProperties)
-                                        : undefined}
-                                >
-                                    {isCompleted ? (
-                                        <CheckCircleSolid className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
-                                    ) : isCurrent ? (
-                                        <ClockIcon className="h-4 w-4" style={{ color: stageInfo.color }} />
-                                    ) : (
-                                        <div className="w-2 h-2 rounded-full bg-gray-300 dark:bg-gray-500" />
-                                    )}
+                        return (
+                            <React.Fragment key={stage}>
+                                {idx > 0 && (
+                                    <div
+                                        className={`flex-1 h-0.5 transition-colors ${
+                                            isCompleted ? 'bg-emerald-500' : 'bg-gray-200 dark:bg-gray-700'
+                                        }`}
+                                    />
+                                )}
+                                <div className="flex flex-col items-center min-w-0">
+                                    <div
+                                        className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
+                                            isCompleted
+                                                ? 'bg-emerald-100 dark:bg-emerald-900/40'
+                                                : isCurrent
+                                                    ? 'ring-2 ring-offset-2 dark:ring-offset-gray-800'
+                                                    : 'bg-gray-100 dark:bg-gray-700'
+                                        }`}
+                                        style={isCurrent
+                                            ? ({ backgroundColor: `${stageInfo.color}20`, '--tw-ring-color': stageInfo.color } as React.CSSProperties)
+                                            : undefined}
+                                    >
+                                        {isCompleted ? (
+                                            <CheckCircleSolid className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                                        ) : isCurrent ? (
+                                            <ClockIcon className="h-4 w-4" style={{ color: stageInfo.color }} />
+                                        ) : (
+                                            <div className="w-2 h-2 rounded-full bg-gray-300 dark:bg-gray-500" />
+                                        )}
+                                    </div>
+                                    <span
+                                        className={`text-[10px] mt-1 text-center leading-tight ${
+                                            isCurrent
+                                                ? 'font-semibold text-gray-900 dark:text-white'
+                                                : isCompleted
+                                                    ? 'text-emerald-600 dark:text-emerald-400'
+                                                    : 'text-gray-400 dark:text-gray-500'
+                                        }`}
+                                    >
+                                        {stageInfo.ar}
+                                    </span>
                                 </div>
-                                <span
-                                    className={`text-[10px] mt-1 text-center leading-tight ${
-                                        isCurrent
-                                            ? 'font-semibold text-gray-900 dark:text-white'
-                                            : isCompleted
-                                                ? 'text-emerald-600 dark:text-emerald-400'
-                                                : 'text-gray-400 dark:text-gray-500'
-                                    }`}
-                                >
-                                    {stageInfo.ar}
-                                </span>
-                            </div>
-                        </React.Fragment>
-                    );
-                })}
+                            </React.Fragment>
+                        );
+                    })}
+                </div>
             </div>
 
             {/* Action Buttons */}
             {task.current_stage !== 'closed' && (
-                <div className="flex items-center gap-3">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
                     {/* Return Button */}
                     {!isFirstStage && canReturnWorkflow && (
                         <button
@@ -140,7 +142,7 @@ const TaskWorkflowPanel: React.FC<TaskWorkflowPanelProps> = ({
                         <button
                             onClick={() => initiateAction('advance')}
                             disabled={loading}
-                            className="flex items-center gap-1.5 px-4 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg disabled:opacity-50 transition-colors mr-auto"
+                            className="flex items-center justify-center gap-1.5 px-4 py-2 text-sm bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg disabled:opacity-50 transition-colors w-full sm:w-auto sm:mr-auto"
                         >
                             تقدم للمرحلة التالية
                             <ChevronDoubleRightIcon className="h-4 w-4" />
@@ -159,7 +161,7 @@ const TaskWorkflowPanel: React.FC<TaskWorkflowPanelProps> = ({
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm resize-none"
                         rows={2}
                     />
-                    <div className="flex items-center gap-2 justify-end">
+                    <div className="flex flex-col-reverse sm:flex-row sm:items-center gap-2 justify-end">
                         <button
                             onClick={() => { setShowNotes(false); setActionType(null); setNotes(''); }}
                             className="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"

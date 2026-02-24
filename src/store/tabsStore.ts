@@ -73,8 +73,36 @@ export const useTabsStore = create<TabsState>()(
                 // Check if tab for this form already exists
                 const existingTab = state.tabs.find(t => t.formId === formId && t.type === type);
                 if (existingTab) {
-                    // Switch to existing tab instead of opening duplicate
-                    set({ activeTabId: existingTab.id });
+                    // Switch to existing tab and refresh route/title metadata.
+                    // This keeps a single tab per form while allowing mode/path changes
+                    // (e.g. opening a draft in edit mode after viewing it).
+                    const nextTitle = title || existingTab.title;
+                    const nextPath = path || existingTab.path;
+                    const nextReturnPath = returnPath ?? existingTab.returnPath;
+                    const metadataChanged =
+                        existingTab.title !== nextTitle ||
+                        existingTab.path !== nextPath ||
+                        existingTab.returnPath !== nextReturnPath;
+
+                    if (metadataChanged) {
+                        set((currentState) => ({
+                            activeTabId: existingTab.id,
+                            tabs: currentState.tabs.map((tab) =>
+                                tab.id === existingTab.id
+                                    ? {
+                                        ...tab,
+                                        title: nextTitle,
+                                        path: nextPath,
+                                        returnPath: nextReturnPath,
+                                        lastActiveAt: Date.now(),
+                                    }
+                                    : tab
+                            ),
+                        }));
+                    } else {
+                        set({ activeTabId: existingTab.id });
+                    }
+
                     return existingTab.id;
                 }
 

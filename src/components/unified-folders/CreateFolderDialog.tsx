@@ -122,20 +122,21 @@ const CreateFolderDialog: React.FC<CreateFolderDialogProps> = ({
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-            <div className="bg-white dark:bg-slate-800 rounded-corporate-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm">
+            <div className="flex min-h-full items-end sm:items-center justify-center p-0 sm:p-4">
+            <div className="bg-white dark:bg-slate-800 rounded-none sm:rounded-corporate-xl shadow-2xl w-full sm:max-w-2xl h-[100dvh] sm:h-auto max-h-[100dvh] sm:max-h-[90vh] flex flex-col">
                 {/* Header */}
-                <div className="flex items-center justify-between p-6 border-b border-slate-200 dark:border-slate-700">
+                <div className="flex items-center justify-between p-4 sm:p-6 border-b border-slate-200 dark:border-slate-700 sticky top-0 bg-white dark:bg-slate-800 z-10">
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 rounded-corporate bg-gradient-primary flex items-center justify-center shadow-glow-primary">
                             <FolderIcon className="w-5 h-5 text-white" />
                         </div>
                         <div>
-                            <h2 className="text-xl font-bold text-slate-900 dark:text-white">
+                            <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white">
                                 إنشاء مجلد جديد
                             </h2>
                             {parentFolder && (
-                                <p className="text-sm text-slate-500 dark:text-slate-400">
+                                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
                                     داخل: {parentFolder.name}
                                 </p>
                             )}
@@ -143,14 +144,14 @@ const CreateFolderDialog: React.FC<CreateFolderDialogProps> = ({
                     </div>
                     <button
                         onClick={onClose}
-                        className="p-2 rounded-corporate hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                        className="min-h-[40px] min-w-[40px] p-2 rounded-corporate hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                     >
                         <XMarkIcon className="w-5 h-5 text-slate-500" />
                     </button>
                 </div>
 
                 {/* Form */}
-                <form onSubmit={handleSubmit} className="p-6 space-y-6">
+                <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 sm:space-y-6">
                     {/* Folder Name */}
                     <div>
                         <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
@@ -280,23 +281,24 @@ const CreateFolderDialog: React.FC<CreateFolderDialogProps> = ({
                     </div>
 
                     {/* Actions */}
-                    <div className="flex gap-3 pt-4 border-t border-slate-200 dark:border-slate-700">
+                    <div className="sticky bottom-0 bg-white dark:bg-slate-800 -mx-4 sm:-mx-6 px-4 sm:px-6 pt-4 pb-4 border-t border-slate-200 dark:border-slate-700 flex gap-3">
                         <button
                             type="button"
                             onClick={onClose}
-                            className="flex-1 px-4 py-2 rounded-corporate-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                            className="flex-1 min-h-[40px] px-4 py-2 rounded-corporate-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                         >
                             إلغاء
                         </button>
                         <button
                             type="submit"
                             disabled={loading}
-                            className="flex-1 px-4 py-2 rounded-corporate-lg bg-gradient-primary text-white hover:shadow-glow-primary transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="flex-1 min-h-[40px] px-4 py-2 rounded-corporate-lg bg-gradient-primary text-white hover:shadow-glow-primary transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {loading ? 'جاري الإنشاء...' : 'إنشاء المجلد'}
                         </button>
                     </div>
                 </form>
+            </div>
             </div>
         </div>
     );

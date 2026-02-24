@@ -45,13 +45,27 @@ import { calculateTare1, calculateTare2, validateColumn, getAQLLimits } from '..
 import { useToastStore } from '../../store/toastStore';
 import RecipeTraceabilityTable from '../tables/RecipeTraceabilityTable';
 import { variableService } from '../../services/variableService';
+import { supabase } from '../../config/supabase';
+
+export interface FormTableCellChange {
+    rowIndex: number;
+    colIndex: number;
+    oldValue: any;
+    newValue: any;
+}
+
+export interface FormTableChangeMetadata {
+    source: 'cell' | 'bulk';
+    changes?: FormTableCellChange[];
+}
 
 interface FormRendererProps {
     section: FormSection;
     formData?: {
         tables: Record<string, { data: any[][]; notes?: string }>;
     };
-    onChange: (tableId: string, data: any[][]) => void;
+    readOnly?: boolean;
+    onChange: (tableId: string, data: any[][], metadata?: FormTableChangeMetadata) => void;
     onTableNotesChange?: (tableId: string, notes: string) => void;
     tableNotes?: Record<string, string>;
     onStoppedTimesChange?: (groupId: string, stoppedTimes: string[]) => void;
@@ -59,11 +73,28 @@ interface FormRendererProps {
     template: FormTemplate;
     inspectionStartTime?: string;
     shiftDuration?: number;
+    externalChangeSignal?: {
+        sectionId: string;
+        tableId: string;
+        rowIndex: number;
+        colIndex: number;
+        changedAt: string;
+    } | null;
+}
+
+interface UserDirectoryEmployee {
+    id: string;
+    name: string;
+    employee_code?: string | null;
+    department_id?: string | null;
+    default_role_id?: string | null;
+    is_active?: boolean | null;
 }
 
 const FormRenderer: React.FC<FormRendererProps> = ({
     section,
     formData,
+    readOnly = false,
     onChange,
     onTableNotesChange,
     tableNotes = {},
@@ -72,12 +103,37 @@ const FormRenderer: React.FC<FormRendererProps> = ({
     template: _template,
     inspectionStartTime = '08:00',
     shiftDuration = 8,
+    externalChangeSignal = null,
 }) => {
+    const MOBILE_TIME_COLUMNS_PER_VIEW = 2;
+    const MOBILE_CUSTOM_COLUMNS_PER_VIEW = 2;
     const showToast = useToastStore((state) => state.error);
     const [flashingCell, setFlashingCell] = useState<string | null>(null);
     const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
     const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
     const [globalVariables, setGlobalVariables] = useState<Record<string, any>>({});
+    const [isMobileViewport, setIsMobileViewport] = useState(false);
+    const [mobileColumnStartByTable, setMobileColumnStartByTable] = useState<Record<string, number>>({});
+    const [userDirectoryEmployees, setUserDirectoryEmployees] = useState<UserDirectoryEmployee[]>([]);
+
+    useEffect(() => {
+        if (!externalChangeSignal) {
+            return;
+        }
+
+        if (externalChangeSignal.sectionId !== section.id) {
+            return;
+        }
+
+        const cellKey = `${externalChangeSignal.tableId}-${externalChangeSignal.rowIndex}-${externalChangeSignal.colIndex}`;
+        setFlashingCell(cellKey);
+
+        const timer = setTimeout(() => {
+            setFlashingCell((current) => (current === cellKey ? null : current));
+        }, 900);
+
+        return () => clearTimeout(timer);
+    }, [externalChangeSignal, section.id]);
 
     // Fetch global variables on mount
     useEffect(() => {
@@ -98,8 +154,58 @@ const FormRenderer: React.FC<FormRendererProps> = ({
         fetchVariables();
     }, []);
 
+    useEffect(() => {
+        let cancelled = false;
+
+        const fetchUserDirectoryEmployees = async () => {
+            const { data, error } = await supabase
+                .from('company_employees')
+                .select('id, name, employee_code, department_id, default_role_id, is_active')
+                .eq('is_active', true)
+                .order('name');
+
+            if (cancelled) return;
+
+            if (error) {
+                console.error('Error fetching company_employees for user-directory fields:', error);
+                setUserDirectoryEmployees([]);
+                return;
+            }
+
+            setUserDirectoryEmployees((data as UserDirectoryEmployee[]) || []);
+        };
+
+        fetchUserDirectoryEmployees();
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    // Track viewport size to activate mobile-friendly column pagination.
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const mediaQuery = window.matchMedia('(max-width: 1023px)');
+        const handleViewportChange = () => setIsMobileViewport(mediaQuery.matches);
+
+        handleViewportChange();
+
+        if (typeof mediaQuery.addEventListener === 'function') {
+            mediaQuery.addEventListener('change', handleViewportChange);
+            return () => mediaQuery.removeEventListener('change', handleViewportChange);
+        }
+
+        mediaQuery.addListener(handleViewportChange);
+        return () => mediaQuery.removeListener(handleViewportChange);
+    }, []);
+
     // Global keyboard listener for Delete/Backspace when table is selected
     useEffect(() => {
+        if (readOnly) {
+            return;
+        }
+
         const handleGlobalKeyDown = (e: KeyboardEvent) => {
             if (selectedTableId && (e.key === 'Delete' || e.key === 'Backspace')) {
                 // Don't intercept if user is typing in an input
@@ -119,7 +225,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
 
         window.addEventListener('keydown', handleGlobalKeyDown);
         return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-    }, [selectedTableId, onChange]);
+    }, [readOnly, selectedTableId, onChange]);
 
     // Handle keyboard navigation
     const handleKeyDown = (
@@ -128,6 +234,10 @@ const FormRenderer: React.FC<FormRendererProps> = ({
         rowIndex: number,
         colIndex: number
     ) => {
+        if (readOnly) {
+            return;
+        }
+
         const target = e.target as HTMLInputElement;
         const key = e.key;
 
@@ -234,6 +344,122 @@ const FormRenderer: React.FC<FormRendererProps> = ({
         return headers;
     };
 
+    const getVisibleColumnIndexes = (tableId: string, totalColumns: number, windowSize: number) => {
+        if (totalColumns <= 0) return [];
+        const safeWindowSize = Math.max(1, windowSize);
+
+        if (!isMobileViewport || totalColumns <= safeWindowSize) {
+            return Array.from({ length: totalColumns }, (_, index) => index);
+        }
+
+        const maxStart = Math.max(0, totalColumns - safeWindowSize);
+        const requestedStart = mobileColumnStartByTable[tableId] ?? 0;
+        const start = Math.min(Math.max(0, requestedStart), maxStart);
+
+        return Array.from({ length: safeWindowSize }, (_, offset) => start + offset);
+    };
+
+    const shiftMobileColumnWindow = (
+        tableId: string,
+        totalColumns: number,
+        windowSize: number,
+        direction: 'prev' | 'next'
+    ) => {
+        const safeWindowSize = Math.max(1, windowSize);
+        if (totalColumns <= safeWindowSize) return;
+
+        setMobileColumnStartByTable((previous) => {
+            const maxStart = Math.max(0, totalColumns - safeWindowSize);
+            const current = Math.min(Math.max(0, previous[tableId] ?? 0), maxStart);
+            const next =
+                direction === 'next'
+                    ? Math.min(maxStart, current + safeWindowSize)
+                    : Math.max(0, current - safeWindowSize);
+
+            if (next === current) return previous;
+
+            return {
+                ...previous,
+                [tableId]: next,
+            };
+        });
+    };
+
+    const cloneTableData = (tableData?: any[][]): any[][] =>
+        Array.isArray(tableData)
+            ? tableData.map((row) => (Array.isArray(row) ? [...row] : []))
+            : [];
+
+    const toPositiveInt = (value: unknown): number | null => {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return null;
+        const normalized = Math.floor(parsed);
+        return normalized > 0 ? normalized : null;
+    };
+
+    const resolveSampleSize = (table: Table, fallback = 20): number => {
+        const explicitSampleSize = toPositiveInt((table as any)?.sample_size ?? (table as any)?.sampleSize);
+        if (explicitSampleSize !== null) return explicitSampleSize;
+
+        const legacyRows = toPositiveInt((table as any)?.rows);
+        if (legacyRows !== null) return legacyRows;
+
+        return fallback;
+    };
+
+    const emitCellChange = (
+        tableId: string,
+        tableData: any[][],
+        rowIndex: number,
+        colIndex: number,
+        newValue: any,
+        rowTemplateLength = 0
+    ) => {
+        if (readOnly) {
+            return;
+        }
+
+        const nextData = cloneTableData(tableData);
+        let oldValue: any;
+
+        while (nextData.length <= rowIndex) {
+            nextData.push(
+                rowTemplateLength > 0
+                    ? new Array(rowTemplateLength).fill(undefined)
+                    : []
+            );
+        }
+
+        if (!nextData[rowIndex]) {
+            nextData[rowIndex] =
+                rowTemplateLength > 0
+                    ? new Array(rowTemplateLength).fill(undefined)
+                    : [];
+        } else {
+            nextData[rowIndex] = [...nextData[rowIndex]];
+        }
+
+        oldValue = nextData[rowIndex][colIndex];
+        nextData[rowIndex][colIndex] = newValue;
+        onChange(tableId, nextData, {
+            source: 'cell',
+            changes: [{ rowIndex, colIndex, oldValue, newValue }],
+        });
+    };
+
+    const getUserDirectoryOptions = (
+        departmentId?: string,
+        roleId?: string
+    ): string[] => {
+        const filtered = userDirectoryEmployees.filter((employee) => {
+            if (departmentId && employee.department_id !== departmentId) return false;
+            if (roleId && employee.default_role_id !== roleId) return false;
+            return true;
+        });
+
+        return Array.from(new Set(filtered.map((employee) => employee.name)));
+    };
+
     // Helper function to render appropriate input based on cell data type
     const renderCellInput = (
         cellType: any,
@@ -247,11 +473,15 @@ const FormRenderer: React.FC<FormRendererProps> = ({
         const { min, max, step, options: dropdownOptions, disabled, className = '', onBlur } = options || {};
 
         const isSelected = selectedTableId === tableId;
+        const cellKey = `${tableId}-${rowIndex}-${colIndex}`;
+        const isFlashing = flashingCell === cellKey;
 
         const baseClass = cn(
-            'w-full h-full px-3 py-2 text-center text-sm border-none focus:ring-2 focus:ring-primary-500 transition-colors duration-200',
+            'w-full h-full text-center border-none focus:ring-2 focus:ring-primary-500 transition-colors duration-200 overflow-hidden text-ellipsis',
+            isMobileViewport ? 'px-1.5 py-1.5 text-xs' : 'px-3 py-2 text-sm',
             'dark:bg-gray-800 dark:text-white min-h-[40px]',
             isSelected && 'bg-blue-100 dark:bg-blue-900/50 text-blue-900 dark:text-blue-100', // Highlight style
+            isFlashing && 'bg-amber-100 dark:bg-amber-900/40 ring-2 ring-amber-400/70',
             className
         );
 
@@ -578,6 +808,22 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                     </select>
                 );
 
+            case 'user-directory':
+                return (
+                    <select
+                        value={value ?? ''}
+                        onChange={(e) => onChange(e.target.value || undefined)}
+                        {...commonProps}
+                    >
+                        <option value="">اختر مستخدم...</option>
+                        {(dropdownOptions || []).map((opt) => (
+                            <option key={opt} value={opt}>
+                                {opt}
+                            </option>
+                        ))}
+                    </select>
+                );
+
             case 'image':
                 const images = Array.isArray(value) ? value : (value ? [value] : []);
 
@@ -665,6 +911,21 @@ const FormRenderer: React.FC<FormRendererProps> = ({
         // Calculate columns based on shift duration and inspection interval
         const timeHeaders = generateTimeHeaders(inspectionStartTime, shiftDuration, intervalMinutes);
         const rows = timeHeaders.length || table.rows || 10;
+        const visibleTimeIndexes = getVisibleColumnIndexes(table.id, rows, MOBILE_TIME_COLUMNS_PER_VIEW);
+        const firstVisibleTimeIndex = visibleTimeIndexes[0] ?? 0;
+        const lastVisibleTimeIndex = visibleTimeIndexes[visibleTimeIndexes.length - 1] ?? 0;
+        const shouldShowMobileTimePager = isMobileViewport && rows > visibleTimeIndexes.length;
+        const showAvgColumn = Boolean(table.features?.show_avg) && !isMobileViewport;
+        const showStdColumn = Boolean(table.features?.show_std) && !isMobileViewport;
+        const parameterColumnWidth = isMobileViewport ? 190 : 300;
+        const limitsColumnWidth = isMobileViewport ? 140 : 150;
+        const timeColumnWidth = isMobileViewport ? 110 : undefined;
+        const statsColumnWidth = isMobileViewport ? 92 : 100;
+        const visibleStatsColumns = (showAvgColumn ? 1 : 0) + (showStdColumn ? 1 : 0);
+        const mobileTableMinWidth = parameterColumnWidth
+            + limitsColumnWidth
+            + (visibleTimeIndexes.length * (timeColumnWidth ?? 0))
+            + (visibleStatsColumns * statsColumnWidth);
 
         // Helper to calculate value for a calculated parameter at a specific column
         const calculateParameterValue = (param: TableParameter, colIndex: number): number | null => {
@@ -776,7 +1037,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
             if (!linkedGroup) {
                 // If no linked group, handle locally in tableData
                 const stopRowIndex = parameters.length;
-                const newData = [...(tableData || [])];
+                const newData = cloneTableData(tableData);
                 if (!newData[stopRowIndex]) {
                     newData[stopRowIndex] = [];
                 }
@@ -802,7 +1063,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
 
                 // If we're stopping (not resuming), clear all data in this column
                 if (!isCurrentlyStopped) {
-                    const newData = [...(tableData || [])];
+                    const newData = cloneTableData(tableData);
                     for (let i = 0; i < parameters.length; i++) {
                         if (newData[i]) {
                             newData[i][colIndex] = undefined;
@@ -825,65 +1086,127 @@ const FormRenderer: React.FC<FormRendererProps> = ({
 
 
         return (
-            <div className="overflow-x-auto print-table-container">
-                <table className="w-full border-collapse table-fixed print:table-fixed">
-                    <colgroup className="print:hidden">
-                        {/* Parameter Column - Widest and Fixed */}
-                        <col style={{ width: '300px' }} />
-                        {/* Boundary/Limits Column */}
-                        <col style={{ width: '150px' }} />
-                        {/* Time Headers - Distributed evenly on remaining space */}
-                        {timeHeaders.map((_, i) => (
-                            <col key={i} />
-                        ))}
-                        {/* Stats Columns - Fixed 100px */}
-                        {table.features?.show_avg && (
-                            <col style={{ width: '100px' }} />
-                        )}
-                        {table.features?.show_std && (
-                            <col style={{ width: '100px' }} />
-                        )}
-                    </colgroup>
-                    {/* Print-specific colgroup with percentages */}
-                    <colgroup className="hidden print:table-column-group">
-                        <col style={{ width: '18%' }} />
-                        <col style={{ width: '8%' }} />
-                        {timeHeaders.map((_, i) => (
-                            <col key={i} />
-                        ))}
-                        {table.features?.show_avg && (
-                            <col style={{ width: '6%' }} />
-                        )}
-                        {table.features?.show_std && (
-                            <col style={{ width: '6%' }} />
-                        )}
-                    </colgroup>
-                    <thead>
-                        <tr className="bg-gray-100 dark:bg-gray-700">
-                            <th className="border border-gray-300 dark:border-gray-600 px-4 py-3 text-right text-sm font-medium whitespace-nowrap">
-                                المعلمة
-                            </th>
-                            <th className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs font-medium whitespace-nowrap">
-                                الحدود
-                            </th>
-                            {timeHeaders.map((time, i) => (
-                                <th
-                                    key={i}
-                                    className={cn(
-                                        "border border-gray-300 dark:border-gray-600 px-2 py-3 text-center text-xs font-medium",
-                                        isColumnStopped(i) && "bg-orange-200 dark:bg-orange-800"
-                                    )}
-                                >
-                                    <div className="whitespace-nowrap overflow-hidden text-ellipsis">{time}</div>
-                                </th>
+            <div className="space-y-2 print:space-y-0">
+                {shouldShowMobileTimePager && (
+                    <div className="print:hidden flex items-center justify-between gap-2 rounded-lg border border-gray-200 dark:border-gray-700 px-2 py-1.5 bg-gray-50 dark:bg-gray-800">
+                        <button
+                            type="button"
+                            onClick={() => shiftMobileColumnWindow(table.id, rows, MOBILE_TIME_COLUMNS_PER_VIEW, 'prev')}
+                            disabled={firstVisibleTimeIndex === 0}
+                            className={cn(
+                                'px-2 py-1 text-xs rounded-md border transition-colors',
+                                firstVisibleTimeIndex === 0
+                                    ? 'text-gray-400 border-gray-200 dark:border-gray-700 cursor-not-allowed'
+                                    : 'text-gray-700 dark:text-gray-200 border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700'
+                            )}
+                        >
+                            السابق
+                        </button>
+                        <div className="text-center leading-tight">
+                            <div className="text-[11px] font-medium text-gray-700 dark:text-gray-200">
+                                الأعمدة {firstVisibleTimeIndex + 1}-{lastVisibleTimeIndex + 1} من {rows}
+                            </div>
+                            <div className="text-[11px] text-gray-500 dark:text-gray-400">
+                                {(timeHeaders[firstVisibleTimeIndex] ?? `#${firstVisibleTimeIndex + 1}`)} - {(timeHeaders[lastVisibleTimeIndex] ?? `#${lastVisibleTimeIndex + 1}`)}
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => shiftMobileColumnWindow(table.id, rows, MOBILE_TIME_COLUMNS_PER_VIEW, 'next')}
+                            disabled={lastVisibleTimeIndex >= rows - 1}
+                            className={cn(
+                                'px-2 py-1 text-xs rounded-md border transition-colors',
+                                lastVisibleTimeIndex >= rows - 1
+                                    ? 'text-gray-400 border-gray-200 dark:border-gray-700 cursor-not-allowed'
+                                    : 'text-gray-700 dark:text-gray-200 border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700'
+                            )}
+                        >
+                            التالي
+                        </button>
+                    </div>
+                )}
+                <div className="overflow-x-auto print-table-container">
+                    <table
+                        className="w-full border-collapse table-fixed print:table-fixed"
+                        style={isMobileViewport ? { minWidth: `${mobileTableMinWidth}px` } : undefined}
+                    >
+                        <colgroup className="print:hidden">
+                            {/* Parameter Column - Widest and Fixed */}
+                            <col style={{ width: `${parameterColumnWidth}px` }} />
+                            {/* Boundary/Limits Column */}
+                            <col style={{ width: `${limitsColumnWidth}px` }} />
+                            {/* Time Headers - Distributed evenly on remaining space */}
+                            {visibleTimeIndexes.map((colIndex) => (
+                                <col
+                                    key={colIndex}
+                                    style={timeColumnWidth ? { width: `${timeColumnWidth}px` } : undefined}
+                                />
+                            ))}
+                            {/* Stats Columns - Fixed 100px */}
+                            {showAvgColumn && (
+                                <col style={{ width: `${statsColumnWidth}px` }} />
+                            )}
+                            {showStdColumn && (
+                                <col style={{ width: `${statsColumnWidth}px` }} />
+                            )}
+                        </colgroup>
+                        {/* Print-specific colgroup with percentages */}
+                        <colgroup className="hidden print:table-column-group">
+                            <col style={{ width: '18%' }} />
+                            <col style={{ width: '8%' }} />
+                            {Array.from({ length: rows }).map((_, i) => (
+                                <col key={i} />
                             ))}
                             {table.features?.show_avg && (
-                                <th className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-sm font-medium bg-blue-50 dark:bg-blue-900">
+                                <col style={{ width: '6%' }} />
+                            )}
+                            {table.features?.show_std && (
+                                <col style={{ width: '6%' }} />
+                            )}
+                        </colgroup>
+                    <thead>
+                        <tr className="bg-gray-100 dark:bg-gray-700">
+                            <th className={cn(
+                                'border border-gray-300 dark:border-gray-600 text-right font-medium',
+                                isMobileViewport ? 'px-2 py-2 text-xs' : 'px-4 py-3 text-sm',
+                                isMobileViewport ? 'whitespace-normal break-words leading-tight' : 'whitespace-nowrap'
+                            )}>
+                                المعلمة
+                            </th>
+                            <th className={cn(
+                                'border border-gray-300 dark:border-gray-600 text-center font-medium',
+                                isMobileViewport ? 'px-2 py-2 text-xs' : 'px-3 py-3 text-xs',
+                                isMobileViewport ? 'whitespace-normal break-words leading-tight' : 'whitespace-nowrap'
+                            )}>
+                                الحدود
+                            </th>
+                            {visibleTimeIndexes.map((colIndex) => (
+                                <th
+                                    key={colIndex}
+                                    className={cn(
+                                        "border border-gray-300 dark:border-gray-600 text-center text-xs font-medium",
+                                        isMobileViewport ? 'px-1 py-2' : 'px-2 py-3',
+                                        isColumnStopped(colIndex) && "bg-orange-200 dark:bg-orange-800"
+                                    )}
+                                >
+                                    <div className="whitespace-nowrap overflow-hidden text-ellipsis">
+                                        {timeHeaders[colIndex] ?? `#${colIndex + 1}`}
+                                    </div>
+                                </th>
+                            ))}
+                            {showAvgColumn && (
+                                <th className={cn(
+                                    'border border-gray-300 dark:border-gray-600 text-center font-medium bg-blue-50 dark:bg-blue-900',
+                                    isMobileViewport ? 'px-2 py-2 text-xs' : 'px-3 py-3 text-sm'
+                                )}>
                                     AVG
                                 </th>
                             )}
-                            {table.features?.show_std && (
-                                <th className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-sm font-medium bg-purple-50 dark:bg-purple-900">
+                            {showStdColumn && (
+                                <th className={cn(
+                                    'border border-gray-300 dark:border-gray-600 text-center font-medium bg-purple-50 dark:bg-purple-900',
+                                    isMobileViewport ? 'px-2 py-2 text-xs' : 'px-3 py-3 text-sm'
+                                )}>
                                     STD
                                 </th>
                             )}
@@ -915,10 +1238,36 @@ const FormRenderer: React.FC<FormRendererProps> = ({
 
                             return (
                                 <tr key={paramIndex} className="hover:bg-gray-50 dark:hover:bg-gray-750">
-                                    <td className="border border-gray-300 dark:border-gray-600 px-4 py-3 text-sm font-medium whitespace-nowrap">
-                                        {param.name}
+                                    <td className={cn(
+                                        'border border-gray-300 dark:border-gray-600 font-medium',
+                                        isMobileViewport ? 'px-2 py-2 text-xs whitespace-normal break-words leading-tight' : 'px-4 py-3 text-sm whitespace-nowrap'
+                                    )}>
+                                        <span>{param.name}</span>
+                                        {isMobileViewport && (table.features?.show_avg || table.features?.show_std) && (
+                                            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                                {table.features?.show_avg && (
+                                                    <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                                                        AVG
+                                                        <span dir="ltr">
+                                                            {numericValues.length > 0 ? stats.avg.toFixed(2) : '-'}
+                                                        </span>
+                                                    </span>
+                                                )}
+                                                {table.features?.show_std && (
+                                                    <span className="inline-flex items-center gap-1 rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+                                                        STD
+                                                        <span dir="ltr">
+                                                            {numericValues.length > 0 ? stats.std.toFixed(2) : '-'}
+                                                        </span>
+                                                    </span>
+                                                )}
+                                            </div>
+                                        )}
                                     </td>
-                                    <td className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                                    <td className={cn(
+                                        'border border-gray-300 dark:border-gray-600 text-center text-gray-600 dark:text-gray-400',
+                                        isMobileViewport ? 'px-2 py-2 text-[11px] whitespace-normal break-words leading-tight' : 'px-3 py-3 text-xs whitespace-nowrap'
+                                    )}>
                                         {param.min !== undefined && param.max !== undefined
                                             ? `${param.min} - ${param.max}`
                                             : param.limits || '-'}
@@ -926,7 +1275,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                             <span className="text-gray-500 text-xs mr-1"> ({param.unit})</span>
                                         )}
                                     </td>
-                                    {Array.from({ length: rows }).map((_, colIndex) => {
+                                    {visibleTimeIndexes.map((colIndex) => {
                                         const stopped = isColumnStopped(colIndex);
 
                                         // Check if this is a calculated parameter
@@ -979,14 +1328,18 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                                 )}
                                             >
                                                 {stopped ? (
-                                                    <div className="w-full h-full px-2 py-1 text-center text-sm text-orange-600 dark:text-orange-400 font-medium bg-orange-100 dark:bg-orange-900">
+                                                    <div className={cn(
+                                                        'w-full h-full px-2 py-1 text-center text-orange-600 dark:text-orange-400 font-medium bg-orange-100 dark:bg-orange-900',
+                                                        isMobileViewport ? 'text-xs' : 'text-sm'
+                                                    )}>
                                                         STOP
                                                     </div>
                                                 ) : isCalculated ? (
                                                     // Display calculated value as read-only
                                                     <div
                                                         className={cn(
-                                                            "w-full h-full px-2 py-2 text-center text-sm font-medium",
+                                                            "w-full h-full px-2 py-2 text-center font-medium overflow-hidden text-ellipsis whitespace-nowrap",
+                                                            isMobileViewport ? 'text-xs' : 'text-sm',
                                                             !isValid ? 'text-red-700 dark:text-red-300' : 'text-blue-700 dark:text-blue-300'
                                                         )}
                                                         title={`معادلة: ${param.formula}`}
@@ -1000,12 +1353,13 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                                         param.type,
                                                         displayValue,
                                                         (newValue) => {
-                                                            const newData = [...(tableData || [])];
-                                                            if (!newData[paramIndex]) {
-                                                                newData[paramIndex] = [];
-                                                            }
-                                                            newData[paramIndex][colIndex] = newValue;
-                                                            onChange(table.id, newData);
+                                                            emitCellChange(
+                                                                table.id,
+                                                                tableData || [],
+                                                                paramIndex,
+                                                                colIndex,
+                                                                newValue
+                                                            );
                                                         },
                                                         table.id,
                                                         paramIndex,
@@ -1013,7 +1367,9 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                                         {
                                                             min: param.min,
                                                             max: param.max,
-                                                            options: param.options,
+                                                            options: param.type === 'user-directory'
+                                                                ? getUserDirectoryOptions(param.user_directory_department_id, param.user_directory_role_id)
+                                                                : param.options,
                                                             format: param.format,
                                                             step: typeof param.step === 'string' ? parseFloat(param.step) : param.step,
                                                             className: (!isValid || isAbcViolation) ? 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300' : ''
@@ -1023,13 +1379,19 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                             </td>
                                         );
                                     })}
-                                    {table.features?.show_avg && (
-                                        <td className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-sm font-medium bg-blue-50 dark:bg-blue-900">
+                                    {showAvgColumn && (
+                                        <td className={cn(
+                                            'border border-gray-300 dark:border-gray-600 text-center font-medium bg-blue-50 dark:bg-blue-900 overflow-hidden text-ellipsis whitespace-nowrap',
+                                            isMobileViewport ? 'px-2 py-2 text-xs' : 'px-3 py-3 text-sm'
+                                        )}>
                                             {numericValues.length > 0 ? stats.avg.toFixed(2) : '-'}
                                         </td>
                                     )}
-                                    {table.features?.show_std && (
-                                        <td className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-sm font-medium bg-purple-50 dark:bg-purple-900">
+                                    {showStdColumn && (
+                                        <td className={cn(
+                                            'border border-gray-300 dark:border-gray-600 text-center font-medium bg-purple-50 dark:bg-purple-900 overflow-hidden text-ellipsis whitespace-nowrap',
+                                            isMobileViewport ? 'px-2 py-2 text-xs' : 'px-3 py-3 text-sm'
+                                        )}>
                                             {numericValues.length > 0 ? stats.std.toFixed(2) : '-'}
                                         </td>
                                     )}
@@ -1038,13 +1400,19 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                         })}
                         {/* Stop Control Row */}
                         <tr className="bg-gray-50 dark:bg-gray-750">
-                            <td className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm font-medium text-gray-500">
+                            <td className={cn(
+                                'border border-gray-300 dark:border-gray-600 font-medium text-gray-500',
+                                isMobileViewport ? 'px-2 py-2 text-xs' : 'px-3 py-2 text-sm'
+                            )}>
                                 حالة الفحص
                             </td>
-                            <td className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-center text-xs text-gray-500">
+                            <td className={cn(
+                                'border border-gray-300 dark:border-gray-600 text-center text-gray-500',
+                                isMobileViewport ? 'px-2 py-2 text-[11px]' : 'px-3 py-2 text-xs'
+                            )}>
                                 اضغط للإيقاف
                             </td>
-                            {Array.from({ length: rows }).map((_, colIndex) => {
+                            {visibleTimeIndexes.map((colIndex) => {
                                 const stopped = isColumnStopped(colIndex);
                                 return (
                                     <td
@@ -1055,7 +1423,8 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                             type="button"
                                             onClick={() => toggleColumnStop(colIndex)}
                                             className={cn(
-                                                'w-full px-2 py-1.5 text-xs font-medium rounded transition-colors min-w-[60px]',
+                                                'w-full text-xs font-medium rounded transition-colors',
+                                                isMobileViewport ? 'px-1 py-1' : 'px-2 py-1.5 min-w-[60px]',
                                                 stopped
                                                     ? 'bg-green-500 hover:bg-green-600 text-white'
                                                     : 'bg-orange-500 hover:bg-orange-600 text-white'
@@ -1075,26 +1444,31 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                     </td>
                                 );
                             })}
-                            {table.features?.show_avg && (
+                            {showAvgColumn && (
                                 <td className="border border-gray-300 dark:border-gray-600 px-3 py-3 bg-blue-50 dark:bg-blue-900"></td>
                             )}
-                            {table.features?.show_std && (
+                            {showStdColumn && (
                                 <td className="border border-gray-300 dark:border-gray-600 px-3 py-3 bg-purple-50 dark:bg-purple-900"></td>
                             )}
                         </tr>
                     </tbody>
                 </table>
             </div>
+        </div>
         );
     };
 
     const renderSampleTable = (table: Table, tableData: any[][], template: FormTemplate) => {
-        const sampleSize = table.sample_size || 20;
+        const sampleSize = resolveSampleSize(table, 20);
         const intervalMinutes = table.inspection_period || 30;
 
         // Calculate time-based columns
         const timeHeaders = generateTimeHeaders(inspectionStartTime, shiftDuration, intervalMinutes);
         const columns = timeHeaders.length;
+        const visibleTimeIndexes = getVisibleColumnIndexes(table.id, columns, MOBILE_TIME_COLUMNS_PER_VIEW);
+        const firstVisibleTimeIndex = visibleTimeIndexes[0] ?? 0;
+        const lastVisibleTimeIndex = visibleTimeIndexes[visibleTimeIndexes.length - 1] ?? 0;
+        const shouldShowMobileTimePager = isMobileViewport && columns > visibleTimeIndexes.length;
 
         // Get Tare calculation settings from template basic_info
         const standardWeight = template.basic_info?.standard_weight;
@@ -1134,7 +1508,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
 
             // If we're stopping (not resuming), clear all data in this column
             if (!isCurrentlyStopped) {
-                const newData = [...(tableData || [])];
+                const newData = cloneTableData(tableData);
                 for (let i = 0; i < sampleSize; i++) {
                     if (newData[i]) {
                         newData[i][colIndex] = undefined;
@@ -1205,39 +1579,80 @@ const FormRenderer: React.FC<FormRendererProps> = ({
         };
 
         return (
-            <div className="overflow-x-auto print-table-container">
-                <table className="w-full border-collapse table-fixed print:table-fixed">
-                    <colgroup className="print:hidden">
-                        <col style={{ width: '100px' }} />
-                        {timeHeaders.map((_, i) => (
-                            <col key={i} />
-                        ))}
-                    </colgroup>
-                    {/* Print-specific colgroup with percentages */}
-                    <colgroup className="hidden print:table-column-group">
-                        <col style={{ width: '10%' }} />
-                        {timeHeaders.map((_, i) => (
-                            <col key={i} />
-                        ))}
-                    </colgroup>
-                    <thead>
-                        <tr className="bg-gray-100 dark:bg-gray-700">
-                            <th className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs font-medium print:text-[7px] print:px-1 print:py-1">
-                                العينة #
-                            </th>
-                            {timeHeaders.map((time, i) => (
-                                <th
-                                    key={i}
-                                    className={cn(
-                                        "border border-gray-300 dark:border-gray-600 px-2 py-3 text-center text-xs font-medium print:text-[7px] print:px-0.5 print:py-1",
-                                        isColumnStopped(i) && "bg-orange-200 dark:bg-orange-800"
-                                    )}
-                                >
-                                    <div className="whitespace-nowrap overflow-hidden text-ellipsis">{time}</div>
-                                </th>
+            <div className="space-y-2 print:space-y-0">
+                {shouldShowMobileTimePager && (
+                    <div className="print:hidden flex items-center justify-between gap-2 rounded-lg border border-gray-200 dark:border-gray-700 px-2 py-1.5 bg-gray-50 dark:bg-gray-800">
+                        <button
+                            type="button"
+                            onClick={() => shiftMobileColumnWindow(table.id, columns, MOBILE_TIME_COLUMNS_PER_VIEW, 'prev')}
+                            disabled={firstVisibleTimeIndex === 0}
+                            className={cn(
+                                'px-2 py-1 text-xs rounded-md border transition-colors',
+                                firstVisibleTimeIndex === 0
+                                    ? 'text-gray-400 border-gray-200 dark:border-gray-700 cursor-not-allowed'
+                                    : 'text-gray-700 dark:text-gray-200 border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700'
+                            )}
+                        >
+                            السابق
+                        </button>
+                        <div className="text-center leading-tight">
+                            <div className="text-[11px] font-medium text-gray-700 dark:text-gray-200">
+                                الأعمدة {firstVisibleTimeIndex + 1}-{lastVisibleTimeIndex + 1} من {columns}
+                            </div>
+                            <div className="text-[11px] text-gray-500 dark:text-gray-400">
+                                {(timeHeaders[firstVisibleTimeIndex] ?? `#${firstVisibleTimeIndex + 1}`)} - {(timeHeaders[lastVisibleTimeIndex] ?? `#${lastVisibleTimeIndex + 1}`)}
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => shiftMobileColumnWindow(table.id, columns, MOBILE_TIME_COLUMNS_PER_VIEW, 'next')}
+                            disabled={lastVisibleTimeIndex >= columns - 1}
+                            className={cn(
+                                'px-2 py-1 text-xs rounded-md border transition-colors',
+                                lastVisibleTimeIndex >= columns - 1
+                                    ? 'text-gray-400 border-gray-200 dark:border-gray-700 cursor-not-allowed'
+                                    : 'text-gray-700 dark:text-gray-200 border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700'
+                            )}
+                        >
+                            التالي
+                        </button>
+                    </div>
+                )}
+                <div className="overflow-x-auto print-table-container">
+                    <table className="w-full border-collapse table-fixed print:table-fixed">
+                        <colgroup className="print:hidden">
+                            <col style={{ width: '100px' }} />
+                            {visibleTimeIndexes.map((colIndex) => (
+                                <col key={colIndex} />
                             ))}
-                        </tr>
-                    </thead>
+                        </colgroup>
+                        {/* Print-specific colgroup with percentages */}
+                        <colgroup className="hidden print:table-column-group">
+                            <col style={{ width: '10%' }} />
+                            {Array.from({ length: columns }).map((_, i) => (
+                                <col key={i} />
+                            ))}
+                        </colgroup>
+                        <thead>
+                            <tr className="bg-gray-100 dark:bg-gray-700">
+                                <th className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs font-medium print:text-[7px] print:px-1 print:py-1">
+                                    العينة #
+                                </th>
+                                {visibleTimeIndexes.map((colIndex) => (
+                                    <th
+                                        key={colIndex}
+                                        className={cn(
+                                            "border border-gray-300 dark:border-gray-600 px-2 py-3 text-center text-xs font-medium print:text-[7px] print:px-0.5 print:py-1",
+                                            isColumnStopped(colIndex) && "bg-orange-200 dark:bg-orange-800"
+                                        )}
+                                    >
+                                        <div className="whitespace-nowrap overflow-hidden text-ellipsis">
+                                            {timeHeaders[colIndex] ?? `#${colIndex + 1}`}
+                                        </div>
+                                    </th>
+                                ))}
+                            </tr>
+                        </thead>
                     <tbody>
                         {/* Sample Data Rows */}
                         {Array.from({ length: sampleSize }).map((_, rowIndex) => (
@@ -1245,7 +1660,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                 <td className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs text-gray-500 font-medium">
                                     {rowIndex + 1}
                                 </td>
-                                {Array.from({ length: columns }).map((_, colIndex) => {
+                                {visibleTimeIndexes.map((colIndex) => {
                                     const value = tableData?.[rowIndex]?.[colIndex];
                                     const stopped = isColumnStopped(colIndex);
 
@@ -1277,12 +1692,13 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                                                 setFlashingCell(cellKey);
                                                                 setTimeout(() => setFlashingCell(null), 600);
                                                             }
-                                                            const newData = [...(tableData || [])];
-                                                            if (!newData[rowIndex]) {
-                                                                newData[rowIndex] = [];
-                                                            }
-                                                            newData[rowIndex][colIndex] = newValue;
-                                                            onChange(table.id, newData);
+                                                            emitCellChange(
+                                                                table.id,
+                                                                tableData || [],
+                                                                rowIndex,
+                                                                colIndex,
+                                                                newValue
+                                                            );
                                                         },
                                                         table.id,
                                                         rowIndex,
@@ -1322,12 +1738,13 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                                                         }
                                                                         showToast('خطأ في إدخال البيانات', errorMsg);
                                                                         setTimeout(() => {
-                                                                            const newData = [...(tableData || [])];
-                                                                            if (!newData[rowIndex]) {
-                                                                                newData[rowIndex] = [];
-                                                                            }
-                                                                            newData[rowIndex][colIndex] = undefined;
-                                                                            onChange(table.id, newData);
+                                                                            emitCellChange(
+                                                                                table.id,
+                                                                                tableData || [],
+                                                                                rowIndex,
+                                                                                colIndex,
+                                                                                undefined
+                                                                            );
                                                                         }, 100);
                                                                     }
                                                                 }
@@ -1355,7 +1772,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                         )}
                                     </div>
                                 </td>
-                                {Array.from({ length: columns }).map((_, colIndex) => {
+                                {visibleTimeIndexes.map((colIndex) => {
                                     const stopped = isColumnStopped(colIndex);
                                     const average = !stopped ? getColumnAverage(colIndex) : null;
                                     const isBelowStandard = average !== null && standardWeight && average < standardWeight;
@@ -1404,7 +1821,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                         )}
                                     </div>
                                 </td>
-                                {Array.from({ length: columns }).map((_, colIndex) => {
+                                {visibleTimeIndexes.map((colIndex) => {
                                     const stopped = isColumnStopped(colIndex);
                                     const std = !stopped ? getColumnSTD(colIndex) : null;
                                     const maxStd = table.max_std;
@@ -1452,7 +1869,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                         </span>
                                     </div>
                                 </td>
-                                {Array.from({ length: columns }).map((_, colIndex) => {
+                                {visibleTimeIndexes.map((colIndex) => {
                                     const stopped = isColumnStopped(colIndex);
                                     const validation = !stopped ? getColumnValidation(colIndex) : null;
 
@@ -1502,7 +1919,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                         </span>
                                     </div>
                                 </td>
-                                {Array.from({ length: columns }).map((_, colIndex) => {
+                                {visibleTimeIndexes.map((colIndex) => {
                                     const stopped = isColumnStopped(colIndex);
                                     const validation = !stopped ? getColumnValidation(colIndex) : null;
 
@@ -1546,7 +1963,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                             <td className="border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm font-medium text-gray-500">
                                 حالة الفحص
                             </td>
-                            {Array.from({ length: columns }).map((_, colIndex) => {
+                            {visibleTimeIndexes.map((colIndex) => {
                                 const stopped = isColumnStopped(colIndex);
                                 return (
                                     <td
@@ -1580,14 +1997,52 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                         </tr>
                     </tbody>
                 </table>
-            </div >
+            </div>
+        </div>
         );
+    };
+
+    const getColumnAlignClass = (align?: 'right' | 'center' | 'left') => {
+        if (align === 'left') return 'text-left';
+        if (align === 'right') return 'text-right';
+        return 'text-center';
+    };
+
+    const normalizeCustomHeaderRows = (table: Table) => {
+        const rawRows = Array.isArray(table.header_rows) ? table.header_rows : [];
+        const normalizedRows = rawRows
+            .filter((row) => Array.isArray(row) && row.length > 0)
+            .map((row) =>
+                row.map((cell: any) => ({
+                    label: cell?.label ?? '',
+                    col_span: Math.max(1, Number(cell?.col_span ?? cell?.colSpan ?? 1) || 1),
+                    row_span: Math.max(1, Number(cell?.row_span ?? cell?.rowSpan ?? 1) || 1),
+                    align: (cell?.align as 'right' | 'center' | 'left') || 'center',
+                    background_color: cell?.background_color,
+                    text_color: cell?.text_color,
+                    class_name: cell?.class_name,
+                }))
+            );
+
+        return normalizedRows;
     };
 
     const renderCustomTable = (table: Table, tableData: any[][]) => {
         const columns = table.columns || [];
         const baseRows = table.rows || 10;
         const allowDynamicRows = table.allowDynamicRows || false;
+        const showRowNumbers = table.show_row_numbers !== false;
+        const rowHeaderLabel = table.row_header_label || '#';
+        const headerRows = normalizeCustomHeaderRows(table);
+        const hasMultiHeader = headerRows.length > 0;
+        const visibleCustomColumnIndexes = getVisibleColumnIndexes(
+            table.id,
+            columns.length,
+            MOBILE_CUSTOM_COLUMNS_PER_VIEW
+        );
+        const firstVisibleCustomIndex = visibleCustomColumnIndexes[0] ?? 0;
+        const lastVisibleCustomIndex = visibleCustomColumnIndexes[visibleCustomColumnIndexes.length - 1] ?? 0;
+        const shouldShowMobileCustomPager = isMobileViewport && columns.length > visibleCustomColumnIndexes.length;
 
         // Ensure tableData is always an array
         const safeTableData = Array.isArray(tableData) ? tableData : [];
@@ -1600,7 +2055,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
         // Fixed column widths for custom table
         const rowNumWidth = 50; // Row number column width
         const actionColWidth = allowDynamicRows ? 40 : 0; // Action column width
-        const customColWidth = 150; // Fixed width for each custom column
+        const customColWidth = 150; // Default width for each custom column
 
         const addRow = () => {
             const newData = [...safeTableData];
@@ -1621,71 +2076,264 @@ const FormRenderer: React.FC<FormRendererProps> = ({
             onChange(table.id, newData);
         };
 
-        return (
-            <div className="space-y-2" data-table-id={table.id}>
-                <div className="overflow-x-auto">
-                    <table className="border-collapse table-fixed" style={{ minWidth: 'max-content' }}>
-                        <thead>
-                            <tr className="bg-gray-100 dark:bg-gray-700">
-                                <th
-                                    className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs font-medium"
-                                    style={{ width: `${rowNumWidth}px`, minWidth: `${rowNumWidth}px`, maxWidth: `${rowNumWidth}px` }}
-                                >
-                                    #
-                                </th>
-                                {columns.map((col) => (
-                                    <th
-                                        key={col.key}
-                                        className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-sm font-medium"
-                                        style={{ width: `${customColWidth}px`, minWidth: `${customColWidth}px`, maxWidth: `${customColWidth}px` }}
-                                    >
-                                        <div className="whitespace-nowrap overflow-hidden text-ellipsis">{col.label}</div>
-                                    </th>
-                                ))}
-                                {allowDynamicRows && (
-                                    <th
-                                        className="border border-gray-300 dark:border-gray-600 px-1 py-3 text-center text-xs font-medium"
-                                        style={{ width: `${actionColWidth}px`, minWidth: `${actionColWidth}px` }}
-                                    >
-                                    </th>
-                                )}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {Array.from({ length: actualRows }).map((_, rowIndex) => (
-                                <tr key={rowIndex} className="hover:bg-gray-50 dark:hover:bg-gray-750 group">
-                                    <td className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs text-gray-500 font-medium">
-                                        {rowIndex + 1}
-                                    </td>
-                                    {columns.map((col, colIndex) => {
-                                        const value = safeTableData?.[rowIndex]?.[colIndex];
+        const useMobileCardLayout = isMobileViewport;
 
-                                        return (
-                                            <td
-                                                key={col.key}
-                                                className="border border-gray-300 dark:border-gray-600 p-0"
-                                            >
+        if (useMobileCardLayout) {
+            return (
+                <div className="space-y-3" data-table-id={table.id}>
+                    {Array.from({ length: actualRows }).map((_, rowIndex) => (
+                        <div
+                            key={rowIndex}
+                            className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3 space-y-3"
+                        >
+                            <div className="flex items-center justify-between">
+                                <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">
+                                    {showRowNumbers ? `${rowHeaderLabel} ${rowIndex + 1}` : `الصف ${rowIndex + 1}`}
+                                </span>
+                                {allowDynamicRows && (
+                                    <button
+                                        type="button"
+                                        onClick={() => removeRow(rowIndex)}
+                                        disabled={safeTableData.length <= 1}
+                                        className={cn(
+                                            "min-h-[34px] px-2.5 text-xs rounded-md transition-colors",
+                                            safeTableData.length <= 1
+                                                ? "text-gray-300 dark:text-gray-600 cursor-not-allowed bg-gray-100 dark:bg-gray-700"
+                                                : "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30"
+                                        )}
+                                    >
+                                        حذف الصف
+                                    </button>
+                                )}
+                            </div>
+
+                            <div className="space-y-2">
+                                {columns.map((column, colIndex) => {
+                                    const value = safeTableData?.[rowIndex]?.[colIndex];
+                                    return (
+                                        <div key={column.key} className="space-y-1.5">
+                                            <label className="text-[11px] font-medium text-gray-600 dark:text-gray-300">
+                                                {column.label}
+                                            </label>
+                                            <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden min-h-[40px]">
                                                 {renderCellInput(
-                                                    col.type,
+                                                    column.type,
                                                     value,
                                                     (newValue) => {
-                                                        const newData = [...safeTableData];
-                                                        // Ensure we have enough rows
-                                                        while (newData.length <= rowIndex) {
-                                                            newData.push(new Array(columns.length).fill(undefined));
-                                                        }
-                                                        if (!newData[rowIndex]) newData[rowIndex] = [];
-                                                        newData[rowIndex][colIndex] = newValue;
-                                                        onChange(table.id, newData);
+                                                        emitCellChange(
+                                                            table.id,
+                                                            safeTableData,
+                                                            rowIndex,
+                                                            colIndex,
+                                                            newValue,
+                                                            columns.length
+                                                        );
                                                     },
                                                     table.id,
                                                     rowIndex,
                                                     colIndex,
                                                     {
-                                                        min: col.min,
-                                                        max: col.max,
-                                                        options: col.options,
-                                                        format: col.format
+                                                        min: column.min,
+                                                        max: column.max,
+                                                        options: column.type === 'user-directory'
+                                                            ? getUserDirectoryOptions(column.user_directory_department_id, column.user_directory_role_id)
+                                                            : column.options,
+                                                        format: column.format,
+                                                        className: getColumnAlignClass(column.align)
+                                                    }
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    ))}
+
+                    {allowDynamicRows && (
+                        <button
+                            type="button"
+                            onClick={addRow}
+                            className="add-row-button w-full min-h-[40px] flex items-center justify-center gap-2 px-3 py-2 text-sm text-primary-600 hover:text-primary-700 bg-primary-50 dark:bg-primary-900/20 hover:bg-primary-100 dark:hover:bg-primary-900/30 rounded-lg transition-colors"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                            </svg>
+                            إضافة صف جديد
+                        </button>
+                    )}
+                </div>
+            );
+        }
+
+        return (
+            <div className="space-y-2" data-table-id={table.id}>
+                {shouldShowMobileCustomPager && (
+                    <div className="print:hidden flex items-center justify-between gap-2 rounded-lg border border-gray-200 dark:border-gray-700 px-2 py-1.5 bg-gray-50 dark:bg-gray-800">
+                        <button
+                            type="button"
+                            onClick={() => shiftMobileColumnWindow(table.id, columns.length, MOBILE_CUSTOM_COLUMNS_PER_VIEW, 'prev')}
+                            disabled={firstVisibleCustomIndex === 0}
+                            className={cn(
+                                'px-2 py-1 text-xs rounded-md border transition-colors',
+                                firstVisibleCustomIndex === 0
+                                    ? 'text-gray-400 border-gray-200 dark:border-gray-700 cursor-not-allowed'
+                                    : 'text-gray-700 dark:text-gray-200 border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700'
+                            )}
+                        >
+                            السابق
+                        </button>
+                        <div className="text-center leading-tight">
+                            <div className="text-[11px] font-medium text-gray-700 dark:text-gray-200">
+                                الأعمدة {firstVisibleCustomIndex + 1}-{lastVisibleCustomIndex + 1} من {columns.length}
+                            </div>
+                            <div className="text-[11px] text-gray-500 dark:text-gray-400">
+                                {(columns[firstVisibleCustomIndex]?.label ?? `#${firstVisibleCustomIndex + 1}`)} - {(columns[lastVisibleCustomIndex]?.label ?? `#${lastVisibleCustomIndex + 1}`)}
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => shiftMobileColumnWindow(table.id, columns.length, MOBILE_CUSTOM_COLUMNS_PER_VIEW, 'next')}
+                            disabled={lastVisibleCustomIndex >= columns.length - 1}
+                            className={cn(
+                                'px-2 py-1 text-xs rounded-md border transition-colors',
+                                lastVisibleCustomIndex >= columns.length - 1
+                                    ? 'text-gray-400 border-gray-200 dark:border-gray-700 cursor-not-allowed'
+                                    : 'text-gray-700 dark:text-gray-200 border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700'
+                            )}
+                        >
+                            التالي
+                        </button>
+                    </div>
+                )}
+                <div className="overflow-x-auto">
+                    <table className="border-collapse table-fixed" style={{ minWidth: 'max-content' }}>
+                        <colgroup>
+                            {showRowNumbers && (
+                                <col style={{ width: `${rowNumWidth}px`, minWidth: `${rowNumWidth}px`, maxWidth: `${rowNumWidth}px` }} />
+                            )}
+                            {visibleCustomColumnIndexes.map((colIndex) => {
+                                const colWidth = columns[colIndex]?.width || customColWidth;
+                                return (
+                                    <col
+                                        key={`colgroup-${colIndex}`}
+                                        style={{ width: `${colWidth}px`, minWidth: `${colWidth}px`, maxWidth: `${colWidth}px` }}
+                                    />
+                                );
+                            })}
+                            {allowDynamicRows && (
+                                <col style={{ width: `${actionColWidth}px`, minWidth: `${actionColWidth}px`, maxWidth: `${actionColWidth}px` }} />
+                            )}
+                        </colgroup>
+                        <thead>
+                            {hasMultiHeader ? (
+                                headerRows.map((headerRow, headerRowIndex) => (
+                                    <tr key={`header-row-${headerRowIndex}`} className="bg-gray-100 dark:bg-gray-700">
+                                        {showRowNumbers && headerRowIndex === 0 && (
+                                            <th
+                                                rowSpan={headerRows.length}
+                                                className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs font-medium"
+                                            >
+                                                {rowHeaderLabel}
+                                            </th>
+                                        )}
+                                        {headerRow.map((cell, cellIndex) => (
+                                            <th
+                                                key={`header-cell-${headerRowIndex}-${cellIndex}`}
+                                                colSpan={cell.col_span || 1}
+                                                rowSpan={cell.row_span || 1}
+                                                className={cn(
+                                                    'border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm font-medium',
+                                                    getColumnAlignClass(cell.align),
+                                                    cell.class_name
+                                                )}
+                                                style={{
+                                                    backgroundColor: cell.background_color || undefined,
+                                                    color: cell.text_color || undefined,
+                                                }}
+                                            >
+                                                <div className="whitespace-nowrap overflow-hidden text-ellipsis">{cell.label}</div>
+                                            </th>
+                                        ))}
+                                        {allowDynamicRows && headerRowIndex === 0 && (
+                                            <th
+                                                rowSpan={headerRows.length}
+                                                className="border border-gray-300 dark:border-gray-600 px-1 py-3 text-center text-xs font-medium"
+                                            />
+                                        )}
+                                    </tr>
+                                ))
+                            ) : (
+                                <tr className="bg-gray-100 dark:bg-gray-700">
+                                    {showRowNumbers && (
+                                        <th className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs font-medium">
+                                            {rowHeaderLabel}
+                                        </th>
+                                    )}
+                                    {visibleCustomColumnIndexes.map((colIndex) => {
+                                        const column = columns[colIndex];
+                                        if (!column) return null;
+
+                                        return (
+                                            <th
+                                                key={column.key}
+                                                className={cn(
+                                                    'border border-gray-300 dark:border-gray-600 px-3 py-3 text-sm font-medium',
+                                                    getColumnAlignClass(column.align)
+                                                )}
+                                            >
+                                                <div className="whitespace-nowrap overflow-hidden text-ellipsis">{column.label}</div>
+                                            </th>
+                                        );
+                                    })}
+                                    {allowDynamicRows && (
+                                        <th className="border border-gray-300 dark:border-gray-600 px-1 py-3 text-center text-xs font-medium" />
+                                    )}
+                                </tr>
+                            )}
+                        </thead>
+                        <tbody>
+                            {Array.from({ length: actualRows }).map((_, rowIndex) => (
+                                <tr key={rowIndex} className="hover:bg-gray-50 dark:hover:bg-gray-750 group">
+                                    {showRowNumbers && (
+                                        <td className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs text-gray-500 font-medium">
+                                            {rowIndex + 1}
+                                        </td>
+                                    )}
+                                    {visibleCustomColumnIndexes.map((colIndex) => {
+                                        const column = columns[colIndex];
+                                        if (!column) return null;
+                                        const value = safeTableData?.[rowIndex]?.[colIndex];
+
+                                        return (
+                                            <td
+                                                key={column.key}
+                                                className="border border-gray-300 dark:border-gray-600 p-0"
+                                            >
+                                                {renderCellInput(
+                                                    column.type,
+                                                    value,
+                                                    (newValue) => {
+                                                        emitCellChange(
+                                                            table.id,
+                                                            safeTableData,
+                                                            rowIndex,
+                                                            colIndex,
+                                                            newValue,
+                                                            columns.length
+                                                        );
+                                                    },
+                                                    table.id,
+                                                    rowIndex,
+                                                    colIndex,
+                                                    {
+                                                        min: column.min,
+                                                        max: column.max,
+                                                        options: column.type === 'user-directory'
+                                                            ? getUserDirectoryOptions(column.user_directory_department_id, column.user_directory_role_id)
+                                                            : column.options,
+                                                        format: column.format,
+                                                        className: getColumnAlignClass(column.align)
                                                     }
                                                 )}
                                             </td>
@@ -1736,7 +2384,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
         const items = table.items || [];
 
         return (
-            <div className="space-y-2">
+            <div className="space-y-3">
                 {items.map((item, index) => {
                     const status = tableData?.[index]?.[0];
                     const notes = tableData?.[index]?.[1] || '';
@@ -1744,7 +2392,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                     return (
                         <div
                             key={index}
-                            className="flex items-center gap-4 p-3 bg-gray-50 dark:bg-gray-900 rounded-lg"
+                            className="flex flex-col gap-3 p-3 bg-gray-50 dark:bg-gray-900 rounded-lg sm:flex-row sm:items-center sm:gap-4"
                         >
                             <div className="flex-1">
                                 <span className="text-sm text-gray-900 dark:text-white">
@@ -1754,17 +2402,20 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                     <span className="text-red-500 mr-1">*</span>
                                 )}
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
                                 <select
                                     value={status || ''}
                                     onChange={(e) => {
-                                        const newData = [...(tableData || [])];
-                                        if (!newData[index]) newData[index] = [];
-                                        newData[index][0] = e.target.value;
-                                        onChange(table.id, newData);
+                                        emitCellChange(
+                                            table.id,
+                                            tableData || [],
+                                            index,
+                                            0,
+                                            e.target.value
+                                        );
                                     }}
                                     className={cn(
-                                        'px-3 py-1 text-sm border rounded-lg dark:bg-gray-700',
+                                        'w-full sm:w-auto px-3 py-2 text-sm border rounded-lg dark:bg-gray-700',
                                         status === 'ok' && 'bg-green-100 border-green-300 text-green-700',
                                         status === 'not_ok' && 'bg-red-100 border-red-300 text-red-700',
                                         status === 'na' && 'bg-gray-100 border-gray-300 text-gray-700'
@@ -1779,13 +2430,16 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                     type="text"
                                     value={notes}
                                     onChange={(e) => {
-                                        const newData = [...(tableData || [])];
-                                        if (!newData[index]) newData[index] = [];
-                                        newData[index][1] = e.target.value;
-                                        onChange(table.id, newData);
+                                        emitCellChange(
+                                            table.id,
+                                            tableData || [],
+                                            index,
+                                            1,
+                                            e.target.value
+                                        );
                                     }}
                                     placeholder="ملاحظات"
-                                    className="px-2 py-1 text-sm border rounded-lg dark:bg-gray-700 w-32"
+                                    className="w-full sm:w-40 px-3 py-2 text-sm border rounded-lg dark:bg-gray-700"
                                 />
                             </div>
                         </div>
@@ -1867,7 +2521,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                 </div>
                 <div className="p-4">
                     {table.type === 'parameters' && renderParametersTable(table, tableData)}
-                    {table.type === 'sample' && renderSampleTable(table, tableData, _template)}
+                    {(table.type === 'sample' || (table as any).type === 'samples') && renderSampleTable(table, tableData, _template)}
                     {table.type === 'custom' && renderCustomTable(table, tableData)}
                     {table.type === 'printing_verification' && renderCustomTable(table, tableData)}
                     {table.type === 'checklist' && renderChecklist(table, tableData)}
@@ -1930,7 +2584,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
     };
 
     return (
-        <div className="space-y-6">
+        <div className={cn('space-y-6', readOnly && 'pointer-events-none opacity-80')}>
             <div className="flex items-center gap-2 mb-4">
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
                     {section.name}

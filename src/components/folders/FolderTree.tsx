@@ -207,12 +207,12 @@ const SystemFoldersSection: React.FC = () => {
 
   const handleArchiveClick = () => {
     setCurrentFolder('__archive__');
-    navigate('/folders/__archive__');
+    navigate('/forms&reports/__archive__');
   };
 
   const handleRecycleBinClick = () => {
     setCurrentFolder('__recycle_bin__');
-    navigate('/folders/__recycle_bin__');
+    navigate('/forms&reports/__recycle_bin__');
   };
 
   return (
@@ -320,7 +320,7 @@ const FolderTree: React.FC<FolderTreeProps> = ({
   // ... (hooks)
 
   const handleFolderSelect = (folder: Folder) => {
-    navigate(`/folders/${folder.id}`);
+    navigate(`/forms&reports/${folder.id}`);
     onFolderSelect(folder);
   };
 
@@ -402,7 +402,7 @@ const FolderTree: React.FC<FolderTreeProps> = ({
         <button
           onClick={() => {
             setCurrentFolder(null);
-            navigate('/folders');
+            navigate('/forms&reports');
           }}
           className={cn(
             'w-full flex items-center gap-2 py-2 px-3 rounded-lg mb-3 transition-colors',

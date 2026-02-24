@@ -91,12 +91,6 @@ const deleteInstancesByTemplate = async (templateId: string): Promise<void> => {
 const hardDeleteOriginalItem = async (item: RecycleBinItem): Promise<void> => {
     switch (item.type) {
         case 'instance': {
-            try {
-                await supabase.rpc('admin_delete_report', { p_report_id: item.originalId });
-            } catch (error) {
-                console.warn('admin_delete_report failed, falling back to direct delete:', error);
-            }
-
             const { error } = await supabase
                 .from('form_instances')
                 .delete()

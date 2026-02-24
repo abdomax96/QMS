@@ -5,6 +5,15 @@ import type { Variable } from '../../types/supabase'; // Import Variable type
 // import { Document } from '../../types/documents'; // Removed to avoiding strict type matching issues
 import './TinyMCEDocumentEditor.css';
 
+const DESKTOP_TOOLBAR =
+    'undo redo | blocks fontfamily fontsize | bold italic underline strikethrough | alignleft aligncenter alignright alignjustify | bullist numlist outdent indent | forecolor backcolor removeformat | table link image | pagebreak hr | insertVariable customPrint';
+
+const COMPACT_TOOLBAR =
+    'undo redo | blocks fontsize | bold italic underline | alignright aligncenter alignleft | bullist numlist | forecolor backcolor | table link image | pagebreak | insertVariable customPrint';
+
+const MOBILE_TOOLBAR =
+    'undo redo | bold italic underline | alignright aligncenter alignleft | bullist numlist | table link | insertVariable customPrint';
+
 interface EditorDocumentInfo {
     document_number?: string;
     title?: string;
@@ -35,6 +44,9 @@ export default function TinyMCEDocumentEditor({
 }: TinyMCEDocumentEditorProps) {
     const editorRef = useRef<any>(null);
     const { selectedCompany } = useCompanyStore();
+    const isCompactViewportRef = useRef(
+        typeof window !== 'undefined' && window.matchMedia('(max-width: 1024px)').matches
+    );
 
     // Initial content state to ensure initialValue prop is stable
     const [initialContent] = useState(content);
@@ -103,7 +115,7 @@ export default function TinyMCEDocumentEditor({
         height: '100%',
         width: '100%',
         resize: false,
-        menubar: true,
+        menubar: !isCompactViewportRef.current,
         directionality: 'rtl' as const,
         language: 'ar',
 
@@ -112,7 +124,12 @@ export default function TinyMCEDocumentEditor({
         toolbar_sticky: true,
         toolbar_sticky_offset: 0,
         // Added insertVariable to toolbar
-        toolbar: 'undo redo | blocks fontfamily fontsize | bold italic underline strikethrough | alignleft aligncenter alignright alignjustify | bullist numlist outdent indent | forecolor backcolor removeformat | table link image | pagebreak hr | insertVariable customPrint',
+        toolbar: isCompactViewportRef.current ? COMPACT_TOOLBAR : DESKTOP_TOOLBAR,
+        mobile: {
+            menubar: false,
+            toolbar_mode: 'sliding' as const,
+            toolbar: MOBILE_TOOLBAR
+        },
 
         // Plugins - Free Open Source Only
         plugins: [
@@ -137,6 +154,8 @@ export default function TinyMCEDocumentEditor({
                 margin: 0;
                 padding: 20px;
                 min-height: 100%;
+                overflow-wrap: anywhere;
+                word-break: break-word;
             }
             
             /* A4 Paper simulation */
@@ -148,12 +167,46 @@ export default function TinyMCEDocumentEditor({
             
             .mce-content-body {
                 background: white;
-                width: 210mm;
+                width: min(210mm, calc(100vw - 24px));
                 min-height: 297mm;
                 padding: 15mm 20mm;
                 margin: 20px auto;
                 box-shadow: 0 4px 25px rgba(0, 0, 0, 0.15);
                 box-sizing: border-box;
+            }
+
+            img, video {
+                max-width: 100%;
+                height: auto;
+            }
+
+            @media (max-width: 1024px) {
+                body {
+                    padding: 8px;
+                    background: #f3f4f6;
+                }
+
+                .mce-content-body {
+                    width: 100%;
+                    max-width: none;
+                    min-height: auto;
+                    padding: 12px;
+                    margin: 8px auto;
+                    box-shadow: 0 1px 10px rgba(0, 0, 0, 0.12);
+                }
+            }
+
+            @media (max-width: 640px) {
+                body {
+                    font-size: 13px;
+                    line-height: 1.7;
+                    padding: 6px;
+                }
+
+                .mce-content-body {
+                    padding: 10px;
+                    margin: 4px auto;
+                }
             }
             
             /* Manual Page Break Marker */
@@ -175,8 +228,8 @@ export default function TinyMCEDocumentEditor({
             
             ul, ol { padding-right: 2em; padding-left: 0; margin: 0.5em 0; }
             
-            table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-            td, th { border: 1px solid #374151; padding: 8px 12px; text-align: right; }
+            table { border-collapse: collapse; width: 100%; margin: 1em 0; table-layout: fixed; }
+            td, th { border: 1px solid #374151; padding: 8px 12px; text-align: right; overflow-wrap: anywhere; word-break: break-word; }
             th { background: #e8e8e8; font-weight: bold; }
             
             @page {

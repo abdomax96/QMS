@@ -79,7 +79,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({
         >
             {/* Header */}
             <div
-                className="p-4 border-b border-slate-100 dark:border-slate-700 bg-gradient-to-br from-white to-slate-50/50 dark:from-slate-800 dark:to-slate-850/50"
+                className="p-3 sm:p-4 border-b border-slate-100 dark:border-slate-700 bg-gradient-to-br from-white to-slate-50/50 dark:from-slate-800 dark:to-slate-850/50"
                 style={{
                     backgroundColor: folder.color ? `${folder.color}10` : undefined,
                 }}
@@ -88,7 +88,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({
                     {/* Icon & Title */}
                     <div className="flex items-center gap-3 flex-1 min-w-0">
                         <div
-                            className="flex-shrink-0 w-12 h-12 rounded-corporate flex items-center justify-center text-2xl shadow-sm"
+                            className="flex-shrink-0 w-10 h-10 sm:w-12 sm:h-12 rounded-corporate flex items-center justify-center text-xl sm:text-2xl shadow-sm"
                             style={{
                                 backgroundColor: folder.color || '#6B7280',
                                 color: 'white',
@@ -115,10 +115,10 @@ export const FolderCard: React.FC<FolderCardProps> = ({
                         <button
                             onClick={handleFavoriteClick}
                             className={cn(
-                                'p-1.5 rounded-corporate hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors',
+                                'min-h-[40px] min-w-[40px] p-1.5 rounded-corporate hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors',
                                 folder.is_favorite
                                     ? 'text-amber-500'
-                                    : 'text-slate-400 dark:text-slate-500 opacity-0 group-hover:opacity-100'
+                                    : 'text-slate-400 dark:text-slate-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100'
                             )}
                             title={folder.is_favorite ? 'إزالة من المفضلة' : 'إضافة للمفضلة'}
                         >
@@ -133,7 +133,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({
                         {onShare && (
                             <button
                                 onClick={handleShareClick}
-                                className="p-1.5 rounded-corporate hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-slate-400 dark:text-slate-500 opacity-0 group-hover:opacity-100"
+                                className="min-h-[40px] min-w-[40px] p-1.5 rounded-corporate hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-slate-400 dark:text-slate-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
                                 title="مشاركة"
                             >
                                 <ShareIcon className="w-5 h-5" />
@@ -144,7 +144,7 @@ export const FolderCard: React.FC<FolderCardProps> = ({
                         {onContextMenu && (
                             <button
                                 onClick={handleContextMenuClick}
-                                className="p-1.5 rounded-corporate hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-slate-400 dark:text-slate-500 opacity-0 group-hover:opacity-100"
+                                className="min-h-[40px] min-w-[40px] p-1.5 rounded-corporate hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors text-slate-400 dark:text-slate-500 opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
                                 title="المزيد"
                             >
                                 <EllipsisVerticalIcon className="w-5 h-5" />
@@ -155,9 +155,9 @@ export const FolderCard: React.FC<FolderCardProps> = ({
             </div>
 
             {/* Stats */}
-            <div className="p-4">
-                <div className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-4">
+            <div className="p-3 sm:p-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-sm">
+                    <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
                         <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400">
                             <span className="text-lg">📋</span>
                             <span className="font-medium">{formsCount}</span>

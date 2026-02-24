@@ -32,6 +32,8 @@ interface NotificationState {
 }
 
 let unsubscribeRealtime: (() => void) | null = null;
+const MAX_NOTIFICATIONS = 50;
+const NOTIFICATION_DEDUP_WINDOW_MS = 30_000;
 
 function resolvePriorityFromType(type?: string): Notification['priority'] {
     switch (type) {
@@ -64,6 +66,63 @@ function mapServerNotification(server: ServerNotification): Notification {
         createdAt: server.created_at,
         expiresAt: server.expires_at || undefined
     };
+}
+
+function normalizeNotificationText(value?: string): string {
+    return (value || '').trim();
+}
+
+function notificationTimestamp(notification: Notification): number {
+    const timestamp = Date.parse(notification.createdAt || '');
+    return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function buildNotificationDedupKey(notification: Notification): string {
+    return [
+        notification.type,
+        normalizeNotificationText(notification.title),
+        normalizeNotificationText(notification.message),
+        notification.entityType || '',
+        notification.entityId || '',
+        notification.link || '',
+    ].join('|');
+}
+
+function dedupeNotifications(notifications: Notification[]): Notification[] {
+    const sorted = [...notifications].sort(
+        (a, b) => notificationTimestamp(b) - notificationTimestamp(a)
+    );
+
+    const deduped: Notification[] = [];
+    const seenIds = new Set<string>();
+    const latestByKey = new Map<string, number>();
+
+    for (const notification of sorted) {
+        if (seenIds.has(notification.id)) {
+            continue;
+        }
+        seenIds.add(notification.id);
+
+        const key = buildNotificationDedupKey(notification);
+        const currentTs = notificationTimestamp(notification);
+        const latestTs = latestByKey.get(key);
+
+        if (
+            latestTs !== undefined &&
+            latestTs - currentTs <= NOTIFICATION_DEDUP_WINDOW_MS
+        ) {
+            continue;
+        }
+
+        latestByKey.set(key, currentTs);
+        deduped.push(notification);
+
+        if (deduped.length >= MAX_NOTIFICATIONS) {
+            break;
+        }
+    }
+
+    return deduped;
 }
 
 function playSoundIfNeeded(enabled: boolean, notification: Notification): void {
@@ -104,7 +163,7 @@ export const useNotificationStore = create<NotificationState>()(
 
                 try {
                     const list = await notificationService.getNotifications(userId, 50, true);
-                    const mapped = list.map(mapServerNotification);
+                    const mapped = dedupeNotifications(list.map(mapServerNotification));
                     const unreadCount = mapped.filter((item) => !item.read).length;
 
                     set({
@@ -120,18 +179,22 @@ export const useNotificationStore = create<NotificationState>()(
                         const soundEnabled = get().soundEnabled;
 
                         set((state) => {
-                            const existingIndex = state.notifications.findIndex((item) => item.id === incoming.id);
-                            if (existingIndex >= 0) {
-                                const next = [...state.notifications];
-                                next[existingIndex] = incoming;
-                                return {
-                                    notifications: next,
-                                    unreadCount: next.filter((item) => !item.read).length
-                                };
+                            const wasExistingById = state.notifications.some(
+                                (item) => item.id === incoming.id
+                            );
+
+                            const next = dedupeNotifications([
+                                incoming,
+                                ...state.notifications.filter((item) => item.id !== incoming.id),
+                            ]);
+
+                            const incomingPersisted = next.some(
+                                (item) => item.id === incoming.id
+                            );
+                            if (!wasExistingById && incomingPersisted) {
+                                playSoundIfNeeded(soundEnabled, incoming);
                             }
 
-                            playSoundIfNeeded(soundEnabled, incoming);
-                            const next = [incoming, ...state.notifications].slice(0, 50);
                             return {
                                 notifications: next,
                                 unreadCount: next.filter((item) => !item.read).length
@@ -156,7 +219,7 @@ export const useNotificationStore = create<NotificationState>()(
                 set({ isLoading: true });
                 try {
                     const list = await notificationService.getNotifications(userId, 50, true);
-                    const mapped = list.map(mapServerNotification);
+                    const mapped = dedupeNotifications(list.map(mapServerNotification));
                     set({
                         notifications: mapped,
                         unreadCount: mapped.filter((item) => !item.read).length,
@@ -190,7 +253,7 @@ export const useNotificationStore = create<NotificationState>()(
                 playSoundIfNeeded(get().soundEnabled, mapped);
 
                 set((state) => {
-                    const next = [mapped, ...state.notifications].slice(0, 50);
+                    const next = dedupeNotifications([mapped, ...state.notifications]);
                     return {
                         notifications: next,
                         unreadCount: next.filter((item) => !item.read).length

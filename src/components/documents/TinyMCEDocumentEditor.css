@@ -14,6 +14,11 @@
     flex-direction: column;
     min-height: 0;
     overflow: hidden;
+    background: #f3f4f6;
+}
+
+.dark .tinymce-document-editor .editor-wrapper {
+    background: #111827;
 }
 
 /* TinyMCE container */
@@ -30,6 +35,8 @@
     flex-shrink: 0 !important;
     background: #f3f4f6 !important;
     border-bottom: 1px solid #d1d5db !important;
+    position: sticky !important;
+    top: 0;
     z-index: 50 !important;
 }
 
@@ -61,6 +68,46 @@
 .tinymce-document-editor .tox-edit-area__iframe {
     flex: 1 !important;
     min-height: 0 !important;
+}
+
+.tinymce-document-editor .tox-toolbar-overlord {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+}
+
+.tinymce-document-editor .tox .tox-toolbar__group {
+    flex-wrap: nowrap !important;
+}
+
+@media (max-width: 1024px) {
+    .tinymce-document-editor .tox .tox-toolbar,
+    .tinymce-document-editor .tox .tox-toolbar__primary {
+        padding: 4px !important;
+        gap: 4px !important;
+    }
+
+    .tinymce-document-editor .tox .tox-tbtn {
+        min-width: 34px !important;
+        min-height: 34px !important;
+    }
+
+    .tinymce-document-editor .tox .tox-mbtn,
+    .tinymce-document-editor .tox .tox-tbtn__select-label {
+        font-size: 12px !important;
+    }
+}
+
+@media (max-width: 640px) {
+    .tinymce-document-editor .tox .tox-toolbar-overlord {
+        padding-bottom: 2px;
+    }
+
+    .tinymce-document-editor .tox .tox-tbtn {
+        min-width: 32px !important;
+        min-height: 32px !important;
+        padding: 0 !important;
+    }
 }
 
 /* ================== PRINT ONLY ================== */

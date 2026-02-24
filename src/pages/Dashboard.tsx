@@ -51,22 +51,22 @@ const UnifiedDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<DashboardTab>('reports');
 
   return (
-    <div className="p-6 min-h-full">
+    <div className="p-3 sm:p-4 lg:p-6 min-h-full">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">
+      <div className="mb-6 sm:mb-8">
+        <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white mb-2">
           لوحة التحكم
         </h1>
-        <p className="text-slate-500 dark:text-slate-400">
+        <p className="text-sm sm:text-base text-slate-500 dark:text-slate-400">
           نظرة عامة على النظام والإحصائيات المتكاملة
         </p>
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-1 p-1.5 bg-slate-100 dark:bg-slate-800/80 rounded-corporate-lg w-fit mb-6 flex-wrap shadow-inner-soft">
+      <div className="flex items-center gap-1 p-1.5 bg-slate-100 dark:bg-slate-800/80 rounded-corporate-lg w-full max-w-full mb-6 overflow-x-auto shadow-inner-soft">
         <button
           onClick={() => setActiveTab('reports')}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-corporate font-medium transition-all duration-250 ${activeTab === 'reports'
+          className={`shrink-0 flex items-center gap-2 px-3 sm:px-5 py-2.5 rounded-corporate font-medium transition-all duration-250 ${activeTab === 'reports'
             ? 'bg-white dark:bg-slate-700 text-primary-600 shadow-card'
             : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white/50 dark:hover:bg-slate-700/50'
             }`}
@@ -76,7 +76,7 @@ const UnifiedDashboard: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('ncr')}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-corporate font-medium transition-all duration-250 ${activeTab === 'ncr'
+          className={`shrink-0 flex items-center gap-2 px-3 sm:px-5 py-2.5 rounded-corporate font-medium transition-all duration-250 ${activeTab === 'ncr'
             ? 'bg-white dark:bg-slate-700 text-primary-600 shadow-card'
             : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white/50 dark:hover:bg-slate-700/50'
             }`}
@@ -86,7 +86,7 @@ const UnifiedDashboard: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('lab')}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-corporate font-medium transition-all duration-250 ${activeTab === 'lab'
+          className={`shrink-0 flex items-center gap-2 px-3 sm:px-5 py-2.5 rounded-corporate font-medium transition-all duration-250 ${activeTab === 'lab'
             ? 'bg-white dark:bg-slate-700 text-primary-600 shadow-card'
             : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white/50 dark:hover:bg-slate-700/50'
             }`}
@@ -96,7 +96,7 @@ const UnifiedDashboard: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('tasks')}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-corporate font-medium transition-all duration-250 ${activeTab === 'tasks'
+          className={`shrink-0 flex items-center gap-2 px-3 sm:px-5 py-2.5 rounded-corporate font-medium transition-all duration-250 ${activeTab === 'tasks'
             ? 'bg-white dark:bg-slate-700 text-primary-600 shadow-card'
             : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white/50 dark:hover:bg-slate-700/50'
             }`}
@@ -377,7 +377,7 @@ const NcrDashboard: React.FC = () => {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
         {statCards.map((stat) => (
           <div key={stat.label} className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700">
             <div className="flex items-center gap-3">
@@ -573,7 +573,7 @@ const LabDashboard: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Quick Actions */}
-      <div className="flex gap-3">
+      <div className="flex flex-wrap gap-3">
         <Link to="/lab/receiving/new" className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700">
           <TruckIcon className="w-5 h-5" />
           استلام جديد
@@ -585,7 +585,7 @@ const LabDashboard: React.FC = () => {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
         {statCards.map(stat => (
           <div key={stat.label} className={`${stat.bg} rounded-xl p-4`}>
             <div className={`text-2xl font-bold ${stat.color}`}>{stat.value}</div>
@@ -711,7 +711,7 @@ const TasksDashboard: React.FC = () => {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
         {[
           { label: 'الإجمالي', value: stats.total, color: 'text-gray-600', bg: 'bg-gray-100 dark:bg-gray-700' },
           { label: 'معلقة', value: stats.pending, color: 'text-yellow-600', bg: 'bg-yellow-100 dark:bg-yellow-900' },

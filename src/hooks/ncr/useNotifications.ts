@@ -17,6 +17,22 @@ interface UiNotification {
     actionUrl?: string | null;
 }
 
+function notificationTimestamp(createdAt: string): number {
+    const timestamp = Date.parse(createdAt || '');
+    return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function dedupeUiNotifications(items: UiNotification[]): UiNotification[] {
+    const byId = new Map<string, UiNotification>();
+    items.forEach((item) => {
+        byId.set(item.id, item);
+    });
+
+    return Array.from(byId.values())
+        .sort((a, b) => notificationTimestamp(b.createdAt) - notificationTimestamp(a.createdAt))
+        .slice(0, 50);
+}
+
 export function useNotifications() {
     const { profile } = useAuth();
     const [notifications, setNotifications] = useState<UiNotification[]>([]);
@@ -45,10 +61,10 @@ export function useNotifications() {
                 createdAt: (n as any).created_at || (n as any).createdAt,
                 actionUrl: (n as any).action_url || (n as any).actionUrl || null
             }));
-            setNotifications(normalized);
+            setNotifications(dedupeUiNotifications(normalized));
             setLoading(false);
             unsubscribe = notificationService.subscribeToNotifications(userId, (notif) => {
-                setNotifications(prev => [{
+                const incoming: UiNotification = {
                     id: notif.id,
                     title: notif.title,
                     message: notif.message,
@@ -56,7 +72,11 @@ export function useNotifications() {
                     read: notif.read,
                     createdAt: (notif as any).created_at || (notif as any).createdAt,
                     actionUrl: (notif as any).action_url || (notif as any).actionUrl || null
-                }, ...prev].slice(0, 50));
+                };
+
+                setNotifications(prev =>
+                    dedupeUiNotifications([incoming, ...prev])
+                );
             });
         };
         load();

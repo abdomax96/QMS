@@ -80,6 +80,7 @@ interface NavItem {
 
 const MainLayout: React.FC = () => {
   const location = useLocation();
+  const isReportPreviewRoute = location.pathname.startsWith('/reports/');
   const {
     theme,
     toggleTheme,
@@ -91,6 +92,8 @@ const MainLayout: React.FC = () => {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [langMenuOpen, setLangMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // Tabs Logic
   const { tabs, getTab, closeTab: closeTabStore, updateTabState, markDirty } = useTabsStore();
@@ -163,7 +166,42 @@ const MainLayout: React.FC = () => {
     }
   }, [confirmDialog, getTab, formTemplates, formInstances, updateFormTemplate, updateFormInstance, updateTabState, markDirty, closeTabStore, handleConfirmClose]);
 
-  const iconSize = sidebarCollapsed ? "w-6 h-6" : "w-5 h-5";
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const mediaQuery = window.matchMedia('(max-width: 1023px)');
+    const syncViewport = (matches: boolean) => {
+      setIsMobileViewport(matches);
+      if (!matches) {
+        setMobileSidebarOpen(false);
+      }
+    };
+
+    syncViewport(mediaQuery.matches);
+
+    const handleMediaChange = (event: MediaQueryListEvent) => {
+      syncViewport(event.matches);
+    };
+
+    mediaQuery.addEventListener('change', handleMediaChange);
+    return () => mediaQuery.removeEventListener('change', handleMediaChange);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileViewport) return;
+    setMobileSidebarOpen(false);
+  }, [location.pathname, isMobileViewport]);
+
+  useEffect(() => {
+    if (!isMobileViewport) return;
+    document.body.style.overflow = mobileSidebarOpen ? 'hidden' : '';
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [isMobileViewport, mobileSidebarOpen]);
+
+  const effectiveSidebarCollapsed = isMobileViewport ? false : sidebarCollapsed;
+  const iconSize = effectiveSidebarCollapsed ? "w-6 h-6" : "w-5 h-5";
 
   // Proactive session health check on navigation
   // This prevents infinite loading by validating session before navigation attempts
@@ -400,12 +438,30 @@ const MainLayout: React.FC = () => {
   );
 
   return (
-    <div className="flex h-screen bg-slate-50 dark:bg-slate-900">
+    <div
+      className={cn(
+        "flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-900",
+        isReportPreviewRoute && "h-auto min-h-screen overflow-visible bg-white dark:bg-white"
+      )}
+    >
+      {isMobileViewport && mobileSidebarOpen && !isReportPreviewRoute && (
+        <button
+          type="button"
+          className="fixed inset-0 z-[60] bg-slate-900/45 backdrop-blur-[1px] lg:hidden"
+          aria-label="إغلاق القائمة"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
+      {!isReportPreviewRoute && (
       <aside
         className={cn(
           'bg-gradient-sidebar dark:bg-gradient-sidebar-dark border-r border-slate-200/60 dark:border-slate-700/60 transition-all duration-300 ease-smooth flex flex-col print:hidden shadow-soft',
-          sidebarCollapsed ? 'w-16' : 'w-64'
+          isMobileViewport
+            ? 'fixed inset-y-0 right-0 z-[70] w-72 max-w-[85vw] transform'
+            : effectiveSidebarCollapsed ? 'w-16' : 'w-64',
+          isMobileViewport && (mobileSidebarOpen ? 'translate-x-0' : 'translate-x-full')
         )}
       >
         {/* Logo */}
@@ -415,7 +471,7 @@ const MainLayout: React.FC = () => {
           aria-label="Home"
           title="Home"
         >
-          <LogoDisplay sidebarCollapsed={sidebarCollapsed} />
+          <LogoDisplay sidebarCollapsed={effectiveSidebarCollapsed} />
         </Link>
 
         {/* Navigation */}
@@ -435,11 +491,11 @@ const MainLayout: React.FC = () => {
                     className={cn(
                       "w-full flex items-center gap-2 px-3 py-2 rounded-corporate text-sm font-medium transition-all duration-200",
                       "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800",
-                      sidebarCollapsed && "justify-center"
+                      effectiveSidebarCollapsed && "justify-center"
                     )}
                   >
                     <span className="text-slate-500 dark:text-slate-400">{group.icon}</span>
-                    {!sidebarCollapsed && (
+                    {!effectiveSidebarCollapsed && (
                       <>
                         <span className="flex-1 text-right">{group.label}</span>
                         <ChevronIcon isOpen={expandedGroups.has(group.label)} />
@@ -448,14 +504,15 @@ const MainLayout: React.FC = () => {
                   </button>
 
                   {/* Group Children */}
-                  {(expandedGroups.has(group.label) || sidebarCollapsed) && group.children && (
-                    <div className={cn("space-y-0.5", !sidebarCollapsed && "mr-2 mt-1")}>
+                  {(expandedGroups.has(group.label) || effectiveSidebarCollapsed) && group.children && (
+                    <div className={cn("space-y-0.5", !effectiveSidebarCollapsed && "mr-2 mt-1")}>
                       {group.children.map(child => (
                         <NavLink
                           key={child.path}
                           item={child}
                           location={location}
-                          sidebarCollapsed={sidebarCollapsed}
+                          sidebarCollapsed={effectiveSidebarCollapsed}
+                          onNavigate={isMobileViewport ? () => setMobileSidebarOpen(false) : undefined}
                         />
                       ))}
                     </div>
@@ -467,7 +524,13 @@ const MainLayout: React.FC = () => {
               {groupedNavItems.standalone.length > 0 && (
                 <div className="pt-3 mt-3 border-t border-slate-200/60 dark:border-slate-700/60 space-y-0.5">
                   {groupedNavItems.standalone.map(item => (
-                    <NavLink key={item.path} item={item} location={location} sidebarCollapsed={sidebarCollapsed} />
+                    <NavLink
+                      key={item.path}
+                      item={item}
+                      location={location}
+                      sidebarCollapsed={effectiveSidebarCollapsed}
+                      onNavigate={isMobileViewport ? () => setMobileSidebarOpen(false) : undefined}
+                    />
                   ))}
                 </div>
               )}
@@ -476,7 +539,13 @@ const MainLayout: React.FC = () => {
               {groupedNavItems.system.length > 0 && (
                 <div className="pt-3 mt-3 border-t border-slate-200/60 dark:border-slate-700/60 space-y-0.5">
                   {groupedNavItems.system.map(item => (
-                    <NavLink key={item.path} item={item} location={location} sidebarCollapsed={sidebarCollapsed} />
+                    <NavLink
+                      key={item.path}
+                      item={item}
+                      location={location}
+                      sidebarCollapsed={effectiveSidebarCollapsed}
+                      onNavigate={isMobileViewport ? () => setMobileSidebarOpen(false) : undefined}
+                    />
                   ))}
                 </div>
               )}
@@ -487,24 +556,38 @@ const MainLayout: React.FC = () => {
         {/* Bottom Actions */}
         <div className="p-3 border-t border-slate-200/60 dark:border-slate-700/60">
           <button
-            onClick={toggleSidebar}
+            onClick={isMobileViewport ? () => setMobileSidebarOpen(false) : toggleSidebar}
             className="flex items-center gap-3 px-3 py-2.5 rounded-corporate hover:bg-slate-100 dark:hover:bg-slate-800 w-full transition-all duration-200 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100"
           >
             <Bars3Icon className="w-5 h-5" />
-            {!sidebarCollapsed && (
+            {isMobileViewport ? (
+              <span className="text-sm font-medium">إغلاق القائمة</span>
+            ) : !effectiveSidebarCollapsed && (
               <span className="text-sm font-medium">تصغير القائمة</span>
             )}
           </button>
         </div>
       </aside>
+      )}
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 min-w-0 flex flex-col">
         {/* Header */}
-        <header className="relative h-16 bg-white/80 dark:bg-slate-800/80 backdrop-blur-glass border-b border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between px-6 print:hidden shadow-sm overflow-visible z-50">
-          <div className="flex items-center gap-4 flex-1">
+        {!isReportPreviewRoute && (
+        <header className="relative h-16 bg-white/80 dark:bg-slate-800/80 backdrop-blur-glass border-b border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between px-3 sm:px-4 lg:px-6 print:hidden shadow-sm overflow-visible z-50">
+          <div className="flex items-center gap-2 sm:gap-4 flex-1 min-w-0">
+            {isMobileViewport && (
+              <button
+                type="button"
+                onClick={() => setMobileSidebarOpen(true)}
+                className="inline-flex items-center justify-center p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-corporate transition-all duration-200 lg:hidden"
+                aria-label="فتح القائمة"
+              >
+                <Bars3Icon className="w-6 h-6 text-slate-700 dark:text-slate-200" />
+              </button>
+            )}
             {/* Search */}
-            <div className="relative max-w-md w-full">
+            <div className="relative max-w-md w-full min-w-0">
               <input
                 type="text"
                 value={searchQuery}
@@ -516,7 +599,7 @@ const MainLayout: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 sm:gap-2">
             {/* Theme Toggle */}
             <button
               onClick={toggleTheme}
@@ -537,7 +620,7 @@ const MainLayout: React.FC = () => {
                 title="تبديل اللغة"
               >
                 <LanguageIcon className="w-5 h-5 text-slate-600 dark:text-slate-400" />
-                <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                <span className="hidden sm:inline text-xs font-semibold text-slate-600 dark:text-slate-400">
                   {displayLanguage === 'ar' ? 'ع' : displayLanguage === 'en' ? 'EN' : 'ع/EN'}
                 </span>
               </button>
@@ -582,7 +665,7 @@ const MainLayout: React.FC = () => {
             <div className="relative" data-user-menu>
               <button
                 onClick={() => setUserMenuOpen(!userMenuOpen)}
-                className="flex items-center gap-3 px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-corporate transition-all duration-200 mr-2"
+                className="flex items-center gap-2 px-2 sm:px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-corporate transition-all duration-200"
               >
                 {profile?.avatar_url ? (
                   <img
@@ -595,7 +678,7 @@ const MainLayout: React.FC = () => {
                     {(profile?.name || 'م').charAt(0)}
                   </div>
                 )}
-                <div className="text-right">
+                <div className="text-right hidden lg:block">
                   <p className="text-sm font-semibold text-slate-900 dark:text-white">
                     {profile?.name || 'مستخدم'}
                   </p>
@@ -636,13 +719,26 @@ const MainLayout: React.FC = () => {
             </div>
           </div>
         </header>
+        )}
 
         {/* Page Content */}
         <div className="z-40 shrink-0 bg-slate-50 dark:bg-slate-900 border-b border-slate-200/60 dark:border-slate-700/60">
-          <TabBar onTabClose={handleTabClose} />
+          <div className="overflow-x-auto">
+            <TabBar onTabClose={handleTabClose} />
+          </div>
         </div>
 
-        <main className="flex-1 overflow-y-auto relative bg-slate-50 dark:bg-slate-900" dir="rtl">
+        <div className="z-40 shrink-0 px-2 sm:px-3 pt-1 pb-1 flex justify-start relative bg-slate-50 dark:bg-slate-900" dir="ltr">
+          <div id="tabs-collaboration-slot" className="w-fit max-w-full" />
+        </div>
+
+        <main
+          className={cn(
+            "flex-1 min-w-0 overflow-y-auto relative bg-slate-50 dark:bg-slate-900",
+            isReportPreviewRoute && "overflow-visible bg-white dark:bg-white"
+          )}
+          dir="rtl"
+        >
           <Outlet />
           <ScrollRestoration />
         </main>
@@ -659,13 +755,13 @@ const MainLayout: React.FC = () => {
         onSave={handleSaveAndClose}
       />
 
-      {DevReleasePanel && (
+      {DevReleasePanel && !isReportPreviewRoute && (
         <Suspense fallback={null}>
           <DevReleasePanel />
         </Suspense>
       )}
 
-      {chatProvider !== 'mattermost' && <ChatDrawer />}
+      {chatProvider !== 'mattermost' && !isReportPreviewRoute && <ChatDrawer />}
     </div>
   );
 };
@@ -675,7 +771,8 @@ const NavLink: React.FC<{
   item: NavItem;
   location: { pathname: string };
   sidebarCollapsed: boolean;
-}> = ({ item, location, sidebarCollapsed }) => {
+  onNavigate?: () => void;
+}> = ({ item, location, sidebarCollapsed, onNavigate }) => {
   const path = item.path || '/';
   const isActive = location.pathname === path ||
     (path !== '/' && location.pathname.startsWith(path));
@@ -686,6 +783,7 @@ const NavLink: React.FC<{
   return (
     <Link
       to={path}
+      onClick={onNavigate}
       className={cn(
         'flex items-center gap-3 px-3 py-2.5 rounded-corporate transition-all duration-200',
         'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100',

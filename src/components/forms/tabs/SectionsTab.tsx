@@ -35,6 +35,12 @@ interface SectionsTabProps {
     onChange: (updates: Partial<FormTemplate>) => void;
 }
 
+interface QualityCriteriaItemDraft {
+    id: string;
+    parameter: string;
+    specification: string;
+}
+
 // Grade colors for quality criteria
 const gradeColors = [
     { id: 'green', label: 'أخضر', color: '#10B981', bgClass: 'bg-green-100 dark:bg-green-900' },
@@ -266,6 +272,76 @@ const SortableSection: React.FC<SortableSectionProps> = ({
     );
 };
 
+interface SortableCriteriaItemRowProps {
+    item: QualityCriteriaItemDraft;
+    onParameterChange: (id: string, value: string) => void;
+    onSpecificationChange: (id: string, value: string) => void;
+    onDelete: (id: string) => void;
+}
+
+const SortableCriteriaItemRow: React.FC<SortableCriteriaItemRowProps> = ({
+    item,
+    onParameterChange,
+    onSpecificationChange,
+    onDelete,
+}) => {
+    const {
+        attributes,
+        listeners,
+        setNodeRef,
+        transform,
+        transition,
+        isDragging,
+    } = useSortable({ id: item.id });
+
+    const style = {
+        transform: CSS.Transform.toString(transform),
+        transition,
+    };
+
+    return (
+        <div
+            ref={setNodeRef}
+            style={style}
+            className={cn(
+                'flex items-center gap-2 rounded',
+                isDragging && 'opacity-80'
+            )}
+        >
+            <button
+                type="button"
+                {...attributes}
+                {...listeners}
+                className="cursor-grab active:cursor-grabbing p-1.5 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                title="اسحب للترتيب"
+            >
+                <Bars3Icon className="w-4 h-4" />
+            </button>
+            <input
+                type="text"
+                value={item.parameter}
+                onChange={(e) => onParameterChange(item.id, e.target.value)}
+                className="flex-1 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
+                placeholder="المعلمة"
+            />
+            <input
+                type="text"
+                value={item.specification}
+                onChange={(e) => onSpecificationChange(item.id, e.target.value)}
+                className="flex-1 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
+                placeholder="المواصفة"
+            />
+            <button
+                type="button"
+                onClick={() => onDelete(item.id)}
+                className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded"
+            >
+                <TrashIcon className="w-4 h-4" />
+            </button>
+        </div>
+    );
+};
+
 const SectionsTab: React.FC<SectionsTabProps> = ({ template, onChange }) => {
     const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
     const [showSectionDialog, setShowSectionDialog] = useState(false);
@@ -280,7 +356,7 @@ const SectionsTab: React.FC<SectionsTabProps> = ({ template, onChange }) => {
     const [newCriteriaTitle, setNewCriteriaTitle] = useState('');
     const [newCriteriaColor, setNewCriteriaColor] = useState('green');
     const [newCriteriaAcceptance, setNewCriteriaAcceptance] = useState('');
-    const [newCriteriaItems, setNewCriteriaItems] = useState<Array<{ parameter: string; specification: string }>>([]);
+    const [newCriteriaItems, setNewCriteriaItems] = useState<QualityCriteriaItemDraft[]>([]);
 
     const sections = Object.values(template.sections || {}).sort((a, b) => a.order - b.order);
 
@@ -303,6 +379,18 @@ const SectionsTab: React.FC<SectionsTabProps> = ({ template, onChange }) => {
 
             onChange({ sections: updatedSections });
         }
+    };
+
+    const handleCriteriaItemsDragEnd = (event: DragEndEvent) => {
+        const { active, over } = event;
+        if (!over || active.id === over.id) return;
+
+        setNewCriteriaItems((prev) => {
+            const oldIndex = prev.findIndex((item) => item.id === active.id);
+            const newIndex = prev.findIndex((item) => item.id === over.id);
+            if (oldIndex < 0 || newIndex < 0) return prev;
+            return arrayMove(prev, oldIndex, newIndex);
+        });
     };
 
     const handleAddSection = () => {
@@ -415,7 +503,13 @@ const SectionsTab: React.FC<SectionsTabProps> = ({ template, onChange }) => {
         setNewCriteriaTitle(criteria.title);
         setNewCriteriaColor(criteria.color);
         setNewCriteriaAcceptance(criteria.acceptance || '');
-        setNewCriteriaItems(criteria.items?.map(item => ({ parameter: item.parameter, specification: item.specification })) || []);
+        setNewCriteriaItems(
+            criteria.items?.map((item) => ({
+                id: generateId(),
+                parameter: item.parameter,
+                specification: item.specification,
+            })) || []
+        );
         setShowQualityCriteriaDialog(true);
     };
 
@@ -426,7 +520,9 @@ const SectionsTab: React.FC<SectionsTabProps> = ({ template, onChange }) => {
         if (!section) return;
 
         // Filter out empty items
-        const validItems = newCriteriaItems.filter(item => item.parameter.trim() || item.specification.trim());
+        const validItems = newCriteriaItems
+            .filter((item) => item.parameter.trim() || item.specification.trim())
+            .map(({ parameter, specification }) => ({ parameter, specification }));
 
         if (editingQualityCriteria) {
             // Update existing criteria
@@ -712,45 +808,58 @@ const SectionsTab: React.FC<SectionsTabProps> = ({ template, onChange }) => {
                                     عناصر المعيار (المعلمة والمواصفة)
                                 </label>
                                 <div className="space-y-2 max-h-40 overflow-y-auto">
-                                    {newCriteriaItems.map((item, index) => (
-                                        <div key={index} className="flex items-center gap-2">
-                                            <input
-                                                type="text"
-                                                value={item.parameter}
-                                                onChange={(e) => {
-                                                    const updated = [...newCriteriaItems];
-                                                    updated[index] = { ...updated[index], parameter: e.target.value };
-                                                    setNewCriteriaItems(updated);
-                                                }}
-                                                className="flex-1 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
-                                                placeholder="المعلمة"
-                                            />
-                                            <input
-                                                type="text"
-                                                value={item.specification}
-                                                onChange={(e) => {
-                                                    const updated = [...newCriteriaItems];
-                                                    updated[index] = { ...updated[index], specification: e.target.value };
-                                                    setNewCriteriaItems(updated);
-                                                }}
-                                                className="flex-1 px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
-                                                placeholder="المواصفة"
-                                            />
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    setNewCriteriaItems(newCriteriaItems.filter((_, i) => i !== index));
-                                                }}
-                                                className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded"
-                                            >
-                                                <TrashIcon className="w-4 h-4" />
-                                            </button>
-                                        </div>
-                                    ))}
+                                    <DndContext
+                                        sensors={sensors}
+                                        collisionDetection={closestCenter}
+                                        onDragEnd={handleCriteriaItemsDragEnd}
+                                    >
+                                        <SortableContext
+                                            items={newCriteriaItems.map((item) => item.id)}
+                                            strategy={verticalListSortingStrategy}
+                                        >
+                                            <div className="space-y-2">
+                                                {newCriteriaItems.map((item) => (
+                                                    <SortableCriteriaItemRow
+                                                        key={item.id}
+                                                        item={item}
+                                                        onParameterChange={(itemId, value) => {
+                                                            setNewCriteriaItems((prev) =>
+                                                                prev.map((entry) =>
+                                                                    entry.id === itemId ? { ...entry, parameter: value } : entry
+                                                                )
+                                                            );
+                                                        }}
+                                                        onSpecificationChange={(itemId, value) => {
+                                                            setNewCriteriaItems((prev) =>
+                                                                prev.map((entry) =>
+                                                                    entry.id === itemId ? { ...entry, specification: value } : entry
+                                                                )
+                                                            );
+                                                        }}
+                                                        onDelete={(itemId) => {
+                                                            setNewCriteriaItems((prev) =>
+                                                                prev.filter((entry) => entry.id !== itemId)
+                                                            );
+                                                        }}
+                                                    />
+                                                ))}
+                                            </div>
+                                        </SortableContext>
+                                    </DndContext>
                                 </div>
+                                {newCriteriaItems.length > 1 && (
+                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                        اسحب من أيقونة الترتيب بجانب كل عنصر.
+                                    </p>
+                                )}
                                 <button
                                     type="button"
-                                    onClick={() => setNewCriteriaItems([...newCriteriaItems, { parameter: '', specification: '' }])}
+                                    onClick={() =>
+                                        setNewCriteriaItems([
+                                            ...newCriteriaItems,
+                                            { id: generateId(), parameter: '', specification: '' },
+                                        ])
+                                    }
                                     className="mt-2 flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700"
                                 >
                                     <PlusIcon className="w-4 h-4" />

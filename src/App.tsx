@@ -1,8 +1,9 @@
-import { useEffect, Suspense, lazy } from 'react';
-import { createBrowserRouter, RouterProvider, Navigate, useParams } from 'react-router-dom';
+import { useEffect, Suspense, lazy, useRef } from 'react';
+import { createBrowserRouter, RouterProvider, Navigate, useParams, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import MainLayout from './layouts/MainLayout';
 import ErrorBoundary from './components/common/ErrorBoundary';
+import RouteErrorElement from './components/common/RouteErrorElement';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { ModuleRoute, FormsReportsRoute, TasksRoute, NcrRoute } from './components/auth/ModuleRoute';
 
@@ -13,7 +14,7 @@ const UnauthorizedPage = lazy(() => import('./pages/UnauthorizedPage'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const FormDesigner = lazy(() => import('./pages/FormDesigner'));
 const DataEntryPage = lazy(() => import('./pages/DataEntryPage'));
-const ReportViewer = lazy(() => import('./pages/ReportViewer'));
+const ReportViewer = lazy(() => import('./pages/ReportViewerA4'));
 const FoldersPage = lazy(() => import('./pages/Folders'));
 // const UnifiedFormsReports = lazy(() => import('./pages/UnifiedFormsReports'));
 
@@ -73,9 +74,6 @@ const SanitationManagement = lazy(() => import('./pages/food-safety/SanitationMa
 const AllergenManagement = lazy(() => import('./pages/food-safety/AllergenManagement'));
 const PreOpCheckPage = lazy(() => import('./pages/food-safety/PreOpCheckPage'));
 
-// FSSC 22000 Page
-const FSSC22000Page = lazy(() => import('./pages/FSSC22000Page'));
-
 // Auth Pages - lazy loaded
 const LoginPage = lazy(() => import('./pages/auth/LoginPage'));
 
@@ -124,7 +122,15 @@ import { useToastStore } from './store/toastStore';
 import { useTabsStore } from './store/tabsStore';
 import { useRealtimeSync } from './hooks/useRealtimeSync';
 import { useVisibilityRefresh } from './hooks/useVisibilityRefresh';
-import { FullPageLoading, ProgressLoading } from './components/common/LoadingStates';
+import {
+  FullPageLoading,
+  PageSkeleton,
+  TableSkeleton,
+  FormSkeleton,
+  DetailPageSkeleton,
+  LabDashboardSkeleton,
+  SettingsSkeleton
+} from './components/common/LoadingStates';
 
 // Create React Query client with optimized settings
 const queryClient = new QueryClient({
@@ -142,8 +148,44 @@ const queryClient = new QueryClient({
   }
 });
 
-// Loading fallback component
-const PageLoader = () => <FullPageLoading />;
+// Route-aware loading fallback to better match page structure.
+const PageLoader = () => {
+  const { pathname } = useLocation();
+
+  if (pathname === '/login' || pathname === '/unauthorized') {
+    return <FullPageLoading />;
+  }
+
+  if (pathname.startsWith('/forms/new') || pathname.startsWith('/forms/edit') || pathname.startsWith('/entry/')) {
+    return (
+      <div className="p-4 sm:p-6">
+        <FormSkeleton />
+      </div>
+    );
+  }
+
+  if (pathname.startsWith('/reports/') || pathname.startsWith('/instances/')) {
+    return <DetailPageSkeleton />;
+  }
+
+  if (pathname.startsWith('/folders') || pathname.startsWith('/forms&reports') || pathname.startsWith('/documents') || pathname.startsWith('/tasks')) {
+    return (
+      <div className="p-4 sm:p-6">
+        <TableSkeleton rows={8} />
+      </div>
+    );
+  }
+
+  if (pathname.startsWith('/lab') || pathname.startsWith('/food-safety') || pathname.startsWith('/ncr')) {
+    return <LabDashboardSkeleton />;
+  }
+
+  if (pathname.startsWith('/settings') || pathname.startsWith('/permissions') || pathname.startsWith('/departments')) {
+    return <SettingsSkeleton />;
+  }
+
+  return <PageSkeleton />;
+};
 
 // Redirect helpers for legacy `/lab-old/*` routes that include path params.
 const LabOldConfigRedirect = () => {
@@ -182,6 +224,7 @@ const LabV2RunDetailsRedirect = () => {
 const router = createBrowserRouter([
   {
     path: "/login",
+    errorElement: <RouteErrorElement />,
     element: (
       <Suspense fallback={<PageLoader />}>
         <LoginPage />
@@ -190,6 +233,7 @@ const router = createBrowserRouter([
   },
   {
     path: "/unauthorized",
+    errorElement: <RouteErrorElement />,
     element: (
       <Suspense fallback={<PageLoader />}>
         <UnauthorizedPage />
@@ -198,6 +242,7 @@ const router = createBrowserRouter([
   },
   {
     path: "/",
+    errorElement: <RouteErrorElement />,
     element: (
       <ProtectedRoute>
         <MainLayout />
@@ -235,6 +280,16 @@ const router = createBrowserRouter([
       },
       {
         path: "forms&reports",
+        element: (
+          <FormsReportsRoute>
+            <Suspense fallback={<PageLoader />}>
+              <FoldersPage />
+            </Suspense>
+          </FormsReportsRoute>
+        )
+      },
+      {
+        path: "forms&reports/:folderId",
         element: (
           <FormsReportsRoute>
             <Suspense fallback={<PageLoader />}>
@@ -305,14 +360,6 @@ const router = createBrowserRouter([
               <ReportViewer />
             </Suspense>
           </FormsReportsRoute>
-        )
-      },
-      {
-        path: "fssc22000",
-        element: (
-          <Suspense fallback={<PageLoader />}>
-            <FSSC22000Page />
-          </Suspense>
         )
       },
       // ==================== Document Control Module ====================
@@ -1189,46 +1236,42 @@ function App() {
     }
 
     // NOTE: Sample folder creation removed to prevent duplicates
-    // Folders should be created manually by users or via the FSSC 22000 initialization
+    // Folders should be created manually by users or via controlled initialization scripts
     // The old code was creating folders BEFORE Supabase sync completed, causing duplicates
   }, [authProfile, setUser]);
 
-  // Get toasts from store (must be before any conditional returns)
-  const { toasts, removeToast } = useToastStore();
+  // Get toasts from store
+  const { toasts, removeToast, addToast } = useToastStore();
+  const lastSyncErrorRef = useRef<string | null>(null);
 
-  // Show loading state while initializing Supabase
-  if (!isInitialized) {
+  // Non-blocking sync error reporting: keep app usable and notify once per error message.
+  useEffect(() => {
+    if (!syncError) {
+      return;
+    }
 
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <FullPageLoading />
-      </div>
-    );
-  }
+    if (lastSyncErrorRef.current === syncError) {
+      return;
+    }
 
-  // Show error state if Supabase sync failed
-  if (syncError) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center max-w-md">
-          <div className="bg-red-50 border border-red-200 rounded-lg p-6">
-            <h2 className="text-red-800 text-xl font-semibold mb-2">خطأ في الاتصال بـ Supabase</h2>
-            <p className="text-red-600 mb-4">{syncError}</p>
-            <button
-              onClick={() => window.location.reload()}
-              className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
-            >
-              إعادة المحاولة
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+    lastSyncErrorRef.current = syncError;
+    addToast({
+      type: 'warning',
+      message: `تعذر تحميل بعض البيانات مسبقًا: ${syncError}`,
+      duration: 5000,
+    });
+  }, [addToast, syncError]);
 
   return (
     <QueryClientProvider client={queryClient}>
       <ErrorBoundary>
+        {!isInitialized && (
+          <div className="fixed top-2 left-1/2 -translate-x-1/2 z-[70] pointer-events-none">
+            <div className="rounded-full bg-white/90 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-700 px-3 py-1 text-xs text-slate-600 dark:text-slate-200 shadow-sm">
+              {loadingProgress?.message || 'جاري تهيئة البيانات الأساسية...'}
+            </div>
+          </div>
+        )}
         <RouterProvider router={router} />
         {/* Toast Notifications */}
         <ToastContainer toasts={toasts} onRemove={removeToast} position="top-left" />

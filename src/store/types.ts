@@ -29,7 +29,7 @@ export interface TemplateSlice {
     duplicateFormTemplate: (id: string) => void;
     setCurrentTemplate: (id: string | null) => void;
 
-    getTemplatesInFolder: (folderId: string) => FormTemplate[];
+    getTemplatesInFolder: (folderId: string | null) => FormTemplate[];
 }
 
 export interface ReportSlice {
@@ -42,7 +42,7 @@ export interface ReportSlice {
     submitFormInstance: (id: string) => Promise<void>;
     setCurrentInstance: (id: string | null) => void;
 
-    getInstancesInFolder: (folderId: string) => FormInstance[];
+    getInstancesInFolder: (folderId: string | null) => FormInstance[];
 }
 
 export type ViewMode = 'tree' | 'list' | 'grid';

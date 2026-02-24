@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
     ArrowLeftIcon,
     DocumentArrowDownIcon,
@@ -7,8 +7,6 @@ import {
     CheckCircleIcon,
     XCircleIcon,
     ClockIcon,
-    ArrowPathIcon,
-    ArchiveBoxIcon,
 } from '@heroicons/react/24/outline';
 import useStore from '../store';
 import { useCompanyStore } from '../store/companyStore';
@@ -17,13 +15,15 @@ import { cn, calculateStats, useDateFormat } from '../utils';
 import type { Table, ReportStatus } from '../types';
 import { getRecipesByProduct } from '../services/recipeService';
 import type { Recipe } from '../types/recipe';
-import { ReportStatusBadge, ReportReviewPanel, ReportTimeline } from '../components/reports';
-import { useReportWorkflow } from '../hooks/useReportWorkflow';
+import { ReportStatusBadge } from '../components/reports';
+import { useTabsStore } from '../store/tabsStore';
 
 const ReportViewer: React.FC = () => {
     const { templateId, instanceId } = useParams<{ templateId?: string; instanceId?: string }>();
     const navigate = useNavigate();
-    const { formTemplates, formInstances, syncInstance } = useStore();
+    const location = useLocation();
+    const { formTemplates, formInstances, syncInstance, currentFolderId } = useStore();
+    const { getActiveTab } = useTabsStore();
     const { selectedCompany } = useCompanyStore();
     const { logoUrl, logoScale } = useAppSettingsStore();
     const { formatDate } = useDateFormat();
@@ -31,6 +31,56 @@ const ReportViewer: React.FC = () => {
     // ✅ FIX: Load instance from database to ensure fresh data
     const [loadedInstance, setLoadedInstance] = useState<any>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [isMobile, setIsMobile] = useState(false);
+    const [isPrintMode, setIsPrintMode] = useState(false);
+    const MOBILE_TIME_COLUMNS_PER_VIEW = 2;
+    const MOBILE_CUSTOM_COLUMNS_PER_VIEW = 2;
+    const [mobileColumnStartByTable, setMobileColumnStartByTable] = useState<Record<string, number>>({});
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const mediaQuery = window.matchMedia('(max-width: 1023px)');
+        const updateViewport = () => setIsMobile(mediaQuery.matches);
+
+        updateViewport();
+        if (mediaQuery.addEventListener) {
+            mediaQuery.addEventListener('change', updateViewport);
+        } else {
+            mediaQuery.addListener(updateViewport);
+        }
+
+        return () => {
+            if (mediaQuery.removeEventListener) {
+                mediaQuery.removeEventListener('change', updateViewport);
+            } else {
+                mediaQuery.removeListener(updateViewport);
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const handleBeforePrint = () => setIsPrintMode(true);
+        const handleAfterPrint = () => setIsPrintMode(false);
+
+        window.addEventListener('beforeprint', handleBeforePrint);
+        window.addEventListener('afterprint', handleAfterPrint);
+
+        return () => {
+            window.removeEventListener('beforeprint', handleBeforePrint);
+            window.removeEventListener('afterprint', handleAfterPrint);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (typeof document === 'undefined') return;
+        document.body.classList.add('report-preview-active');
+        return () => {
+            document.body.classList.remove('report-preview-active');
+        };
+    }, []);
 
     useEffect(() => {
         const loadInstanceFromDB = async () => {
@@ -134,99 +184,45 @@ const ReportViewer: React.FC = () => {
         }
     }, [template?.basic_info?.product_id]);
 
+    const triggerFullA4Print = () => {
+        setIsPrintMode(true);
+        if (typeof window === 'undefined') return;
+
+        // Wait for React render so print always captures full A4 layout.
+        window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
+                window.print();
+            });
+        });
+    };
+
     const handlePrint = () => {
-        window.print();
+        triggerFullA4Print();
     };
 
     const handleExportPDF = () => {
-        // Would integrate with jsPDF for full export
-        window.print();
+        // Browser PDF export uses the same full A4 print layout.
+        triggerFullA4Print();
     };
 
-    // Workflow action handlers
-    const [isProcessing, setIsProcessing] = useState(false);
+    const handleBack = () => {
+        const activeTab = getActiveTab();
+        const tabReturnPath = activeTab?.path === location.pathname ? activeTab.returnPath : undefined;
 
-
-    const handleReopen = async () => {
-        const reason = prompt('أدخل سبب إعادة فتح التقرير:');
-        if (!reason || !reason.trim()) return;
-
-        setIsProcessing(true);
-        try {
-            const { reportWorkflowService } = await import('../services/reportWorkflowService');
-            const result = await reportWorkflowService.reopenReport(instance!.instance_id, reason);
-            if (result.success) {
-                window.location.reload();
-            } else {
-                alert(result.error || 'فشل إعادة فتح التقرير');
+        const returnPath = (() => {
+            if (tabReturnPath) {
+                if (tabReturnPath === '/folders') return '/forms&reports';
+                if (tabReturnPath.startsWith('/folders/')) {
+                    return tabReturnPath.replace('/folders/', '/forms&reports/');
+                }
+                return tabReturnPath;
             }
-        } catch (error: any) {
-            alert(error.message || 'حدث خطأ');
-        } finally {
-            setIsProcessing(false);
-        }
-    };
+            if (instance?.folder_id) return `/forms&reports/${instance.folder_id}`;
+            if (currentFolderId) return `/forms&reports/${currentFolderId}`;
+            return '/forms&reports';
+        })();
 
-    const handleArchive = async () => {
-        if (!window.confirm('هل أنت متأكد من أرشفة هذا التقرير؟')) return;
-
-        setIsProcessing(true);
-        try {
-            const { reportWorkflowService } = await import('../services/reportWorkflowService');
-            const result = await reportWorkflowService.archiveReport(instance!.instance_id);
-            if (result.success) {
-                window.location.reload();
-            } else {
-                alert(result.error || 'فشل أرشفة التقرير');
-            }
-        } catch (error: any) {
-            alert(error.message || 'حدث خطأ');
-        } finally {
-            setIsProcessing(false);
-        }
-    };
-
-    const handleClaim = async () => {
-        if (!window.confirm('هل تريد استلام هذا التقرير للمراجعة؟')) return;
-
-        setIsProcessing(true);
-        try {
-            const { reportWorkflowService } = await import('../services/reportWorkflowService');
-            const result = await reportWorkflowService.claimReport(instance!.instance_id);
-            if (result.success) {
-                window.location.reload();
-            } else {
-                alert(result.error || 'فشل استلام التقرير');
-            }
-        } catch (error: any) {
-            alert(error.message || 'حدث خطأ');
-        } finally {
-            setIsProcessing(false);
-        }
-    };
-
-    const handleResubmit = async () => {
-        if (!window.confirm('هل تريد إعادة إرسال التقرير للمراجعة؟')) return;
-
-        setIsProcessing(true);
-        try {
-            const { reportWorkflowService } = await import('../services/reportWorkflowService');
-            const result = await reportWorkflowService.resubmitReport(instance!.instance_id);
-            if (result.success) {
-                window.location.reload();
-            } else {
-                alert(result.error || 'فشل إعادة إرسال التقرير');
-            }
-        } catch (error: any) {
-            alert(error.message || 'حدث خطأ');
-        } finally {
-            setIsProcessing(false);
-        }
-    };
-
-    const handleEditRejected = () => {
-        // Navigate to edit page for rejected report
-        navigate(`/reports/edit/${instance!.instance_id}`);
+        navigate(returnPath);
     };
 
     if (!template) {
@@ -235,7 +231,7 @@ const ReportViewer: React.FC = () => {
                 <div className="text-center">
                     <p className="text-gray-500 dark:text-gray-400 mb-4">لم يتم العثور على النموذج</p>
                     <button
-                        onClick={() => navigate(-1)}
+                        onClick={handleBack}
                         className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
                     >
                         العودة
@@ -284,6 +280,124 @@ const ReportViewer: React.FC = () => {
         }
 
         return headers;
+    };
+
+    const toPositiveInt = (value: unknown): number | null => {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed)) return null;
+        const normalized = Math.floor(parsed);
+        return normalized > 0 ? normalized : null;
+    };
+
+    const resolveSampleSize = (table: Table, fallback = 20): number => {
+        const explicitSampleSize = toPositiveInt((table as any)?.sample_size ?? (table as any)?.sampleSize);
+        if (explicitSampleSize !== null) return explicitSampleSize;
+
+        const legacyRows = toPositiveInt((table as any)?.rows);
+        if (legacyRows !== null) return legacyRows;
+
+        return fallback;
+    };
+
+    const getVisibleColumnIndexes = (tableId: string, totalColumns: number, windowSize: number): number[] => {
+        if (totalColumns <= 0) return [];
+        const safeWindowSize = Math.max(1, windowSize);
+
+        if (isPrintMode || !isMobile || totalColumns <= safeWindowSize) {
+            return Array.from({ length: totalColumns }, (_, index) => index);
+        }
+
+        const maxStart = Math.max(0, totalColumns - safeWindowSize);
+        const requestedStart = mobileColumnStartByTable[tableId] ?? 0;
+        const start = Math.min(Math.max(0, requestedStart), maxStart);
+
+        return Array.from({ length: safeWindowSize }, (_, offset) => start + offset);
+    };
+
+    const shiftMobileColumnWindow = (
+        tableId: string,
+        totalColumns: number,
+        windowSize: number,
+        direction: 'prev' | 'next'
+    ) => {
+        const safeWindowSize = Math.max(1, windowSize);
+        if (totalColumns <= safeWindowSize) return;
+
+        setMobileColumnStartByTable((previous) => {
+            const maxStart = Math.max(0, totalColumns - safeWindowSize);
+            const current = Math.min(Math.max(0, previous[tableId] ?? 0), maxStart);
+            const next =
+                direction === 'next'
+                    ? Math.min(maxStart, current + safeWindowSize)
+                    : Math.max(0, current - safeWindowSize);
+
+            if (next === current) return previous;
+
+            return {
+                ...previous,
+                [tableId]: next,
+            };
+        });
+    };
+
+    const renderMobileColumnPager = (params: {
+        tableId: string;
+        totalColumns: number;
+        visibleIndexes: number[];
+        windowSize: number;
+        labels: string[];
+        className?: string;
+    }) => {
+        const { tableId, totalColumns, visibleIndexes, windowSize, labels, className } = params;
+
+        if (!isMobile || totalColumns <= visibleIndexes.length) {
+            return null;
+        }
+
+        const firstVisibleIndex = visibleIndexes[0] ?? 0;
+        const lastVisibleIndex = visibleIndexes[visibleIndexes.length - 1] ?? 0;
+
+        return (
+            <div className={cn(
+                'print:hidden flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-2 py-1.5 bg-gray-50',
+                className
+            )}>
+                <button
+                    type="button"
+                    onClick={() => shiftMobileColumnWindow(tableId, totalColumns, windowSize, 'prev')}
+                    disabled={firstVisibleIndex === 0}
+                    className={cn(
+                        'px-2 py-1 text-xs rounded-md border transition-colors',
+                        firstVisibleIndex === 0
+                            ? 'text-gray-400 border-gray-200 cursor-not-allowed'
+                            : 'text-gray-700 border-gray-300 hover:bg-gray-100'
+                    )}
+                >
+                    السابق
+                </button>
+                <div className="text-center leading-tight">
+                    <div className="text-[11px] font-medium text-gray-700">
+                        الأعمدة {firstVisibleIndex + 1}-{lastVisibleIndex + 1} من {totalColumns}
+                    </div>
+                    <div className="text-[11px] text-gray-500">
+                        {(labels[firstVisibleIndex] ?? `#${firstVisibleIndex + 1}`)} - {(labels[lastVisibleIndex] ?? `#${lastVisibleIndex + 1}`)}
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    onClick={() => shiftMobileColumnWindow(tableId, totalColumns, windowSize, 'next')}
+                    disabled={lastVisibleIndex >= totalColumns - 1}
+                    className={cn(
+                        'px-2 py-1 text-xs rounded-md border transition-colors',
+                        lastVisibleIndex >= totalColumns - 1
+                            ? 'text-gray-400 border-gray-200 cursor-not-allowed'
+                            : 'text-gray-700 border-gray-300 hover:bg-gray-100'
+                    )}
+                >
+                    التالي
+                </button>
+            </div>
+        );
     };
 
     const getStatusInfo = (status?: string) => {
@@ -366,6 +480,122 @@ const ReportViewer: React.FC = () => {
         // Generate time headers for parameters table
         const timeHeaders = generateTimeHeaders(inspectionStartTime, shiftDuration, intervalMinutes);
 
+        const normalizeImageCell = (val: unknown): string[] => {
+            let images: string[] = [];
+            if (Array.isArray(val)) {
+                images = val.filter((item): item is string => typeof item === 'string');
+            } else if (typeof val === 'string') {
+                if (val.trim().startsWith('[')) {
+                    try {
+                        const parsed = JSON.parse(val);
+                        if (Array.isArray(parsed)) {
+                            images = parsed.filter((item): item is string => typeof item === 'string');
+                        } else {
+                            images = [val];
+                        }
+                    } catch (_e) {
+                        images = [val];
+                    }
+                } else {
+                    images = [val];
+                }
+            }
+            return images.filter((img) => img && img.length > 10);
+        };
+
+        const renderReadonlyCellValue = (col: any, val: unknown, compact = false) => {
+            if (col.type === 'image') {
+                const images = normalizeImageCell(val);
+                if (images.length === 0) {
+                    return <span className="text-gray-400">-</span>;
+                }
+                return (
+                    <div className="flex flex-col gap-1 w-full">
+                        {images.map((img: string, idx: number) => (
+                            <div key={idx} className="w-full relative pt-[12.5%] border border-gray-100 rounded overflow-hidden bg-white">
+                                <img
+                                    src={img}
+                                    alt="Item"
+                                    className="absolute top-0 left-0 w-full h-full object-cover"
+                                />
+                            </div>
+                        ))}
+                    </div>
+                );
+            }
+
+            if (col.type === 'long-text') {
+                return (
+                    <div className={cn('whitespace-pre-wrap text-right', compact ? 'text-xs' : 'text-sm')}>
+                        {val !== undefined && val !== '' ? String(val) : '-'}
+                    </div>
+                );
+            }
+
+            if (col.type === 'boolean-check') {
+                const isTrue = val === true || val === 'true' || val === 'checked' || val === 'مقبول';
+                const isFalse = val === false || val === 'false' || val === 'unchecked' || val === 'مرفوض';
+                return isTrue ? (
+                    <span className="text-green-600 text-lg font-bold">✓</span>
+                ) : isFalse ? (
+                    <span className="text-red-600 text-lg font-bold">✗</span>
+                ) : (
+                    <span className="text-gray-400">-</span>
+                );
+            }
+
+            if (col.type === 'boolean-yesno') {
+                const isTrue = val === true || val === 'true' || val === 'yes' || val === 'نعم';
+                const isFalse = val === false || val === 'false' || val === 'no' || val === 'لا';
+                return (
+                    <span className={compact ? 'text-xs' : 'text-sm'}>
+                        {isTrue ? 'نعم' : isFalse ? 'لا' : '-'}
+                    </span>
+                );
+            }
+
+            const cellStyle = getSmartCellStyle(val);
+            return (
+                <span
+                    className={cn(
+                        compact ? 'text-xs' : '',
+                        cellStyle.className
+                    )}
+                    style={cellStyle.fontSize ? { fontSize: cellStyle.fontSize } : undefined}
+                >
+                    {val !== undefined && val !== '' ? String(val) : '-'}
+                </span>
+            );
+        };
+
+        const getColumnAlignClass = (align?: 'right' | 'center' | 'left') => {
+            if (align === 'left') return 'text-left';
+            if (align === 'right') return 'text-right';
+            return 'text-center';
+        };
+
+        const normalizeCustomHeaderRows = (sourceTable: Table) => {
+            const rawRows = Array.isArray(sourceTable.header_rows) ? sourceTable.header_rows : [];
+            return rawRows
+                .filter((row) => Array.isArray(row) && row.length > 0)
+                .map((row) =>
+                    row.map((cell: any) => ({
+                        label: cell?.label ?? '',
+                        col_span: Math.max(1, Number(cell?.col_span ?? cell?.colSpan ?? 1) || 1),
+                        row_span: Math.max(1, Number(cell?.row_span ?? cell?.rowSpan ?? 1) || 1),
+                        align: (cell?.align as 'right' | 'center' | 'left') || 'center',
+                        background_color: cell?.background_color,
+                        text_color: cell?.text_color,
+                        class_name: cell?.class_name,
+                    }))
+                );
+        };
+
+        const customHeaderRows = normalizeCustomHeaderRows(table);
+        const hasCustomHeaderRows = customHeaderRows.length > 0;
+        const showRowNumbers = table.show_row_numbers !== false;
+        const rowHeaderLabel = table.row_header_label || '#';
+
         if (table.type === 'parameters') {
             // Apply data fallback: check flat formData.tables if tableData is empty
             const finalTableData = (tableData && tableData.length > 0)
@@ -375,139 +605,161 @@ const ReportViewer: React.FC = () => {
             const parameters = table.parameters || [];
             const columnsCount = timeHeaders.length || table.rows || 10;
             const displayColumns = timeHeaders.length || Math.min(columnsCount, 10);
-
+            const visibleTimeIndexes = getVisibleColumnIndexes(table.id, displayColumns, MOBILE_TIME_COLUMNS_PER_VIEW);
+            const timeColumnLabels = timeHeaders.length > 0
+                ? timeHeaders
+                : Array.from({ length: displayColumns }, (_, index) => `${index + 1}`);
+            const showStatsAsColumns = !isMobile || isPrintMode;
+            const showAvgColumn = Boolean(table.features?.show_avg) && showStatsAsColumns;
+            const showStdColumn = Boolean(table.features?.show_std) && showStatsAsColumns;
             return (
-                <div className="overflow-x-auto print-table-container">
-                    <table
-                        className="w-full border-collapse text-xs print:text-[10px]"
-                        style={{ tableLayout: 'auto' }}
-                    >
-                        <colgroup>
-                            {/* Parameter name - responsive width */}
-                            <col style={{ minWidth: '80px', width: '18%' }} />
-                            {/* Limits - responsive width */}
-                            <col style={{ minWidth: '50px', width: '8%' }} />
-                            {/* Data columns - flexible with constraints */}
-                            {Array.from({ length: displayColumns }).map((_, i) => (
-                                <col key={i} style={{ minWidth: '8mm', maxWidth: '50mm' }} />
-                            ))}
-                            {/* AVG/STD - fixed small width */}
-                            {table.features?.show_avg && <col style={{ width: '6%', minWidth: '40px' }} />}
-                            {table.features?.show_std && <col style={{ width: '6%', minWidth: '40px' }} />}
-                        </colgroup>
-                        <thead>
-                            <tr className="bg-gray-800 text-white print:bg-gray-800">
-                                <th className="border border-gray-400 px-2 py-1.5 text-right font-bold">
-                                    المعلمة
-                                </th>
-                                <th className="border border-gray-400 px-2 py-1.5 text-center font-bold">
-                                    الحدود
-                                </th>
-                                {timeHeaders.length > 0 ? (
-                                    timeHeaders.map((time, i) => (
+                <div className="space-y-2 print:space-y-0">
+                    {renderMobileColumnPager({
+                        tableId: table.id,
+                        totalColumns: displayColumns,
+                        visibleIndexes: visibleTimeIndexes,
+                        windowSize: MOBILE_TIME_COLUMNS_PER_VIEW,
+                        labels: timeColumnLabels,
+                    })}
+                    <div className="overflow-x-hidden print-table-container">
+                        <table
+                            className="w-full border-collapse text-xs print:text-[10px]"
+                            style={{
+                                tableLayout: 'auto',
+                            }}
+                        >
+                            <colgroup>
+                                {/* Parameter name - responsive width */}
+                                <col style={{ minWidth: '80px', width: '18%' }} />
+                                {/* Limits - responsive width */}
+                                <col style={{ minWidth: '50px', width: '8%' }} />
+                                {/* Data columns - flexible with constraints */}
+                                {visibleTimeIndexes.map((colIndex) => (
+                                    <col key={colIndex} style={{ minWidth: '8mm', maxWidth: '50mm' }} />
+                                ))}
+                                {/* AVG/STD - fixed small width */}
+                                {showAvgColumn && <col style={{ width: '6%', minWidth: '40px' }} />}
+                                {showStdColumn && <col style={{ width: '6%', minWidth: '40px' }} />}
+                            </colgroup>
+                            <thead>
+                                <tr className="bg-gray-800 text-white print:bg-gray-800">
+                                    <th className="border border-gray-400 px-2 py-1.5 text-right font-bold">
+                                        المعلمة
+                                    </th>
+                                    <th className="border border-gray-400 px-2 py-1.5 text-center font-bold">
+                                        الحدود
+                                    </th>
+                                    {visibleTimeIndexes.map((colIndex) => (
                                         <th
-                                            key={i}
+                                            key={colIndex}
                                             className="border border-gray-400 px-0.5 py-1 text-center font-bold text-[9px] print:text-[7px]"
                                         >
-                                            {time}
+                                            {timeColumnLabels[colIndex] ?? colIndex + 1}
                                         </th>
-                                    ))
-                                ) : (
-                                    Array.from({ length: Math.min(columnsCount, 10) }).map((_, i) => (
-                                        <th
-                                            key={i}
-                                            className="border border-gray-400 px-0.5 py-1 text-center font-bold print:text-[7px]"
-                                        >
-                                            {i + 1}
+                                    ))}
+                                    {showAvgColumn && (
+                                        <th className="border border-gray-400 px-1 py-1.5 text-center font-bold bg-blue-700 print:w-[6%]">
+                                            المتوسط
                                         </th>
-                                    ))
-                                )}
-                                {table.features?.show_avg && (
-                                    <th className="border border-gray-400 px-1 py-1.5 text-center font-bold bg-blue-700 print:w-[6%]">
-                                        المتوسط
-                                    </th>
-                                )}
-                                {table.features?.show_std && (
-                                    <th className="border border-gray-400 px-1 py-1.5 text-center font-bold bg-purple-700 print:w-[6%]">
-                                        STD
-                                    </th>
-                                )}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {parameters.map((param, paramIndex) => {
-                                const rowData = finalTableData?.[paramIndex] || [];
-                                const numericValues = rowData.filter((v) => typeof v === 'number' && !isNaN(v));
-                                const stats = calculateStats(numericValues);
-                                const isCritical = param.critical_level === 'ccp' || param.critical_level === 'oprp';
+                                    )}
+                                    {showStdColumn && (
+                                        <th className="border border-gray-400 px-1 py-1.5 text-center font-bold bg-purple-700 print:w-[6%]">
+                                            STD
+                                        </th>
+                                    )}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {parameters.map((param, paramIndex) => {
+                                    const rowData = finalTableData?.[paramIndex] || [];
+                                    const numericValues = rowData.filter((v) => typeof v === 'number' && !isNaN(v));
+                                    const stats = calculateStats(numericValues);
+                                    const isCritical = param.critical_level === 'ccp' || param.critical_level === 'oprp';
 
-                                return (
-                                    <tr key={paramIndex} className={cn(
-                                        paramIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50',
-                                        isCritical && 'bg-yellow-50'
-                                    )}>
-                                        <td className={cn(
-                                            "border border-gray-400 px-2 py-1 font-medium text-right",
-                                            isCritical && "border-r-4 border-r-red-500"
+                                    return (
+                                        <tr key={paramIndex} className={cn(
+                                            paramIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50',
+                                            isCritical && 'bg-yellow-50'
                                         )}>
-                                            <div className="flex items-center justify-between gap-1">
-                                                <span>{param.name}</span>
-                                                {param.unit && (
-                                                    <span className="text-gray-500 text-[10px]">({param.unit})</span>
-                                                )}
-                                            </div>
-                                            {isCritical && (
-                                                <span className="text-[9px] text-red-600 font-bold">
-                                                    {param.critical_level === 'ccp' ? 'CCP' : 'OPRP'}
-                                                </span>
-                                            )}
-                                        </td>
-                                        <td className="border border-gray-400 px-1 py-1 text-center text-gray-700 font-mono text-[10px]">
-                                            {param.min !== undefined && param.max !== undefined
-                                                ? `${param.min}-${param.max}`
-                                                : param.limits || '-'}
-                                        </td>
-                                        {Array.from({ length: displayColumns }).map((_, colIndex) => {
-                                            const value = rowData[colIndex];
-                                            const isValid =
-                                                param.min !== undefined && param.max !== undefined && value !== undefined && value !== null && value !== ''
-                                                    ? Number(value) >= Number(param.min) && Number(value) <= Number(param.max)
-                                                    : true;
-
-                                            // Get smart styling based on content length
-                                            const cellStyle = getSmartCellStyle(value);
-
-                                            return (
-                                                <td
-                                                    key={colIndex}
-                                                    className={cn(
-                                                        'border border-gray-400 px-1 py-0.5 text-center font-mono',
-                                                        'print:break-words print:overflow-wrap-anywhere',
-                                                        !isValid && 'bg-red-200 text-red-800 font-bold',
-                                                        (value === undefined || value === null || value === '') && 'text-gray-300',
-                                                        cellStyle.className
+                                            <td className={cn(
+                                                "border border-gray-400 px-2 py-1 font-medium text-right",
+                                                isCritical && "border-r-4 border-r-red-500"
+                                            )}>
+                                                <div className="flex items-center justify-between gap-1">
+                                                    <span>{param.name}</span>
+                                                    {param.unit && (
+                                                        <span className="text-gray-500 text-[10px]">({param.unit})</span>
                                                     )}
-                                                    style={cellStyle.fontSize ? { fontSize: cellStyle.fontSize } : undefined}
-                                                >
-                                                    {value !== undefined && value !== null && value !== '' ? value : '-'}
+                                                </div>
+                                                {isMobile && !isPrintMode && (table.features?.show_avg || table.features?.show_std) && (
+                                                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                                        {table.features?.show_avg && (
+                                                            <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                                                                AVG
+                                                                <span dir="ltr">{numericValues.length > 0 ? stats.avg.toFixed(2) : '-'}</span>
+                                                            </span>
+                                                        )}
+                                                        {table.features?.show_std && (
+                                                            <span className="inline-flex items-center gap-1 rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold text-purple-700">
+                                                                STD
+                                                                <span dir="ltr">{numericValues.length > 1 ? stats.std.toFixed(2) : '-'}</span>
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                {isCritical && (
+                                                    <span className="text-[9px] text-red-600 font-bold">
+                                                        {param.critical_level === 'ccp' ? 'CCP' : 'OPRP'}
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className="border border-gray-400 px-1 py-1 text-center text-gray-700 font-mono text-[10px]">
+                                                {param.min !== undefined && param.max !== undefined
+                                                    ? `${param.min}-${param.max}`
+                                                    : param.limits || '-'}
+                                            </td>
+                                            {visibleTimeIndexes.map((colIndex) => {
+                                                const value = rowData[colIndex];
+                                                const isValid =
+                                                    param.min !== undefined && param.max !== undefined && value !== undefined && value !== null && value !== ''
+                                                        ? Number(value) >= Number(param.min) && Number(value) <= Number(param.max)
+                                                        : true;
+
+                                                // Get smart styling based on content length
+                                                const cellStyle = getSmartCellStyle(value);
+
+                                                return (
+                                                    <td
+                                                        key={colIndex}
+                                                        className={cn(
+                                                            'border border-gray-400 px-1 py-0.5 text-center font-mono',
+                                                            'print:break-words print:overflow-wrap-anywhere',
+                                                            !isValid && 'bg-red-200 text-red-800 font-bold',
+                                                            (value === undefined || value === null || value === '') && 'text-gray-300',
+                                                            cellStyle.className
+                                                        )}
+                                                        style={cellStyle.fontSize ? { fontSize: cellStyle.fontSize } : undefined}
+                                                    >
+                                                        {value !== undefined && value !== null && value !== '' ? value : '-'}
+                                                    </td>
+                                                );
+                                            })}
+                                            {showAvgColumn && (
+                                                <td className="border border-gray-400 px-1 py-1 text-center font-bold bg-blue-50 font-mono">
+                                                    {numericValues.length > 0 ? stats.avg.toFixed(2) : '-'}
                                                 </td>
-                                            );
-                                        })}
-                                        {table.features?.show_avg && (
-                                            <td className="border border-gray-400 px-1 py-1 text-center font-bold bg-blue-50 font-mono">
-                                                {numericValues.length > 0 ? stats.avg.toFixed(2) : '-'}
-                                            </td>
-                                        )}
-                                        {table.features?.show_std && (
-                                            <td className="border border-gray-400 px-1 py-1 text-center font-bold bg-purple-50 font-mono">
-                                                {numericValues.length > 1 ? stats.std.toFixed(2) : '-'}
-                                            </td>
-                                        )}
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
+                                            )}
+                                            {showStdColumn && (
+                                                <td className="border border-gray-400 px-1 py-1 text-center font-bold bg-purple-50 font-mono">
+                                                    {numericValues.length > 1 ? stats.std.toFixed(2) : '-'}
+                                                </td>
+                                            )}
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             );
         }
@@ -515,49 +767,91 @@ const ReportViewer: React.FC = () => {
         if (table.type === 'checklist') {
             const items = table.items || [];
             return (
-                <div className="overflow-x-auto">
-                    <table className="w-full border-collapse text-xs print:text-[12px]">
-                        <thead>
-                            <tr className="bg-gray-800 text-white">
-                                <th className="border border-gray-400 px-2 py-1.5 text-center w-10">#</th>
-                                <th className="border border-gray-400 px-2 py-1.5 text-right">البند</th>
-                                <th className="border border-gray-400 px-2 py-1.5 text-center w-20">الحالة</th>
-                                <th className="border border-gray-400 px-2 py-1.5 text-center w-32">ملاحظات</th>
-                            </tr>
-                        </thead>
-                        <tbody>
+                <div className="space-y-2">
+                    {isMobile && (
+                        <div className="space-y-2 print:hidden">
                             {items.map((item, index) => {
                                 const status = tableData?.[index]?.[0];
                                 const notes = tableData?.[index]?.[1] || '';
+                                const statusText = status === 'ok' ? 'مطابق' : status === 'not_ok' ? 'غير مطابق' : status === 'na' ? 'غير منطبق' : '-';
 
                                 return (
-                                    <tr key={index} className={cn(
-                                        index % 2 === 0 ? 'bg-white' : 'bg-gray-50',
-                                        status === 'not_ok' && 'bg-red-50'
-                                    )}>
-                                        <td className="border border-gray-400 px-2 py-1 text-center text-gray-500">
-                                            {index + 1}
-                                        </td>
-                                        <td className="border border-gray-400 px-2 py-1 text-right">
+                                    <div
+                                        key={index}
+                                        className={cn(
+                                            'rounded-lg border px-3 py-2 bg-white',
+                                            status === 'not_ok' ? 'border-red-300 bg-red-50' : 'border-gray-200'
+                                        )}
+                                    >
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="text-[11px] font-semibold text-gray-500">#{index + 1}</span>
+                                            <span className={cn(
+                                                'rounded-full px-2 py-0.5 text-[11px] font-bold',
+                                                status === 'ok' && 'bg-green-100 text-green-700',
+                                                status === 'not_ok' && 'bg-red-100 text-red-700',
+                                                status === 'na' && 'bg-gray-100 text-gray-600',
+                                                !status && 'bg-gray-100 text-gray-500'
+                                            )}>
+                                                {statusText}
+                                            </span>
+                                        </div>
+                                        <p className="mt-1 text-sm font-medium text-gray-900 leading-snug text-right">
                                             {item.text}
                                             {item.required && <span className="text-red-500 mr-1">*</span>}
-                                        </td>
-                                        <td className={cn(
-                                            "border border-gray-400 px-2 py-1 text-center font-bold",
-                                            status === 'ok' && 'text-green-700',
-                                            status === 'not_ok' && 'text-red-700',
-                                            status === 'na' && 'text-gray-500'
-                                        )}>
-                                            {status === 'ok' ? '✓' : status === 'not_ok' ? '✗' : status === 'na' ? 'N/A' : '-'}
-                                        </td>
-                                        <td className="border border-gray-400 px-2 py-1 text-center text-gray-600 text-[10px]">
+                                        </p>
+                                        <p className="mt-2 text-xs text-gray-600 text-right">
+                                            <span className="font-semibold text-gray-700">ملاحظات: </span>
                                             {notes || '-'}
-                                        </td>
-                                    </tr>
+                                        </p>
+                                    </div>
                                 );
                             })}
-                        </tbody>
-                    </table>
+                        </div>
+                    )}
+                    <div className={cn('overflow-x-hidden print-table-container', isMobile && 'hidden print:block')}>
+                        <table className="w-full border-collapse text-xs print:text-[12px]">
+                            <thead>
+                                <tr className="bg-gray-800 text-white">
+                                    <th className="border border-gray-400 px-2 py-1.5 text-center w-10">#</th>
+                                    <th className="border border-gray-400 px-2 py-1.5 text-right">البند</th>
+                                    <th className="border border-gray-400 px-2 py-1.5 text-center w-20">الحالة</th>
+                                    <th className="border border-gray-400 px-2 py-1.5 text-center w-32">ملاحظات</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {items.map((item, index) => {
+                                    const status = tableData?.[index]?.[0];
+                                    const notes = tableData?.[index]?.[1] || '';
+
+                                    return (
+                                        <tr key={index} className={cn(
+                                            index % 2 === 0 ? 'bg-white' : 'bg-gray-50',
+                                            status === 'not_ok' && 'bg-red-50'
+                                        )}>
+                                            <td className="border border-gray-400 px-2 py-1 text-center text-gray-500">
+                                                {index + 1}
+                                            </td>
+                                            <td className="border border-gray-400 px-2 py-1 text-right">
+                                                {item.text}
+                                                {item.required && <span className="text-red-500 mr-1">*</span>}
+                                            </td>
+                                            <td className={cn(
+                                                "border border-gray-400 px-2 py-1 text-center font-bold",
+                                                status === 'ok' && 'text-green-700',
+                                                status === 'not_ok' && 'text-red-700',
+                                                status === 'na' && 'text-gray-500'
+                                            )}>
+                                                {status === 'ok' ? '✓' : status === 'not_ok' ? '✗' : status === 'na' ? 'N/A' : '-'}
+                                            </td>
+                                            <td className="border border-gray-400 px-2 py-1 text-center text-gray-600 text-[10px]">
+                                                {notes || '-'}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             );
         }
@@ -565,59 +859,99 @@ const ReportViewer: React.FC = () => {
         if (table.type === 'recipe') {
             const ingredients = table.ingredients || [];
             return (
-                <div className="overflow-x-auto">
-                    <table className="w-full border-collapse text-xs print:text-[12px]">
-                        <thead>
-                            <tr className="bg-gray-800 text-white">
-                                <th className="border border-gray-400 px-2 py-1.5 text-center w-10">#</th>
-                                <th className="border border-gray-400 px-2 py-1.5 text-right">المكون</th>
-                                <th className="border border-gray-400 px-2 py-1.5 text-center w-24">الكمية</th>
-                                <th className="border border-gray-400 px-2 py-1.5 text-center w-16">الوحدة</th>
-                                <th className="border border-gray-400 px-2 py-1.5 text-center w-16">النسبة %</th>
-                                <th className="border border-gray-400 px-2 py-1.5 text-center w-24">الكمية الفعلية</th>
-                            </tr>
-                        </thead>
-                        <tbody>
+                <div className="space-y-2">
+                    {isMobile && (
+                        <div className="space-y-2 print:hidden">
                             {ingredients.map((ingredient, index) => {
                                 const actualQuantity = tableData?.[index]?.[0];
+                                const hasDeviation = actualQuantity && Math.abs(actualQuantity - ingredient.quantity) > ingredient.quantity * 0.05;
 
                                 return (
-                                    <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                                        <td className="border border-gray-400 px-2 py-1 text-center text-gray-500">
-                                            {index + 1}
-                                        </td>
-                                        <td className="border border-gray-400 px-2 py-1 text-right font-medium">
-                                            {ingredient.ingredient}
-                                        </td>
-                                        <td className="border border-gray-400 px-2 py-1 text-center font-mono">
-                                            {ingredient.quantity}
-                                        </td>
-                                        <td className="border border-gray-400 px-2 py-1 text-center">
-                                            {ingredient.unit}
-                                        </td>
-                                        <td className="border border-gray-400 px-2 py-1 text-center font-mono">
+                                    <div key={index} className={cn(
+                                        'rounded-lg border px-3 py-2 bg-white',
+                                        hasDeviation ? 'border-yellow-300 bg-yellow-50' : 'border-gray-200'
+                                    )}>
+                                        <div className="flex items-center justify-between gap-2">
+                                            <span className="text-[11px] font-semibold text-gray-500">#{index + 1}</span>
+                                            <span className="text-[11px] text-gray-500">{ingredient.unit || '-'}</span>
+                                        </div>
+                                        <p className="mt-1 text-sm font-semibold text-right text-gray-900">{ingredient.ingredient}</p>
+                                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                                            <div className="rounded border border-gray-200 bg-gray-50 px-2 py-1 text-center">
+                                                <div className="text-gray-500">الكمية القياسية</div>
+                                                <div className="font-mono font-semibold text-gray-900">{ingredient.quantity ?? '-'}</div>
+                                            </div>
+                                            <div className={cn(
+                                                'rounded border px-2 py-1 text-center',
+                                                hasDeviation ? 'border-yellow-300 bg-yellow-100' : 'border-gray-200 bg-gray-50'
+                                            )}>
+                                                <div className="text-gray-500">الكمية الفعلية</div>
+                                                <div className="font-mono font-semibold text-gray-900">{actualQuantity ?? '-'}</div>
+                                            </div>
+                                        </div>
+                                        <div className="mt-2 text-xs text-gray-600 text-right">
+                                            <span className="font-semibold text-gray-700">النسبة: </span>
                                             {ingredient.percentage !== undefined ? `${ingredient.percentage}%` : '-'}
-                                        </td>
-                                        <td className={cn(
-                                            "border border-gray-400 px-2 py-1 text-center font-mono",
-                                            actualQuantity && Math.abs(actualQuantity - ingredient.quantity) > ingredient.quantity * 0.05 && 'bg-yellow-100'
-                                        )}>
-                                            {actualQuantity !== undefined ? actualQuantity : '-'}
-                                        </td>
-                                    </tr>
+                                        </div>
+                                    </div>
                                 );
                             })}
-                        </tbody>
-                    </table>
+                        </div>
+                    )}
+                    <div className={cn('overflow-x-hidden print-table-container', isMobile && 'hidden print:block')}>
+                        <table className="w-full border-collapse text-xs print:text-[12px]">
+                            <thead>
+                                <tr className="bg-gray-800 text-white">
+                                    <th className="border border-gray-400 px-2 py-1.5 text-center w-10">#</th>
+                                    <th className="border border-gray-400 px-2 py-1.5 text-right">المكون</th>
+                                    <th className="border border-gray-400 px-2 py-1.5 text-center w-24">الكمية</th>
+                                    <th className="border border-gray-400 px-2 py-1.5 text-center w-16">الوحدة</th>
+                                    <th className="border border-gray-400 px-2 py-1.5 text-center w-16">النسبة %</th>
+                                    <th className="border border-gray-400 px-2 py-1.5 text-center w-24">الكمية الفعلية</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {ingredients.map((ingredient, index) => {
+                                    const actualQuantity = tableData?.[index]?.[0];
+
+                                    return (
+                                        <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                            <td className="border border-gray-400 px-2 py-1 text-center text-gray-500">
+                                                {index + 1}
+                                            </td>
+                                            <td className="border border-gray-400 px-2 py-1 text-right font-medium">
+                                                {ingredient.ingredient}
+                                            </td>
+                                            <td className="border border-gray-400 px-2 py-1 text-center font-mono">
+                                                {ingredient.quantity}
+                                            </td>
+                                            <td className="border border-gray-400 px-2 py-1 text-center">
+                                                {ingredient.unit}
+                                            </td>
+                                            <td className="border border-gray-400 px-2 py-1 text-center font-mono">
+                                                {ingredient.percentage !== undefined ? `${ingredient.percentage}%` : '-'}
+                                            </td>
+                                            <td className={cn(
+                                                "border border-gray-400 px-2 py-1 text-center font-mono",
+                                                actualQuantity && Math.abs(actualQuantity - ingredient.quantity) > ingredient.quantity * 0.05 && 'bg-yellow-100'
+                                            )}>
+                                                {actualQuantity !== undefined ? actualQuantity : '-'}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             );
         }
 
-        if (table.type === 'sample') {
-            const sampleSize = table.sample_size || 20;
+        if (table.type === 'sample' || (table as any).type === 'samples') {
+            const sampleSize = resolveSampleSize(table, 20);
             const columnsCount = timeHeaders.length;
             const dataRows = tableData || [];
-
+            const visibleTimeIndexes = getVisibleColumnIndexes(table.id, columnsCount, MOBILE_TIME_COLUMNS_PER_VIEW);
             // Calculate column statistics
             const getColumnAverage = (colIndex: number): number | null => {
                 const values: number[] = [];
@@ -646,78 +980,89 @@ const ReportViewer: React.FC = () => {
             };
 
             return (
-                <div className="overflow-x-auto print-table-container">
-                    <table className="w-full border-collapse text-xs print:text-[8px] print:table-fixed">
-                        <thead>
-                            <tr className="bg-gray-800 text-white">
-                                <th className="border border-gray-400 px-2 py-1.5 text-center font-bold print:w-[10%]" style={{ width: '60px' }}>
-                                    العينة #
-                                </th>
-                                {timeHeaders.map((time, i) => (
-                                    <th
-                                        key={i}
-                                        className="border border-gray-400 px-0.5 py-1 text-center font-bold text-[9px] print:text-[7px]"
-                                    >
-                                        {time}
+                <div className="space-y-2 print:space-y-0">
+                    {renderMobileColumnPager({
+                        tableId: table.id,
+                        totalColumns: columnsCount,
+                        visibleIndexes: visibleTimeIndexes,
+                        windowSize: MOBILE_TIME_COLUMNS_PER_VIEW,
+                        labels: timeHeaders,
+                    })}
+                    <div className="overflow-x-hidden print-table-container">
+                        <table
+                            className="w-full border-collapse text-xs print:text-[8px] print:table-fixed"
+                        >
+                            <thead>
+                                <tr className="bg-gray-800 text-white">
+                                    <th className="border border-gray-400 px-2 py-1.5 text-center font-bold print:w-[10%]" style={{ width: '60px' }}>
+                                        العينة #
                                     </th>
-                                ))}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {Array.from({ length: sampleSize }).map((_, rowIndex) => {
-                                const row = dataRows[rowIndex] || [];
-                                return (
-                                    <tr key={rowIndex} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                                        <td className="border border-gray-400 px-2 py-1 text-center text-gray-500 font-bold">
-                                            {rowIndex + 1}
-                                        </td>
-                                        {Array.from({ length: columnsCount }).map((_, colIndex) => {
-                                            const value = row[colIndex];
+                                    {visibleTimeIndexes.map((colIndex) => (
+                                        <th
+                                            key={colIndex}
+                                            className="border border-gray-400 px-0.5 py-1 text-center font-bold text-[9px] print:text-[7px]"
+                                        >
+                                            {timeHeaders[colIndex] ?? colIndex + 1}
+                                        </th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {Array.from({ length: sampleSize }).map((_, rowIndex) => {
+                                    const row = dataRows[rowIndex] || [];
+                                    return (
+                                        <tr key={rowIndex} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                            <td className="border border-gray-400 px-2 py-1 text-center text-gray-500 font-bold">
+                                                {rowIndex + 1}
+                                            </td>
+                                            {visibleTimeIndexes.map((colIndex) => {
+                                                const value = row[colIndex];
+                                                return (
+                                                    <td
+                                                        key={colIndex}
+                                                        className={cn(
+                                                            "border border-gray-400 px-1 py-1 text-center font-mono",
+                                                            (value === undefined || value === '' || value === null) && 'text-gray-300'
+                                                        )}
+                                                    >
+                                                        {value !== undefined && value !== '' && value !== null ? value : '-'}
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
+                                    );
+                                })}
+                                {/* Average row */}
+                                {table.features?.calculate_average && (
+                                    <tr className="bg-blue-100 font-bold">
+                                        <td className="border border-gray-400 px-2 py-1 text-center text-blue-800">المتوسط</td>
+                                        {visibleTimeIndexes.map((colIndex) => {
+                                            const avg = getColumnAverage(colIndex);
                                             return (
-                                                <td
-                                                    key={colIndex}
-                                                    className={cn(
-                                                        "border border-gray-400 px-1 py-1 text-center font-mono",
-                                                        (value === undefined || value === '' || value === null) && 'text-gray-300'
-                                                    )}
-                                                >
-                                                    {value !== undefined && value !== '' && value !== null ? value : '-'}
+                                                <td key={colIndex} className="border border-gray-400 px-1 py-1 text-center font-mono text-blue-800">
+                                                    {avg !== null ? avg.toFixed(2) : '-'}
                                                 </td>
                                             );
                                         })}
                                     </tr>
-                                );
-                            })}
-                            {/* Average row */}
-                            {table.features?.calculate_average && (
-                                <tr className="bg-blue-100 font-bold">
-                                    <td className="border border-gray-400 px-2 py-1 text-center text-blue-800">المتوسط</td>
-                                    {Array.from({ length: columnsCount }).map((_, colIndex) => {
-                                        const avg = getColumnAverage(colIndex);
-                                        return (
-                                            <td key={colIndex} className="border border-gray-400 px-1 py-1 text-center font-mono text-blue-800">
-                                                {avg !== null ? avg.toFixed(2) : '-'}
-                                            </td>
-                                        );
-                                    })}
-                                </tr>
-                            )}
-                            {/* STD row */}
-                            {table.features?.calculate_std && (
-                                <tr className="bg-purple-100 font-bold">
-                                    <td className="border border-gray-400 px-2 py-1 text-center text-purple-800">STD</td>
-                                    {Array.from({ length: columnsCount }).map((_, colIndex) => {
-                                        const std = getColumnSTD(colIndex);
-                                        return (
-                                            <td key={colIndex} className="border border-gray-400 px-1 py-1 text-center font-mono text-purple-800">
-                                                {std !== null ? std.toFixed(3) : '-'}
-                                            </td>
-                                        );
-                                    })}
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
+                                )}
+                                {/* STD row */}
+                                {table.features?.calculate_std && (
+                                    <tr className="bg-purple-100 font-bold">
+                                        <td className="border border-gray-400 px-2 py-1 text-center text-purple-800">STD</td>
+                                        {visibleTimeIndexes.map((colIndex) => {
+                                            const std = getColumnSTD(colIndex);
+                                            return (
+                                                <td key={colIndex} className="border border-gray-400 px-1 py-1 text-center font-mono text-purple-800">
+                                                    {std !== null ? std.toFixed(3) : '-'}
+                                                </td>
+                                            );
+                                        })}
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             );
         }
@@ -745,6 +1090,7 @@ const ReportViewer: React.FC = () => {
                     unit: Array.isArray(row) ? row[2] : row.unit,
                     batches: Array.isArray(row) ? row[3] : row.batches
                 })) : []);
+                const useMobileCards = isMobile && !isPrintMode;
 
                 if (!ingredients || ingredients.length === 0) return null;
 
@@ -762,7 +1108,7 @@ const ReportViewer: React.FC = () => {
                                 <div className="font-bold text-xs text-gray-700 mb-1">
                                     خطوات الخلط ({recipe.mixing_steps.length})
                                 </div>
-                                <div className="grid grid-cols-3 gap-1 text-[10px] print:text-[8px]">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1 text-[10px] print:text-[8px]">
                                     {recipe.mixing_steps.map((step: any, idx: number) => (
                                         <div key={idx} className="flex gap-1 p-1 bg-white border border-gray-100 rounded">
                                             <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center bg-blue-500 text-white text-[9px] rounded-full font-bold">
@@ -776,61 +1122,118 @@ const ReportViewer: React.FC = () => {
                         )}
 
                         {/* Ingredients Table */}
-                        <div className="recipe-table-container overflow-x-auto print:overflow-hidden">
-                            <table className="w-full border-collapse text-xs print:text-[10px] print:table-fixed">
-                                <thead>
-                                    <tr className="bg-gray-800 text-white">
-                                        <th className="border border-gray-400 px-2 py-1.5 print:px-1 print:py-0.5 text-right font-bold" style={{ width: '25%' }}>الخامة</th>
-                                        <th className="border border-gray-400 px-2 py-1.5 print:px-1 print:py-0.5 text-center font-bold" style={{ width: '10%' }}>الكمية</th>
-                                        <th className="border border-gray-400 px-2 py-1.5 print:px-1 print:py-0.5 text-center font-bold" style={{ width: '8%' }}>الوحدة</th>
-                                        <th className="border border-gray-400 px-2 py-1.5 print:px-1 print:py-0.5 text-center font-bold" style={{ width: '19%' }}>رقم الباتش</th>
-                                        <th className="border border-gray-400 px-2 py-1.5 print:px-1 print:py-0.5 text-center font-bold" style={{ width: '19%' }}>تاريخ الإنتاج</th>
-                                        <th className="border border-gray-400 px-2 py-1.5 print:px-1 print:py-0.5 text-center font-bold" style={{ width: '19%' }}>تاريخ الانتهاء</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {ingredients.map((ing: any, ingIndex: number) => {
-                                        const ingredientName = ing.ingredient_name || ing.name || '-';
-                                        const quantity = ing.quantity || '-';
-                                        const unit = ing.unit || '-';
-                                        const batches = ing.batches || [];
+                        {useMobileCards ? (
+                            <div className="space-y-2 print:hidden">
+                                {ingredients.map((ing: any, ingIndex: number) => {
+                                    const ingredientName = ing.ingredient_name || ing.name || '-';
+                                    const quantity = ing.quantity || '-';
+                                    const unit = ing.unit || '-';
+                                    const batches = Array.isArray(ing.batches) && ing.batches.length > 0
+                                        ? ing.batches
+                                        : [{ batchNumber: '', productionDate: '', expiryDate: '' }];
 
-                                        // If no batches, show single row
-                                        if (!batches || batches.length === 0) {
-                                            return (
-                                                <tr key={ingIndex} className={ingIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                                                    <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-right font-medium">{ingredientName}</td>
-                                                    <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center">{quantity}</td>
-                                                    <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center">{unit}</td>
-                                                    <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center text-gray-400">-</td>
-                                                    <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center text-gray-400">-</td>
-                                                    <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center text-gray-400">-</td>
+                                    return (
+                                        <div
+                                            key={ingIndex}
+                                            className="rounded-lg border border-gray-200 bg-white px-3 py-2.5 space-y-2"
+                                        >
+                                            <div className="space-y-1">
+                                                <h6 className="text-sm font-semibold text-gray-900">{ingredientName}</h6>
+                                                <div className="flex flex-wrap gap-1.5 text-[11px]">
+                                                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-gray-700">الكمية: {quantity}</span>
+                                                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-gray-700">الوحدة: {unit}</span>
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                {batches.map((batch: any, batchIdx: number) => (
+                                                    <div key={`${ingIndex}-${batchIdx}`} className="rounded-md border border-gray-100 px-2.5 py-2 space-y-1.5">
+                                                        <div className="text-[11px] font-semibold text-gray-500">
+                                                            الباتش #{batchIdx + 1}
+                                                        </div>
+                                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                                            <div className="text-xs">
+                                                                <div className="text-[11px] text-gray-500">رقم الباتش</div>
+                                                                <div className="text-gray-900">{batch.batchNumber || '-'}</div>
+                                                            </div>
+                                                            <div className="text-xs">
+                                                                <div className="text-[11px] text-gray-500">تاريخ الإنتاج</div>
+                                                                <div className="text-gray-900">{batch.productionDate || '-'}</div>
+                                                            </div>
+                                                            <div className={cn(
+                                                                'text-xs rounded px-1.5 py-1',
+                                                                batch.expiryDate && new Date(batch.expiryDate) < new Date()
+                                                                    ? 'bg-red-100 text-red-700'
+                                                                    : 'bg-transparent text-gray-900'
+                                                            )}>
+                                                                <div className="text-[11px] text-gray-500">تاريخ الانتهاء</div>
+                                                                <div>{batch.expiryDate || '-'}</div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <div className="recipe-table-container overflow-x-hidden print:overflow-hidden">
+                                <table className="w-full border-collapse text-xs print:text-[10px] print:table-fixed">
+                                    <thead>
+                                        <tr className="bg-gray-800 text-white">
+                                            <th className="border border-gray-400 px-2 py-1.5 print:px-1 print:py-0.5 text-right font-bold" style={{ width: '25%' }}>الخامة</th>
+                                            <th className="border border-gray-400 px-2 py-1.5 print:px-1 print:py-0.5 text-center font-bold" style={{ width: '10%' }}>الكمية</th>
+                                            <th className="border border-gray-400 px-2 py-1.5 print:px-1 print:py-0.5 text-center font-bold" style={{ width: '8%' }}>الوحدة</th>
+                                            <th className="border border-gray-400 px-2 py-1.5 print:px-1 print:py-0.5 text-center font-bold" style={{ width: '19%' }}>رقم الباتش</th>
+                                            <th className="border border-gray-400 px-2 py-1.5 print:px-1 print:py-0.5 text-center font-bold" style={{ width: '19%' }}>تاريخ الإنتاج</th>
+                                            <th className="border border-gray-400 px-2 py-1.5 print:px-1 print:py-0.5 text-center font-bold" style={{ width: '19%' }}>تاريخ الانتهاء</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {ingredients.map((ing: any, ingIndex: number) => {
+                                            const ingredientName = ing.ingredient_name || ing.name || '-';
+                                            const quantity = ing.quantity || '-';
+                                            const unit = ing.unit || '-';
+                                            const batches = ing.batches || [];
+
+                                            // If no batches, show single row
+                                            if (!batches || batches.length === 0) {
+                                                return (
+                                                    <tr key={ingIndex} className={ingIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                                        <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-right font-medium">{ingredientName}</td>
+                                                        <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center">{quantity}</td>
+                                                        <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center">{unit}</td>
+                                                        <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center text-gray-400">-</td>
+                                                        <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center text-gray-400">-</td>
+                                                        <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center text-gray-400">-</td>
+                                                    </tr>
+                                                );
+                                            }
+
+                                            // Multiple batches per ingredient
+                                            return batches.map((batch: any, batchIdx: number) => (
+                                                <tr key={`${ingIndex}-${batchIdx}`} className={ingIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                                    {batchIdx === 0 ? (
+                                                        <>
+                                                            <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-right font-medium" rowSpan={batches.length}>{ingredientName}</td>
+                                                            <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center" rowSpan={batches.length}>{quantity}</td>
+                                                            <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center" rowSpan={batches.length}>{unit}</td>
+                                                        </>
+                                                    ) : null}
+                                                    <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center">{batch.batchNumber || '-'}</td>
+                                                    <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center">{batch.productionDate || '-'}</td>
+                                                    <td className={cn(
+                                                        "border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center",
+                                                        batch.expiryDate && new Date(batch.expiryDate) < new Date() && 'bg-red-100 text-red-700'
+                                                    )}>{batch.expiryDate || '-'}</td>
                                                 </tr>
-                                            );
-                                        }
-
-                                        // Multiple batches per ingredient
-                                        return batches.map((batch: any, batchIdx: number) => (
-                                            <tr key={`${ingIndex}-${batchIdx}`} className={ingIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                                                {batchIdx === 0 ? (
-                                                    <>
-                                                        <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-right font-medium" rowSpan={batches.length}>{ingredientName}</td>
-                                                        <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center" rowSpan={batches.length}>{quantity}</td>
-                                                        <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center" rowSpan={batches.length}>{unit}</td>
-                                                    </>
-                                                ) : null}
-                                                <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center">{batch.batchNumber || '-'}</td>
-                                                <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center">{batch.productionDate || '-'}</td>
-                                                <td className={cn(
-                                                    "border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center",
-                                                    batch.expiryDate && new Date(batch.expiryDate) < new Date() && 'bg-red-100 text-red-700'
-                                                )}>{batch.expiryDate || '-'}</td>
-                                            </tr>
-                                        ));
-                                    })}
-                                </tbody>
-                            </table>
-                        </div>
+                                            ));
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
 
                         {/* Recipe Notes */}
                         {recipe?.notes && (
@@ -868,129 +1271,315 @@ const ReportViewer: React.FC = () => {
             const columns = table.columns || [];
             const dataRows = tableData || [];
             const rowsCount = table.rows || dataRows.length || 1;
+            const useMobileCards = isMobile && !isPrintMode;
+
+            if (useMobileCards) {
+                return (
+                    <div className="space-y-2 print:hidden">
+                        {Array.from({ length: Math.max(rowsCount, dataRows.length) }).map((_, rowIndex) => {
+                            const row = dataRows[rowIndex] || [];
+                            return (
+                                <div
+                                    key={rowIndex}
+                                    className="rounded-lg border border-gray-200 bg-white px-3 py-2.5 space-y-2"
+                                >
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-[11px] font-semibold text-gray-500">
+                                            {showRowNumbers ? `${rowHeaderLabel} ${rowIndex + 1}` : `صف ${rowIndex + 1}`}
+                                        </span>
+                                    </div>
+                                    <div className="space-y-2">
+                                        {columns.map((col, colIndex) => (
+                                            <div key={col.key || colIndex} className="rounded-md border border-gray-100 px-2.5 py-2">
+                                                <div className="text-[11px] font-semibold text-gray-500 mb-1">{col.label || `عمود ${colIndex + 1}`}</div>
+                                                <div className="text-gray-900 text-right">
+                                                    {renderReadonlyCellValue(col, row[colIndex], true)}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                );
+            }
+
+            const visibleColumnIndexes = getVisibleColumnIndexes(table.id, columns.length, MOBILE_CUSTOM_COLUMNS_PER_VIEW);
+            const visibleColumns = visibleColumnIndexes.map((index) => ({ index, column: columns[index] })).filter((entry) => !!entry.column);
+            const rowNumberWidthPercent = showRowNumbers ? 7 : 0;
+            const availableColumnsWidthPercent = 100 - rowNumberWidthPercent;
+            const normalizedColumnWidths = (() => {
+                const weights = visibleColumns.map(({ index }) => Math.max(1, Number(columns[index]?.width) || 100));
+                const total = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+                return weights.map((weight) => (weight / total) * availableColumnsWidthPercent);
+            })();
 
             return (
-                <div className="overflow-x-auto">
+                <div className="space-y-2 print:space-y-0">
+                    {renderMobileColumnPager({
+                        tableId: table.id,
+                        totalColumns: columns.length,
+                        visibleIndexes: visibleColumnIndexes,
+                        windowSize: MOBILE_CUSTOM_COLUMNS_PER_VIEW,
+                        labels: columns.map((column) => column.label || '-'),
+                    })}
+                    <div className="overflow-x-hidden print-table-container">
+                        <table
+                            className="w-full border-collapse text-xs print:text-[10px]"
+                            style={{
+                                tableLayout: 'fixed',
+                            }}
+                        >
+                            <colgroup>
+                                {showRowNumbers && <col style={{ width: `${rowNumberWidthPercent}%` }} />}
+                                {visibleColumns.map(({ index }, visibleIndex) => (
+                                    <col
+                                        key={index}
+                                        style={{
+                                            width: `${normalizedColumnWidths[visibleIndex] || 0}%`,
+                                        }}
+                                    />
+                                ))}
+                            </colgroup>
+                            <thead>
+                                {hasCustomHeaderRows ? (
+                                    customHeaderRows.map((headerRow, headerRowIndex) => (
+                                        <tr key={`pv-header-row-${headerRowIndex}`} className="bg-gray-800 text-white">
+                                            {showRowNumbers && headerRowIndex === 0 && (
+                                                <th
+                                                    rowSpan={customHeaderRows.length}
+                                                    className="border border-gray-400 px-2 py-1.5 text-center w-10 font-bold"
+                                                >
+                                                    {rowHeaderLabel}
+                                                </th>
+                                            )}
+                                            {headerRow.map((cell, cellIndex) => (
+                                                <th
+                                                    key={`pv-header-cell-${headerRowIndex}-${cellIndex}`}
+                                                    colSpan={cell.col_span || 1}
+                                                    rowSpan={cell.row_span || 1}
+                                                    className={cn(
+                                                        'border border-gray-400 px-2 py-1.5 font-bold',
+                                                        getColumnAlignClass(cell.align),
+                                                        cell.class_name
+                                                    )}
+                                                    style={{
+                                                        backgroundColor: cell.background_color || undefined,
+                                                        color: cell.text_color || undefined,
+                                                    }}
+                                                >
+                                                    {cell.label}
+                                                </th>
+                                            ))}
+                                        </tr>
+                                    ))
+                                ) : (
+                                    <tr className="bg-gray-800 text-white">
+                                        {showRowNumbers && (
+                                            <th className="border border-gray-400 px-2 py-1.5 text-center w-10 font-bold">
+                                                {rowHeaderLabel}
+                                            </th>
+                                        )}
+                                        {visibleColumns.map(({ index, column }) => (
+                                            <th
+                                                key={column.key || index}
+                                                className={cn(
+                                                    'border border-gray-400 px-2 py-1.5 font-bold',
+                                                    getColumnAlignClass(column.align)
+                                                )}
+                                            >
+                                                {column.label}
+                                            </th>
+                                        ))}
+                                    </tr>
+                                )}
+                            </thead>
+                            <tbody>
+                                {Array.from({ length: Math.max(rowsCount, dataRows.length) }).map((_, rowIndex) => {
+                                    const row = dataRows[rowIndex] || [];
+                                    return (
+                                        <tr key={rowIndex} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                            {showRowNumbers && (
+                                                <td className="border border-gray-400 px-2 py-1 text-center text-gray-500">
+                                                    {rowIndex + 1}
+                                                </td>
+                                            )}
+                                            {visibleColumns.map(({ index: colIndex, column: col }) => {
+                                                const val = row[colIndex];
+                                                return (
+                                                    <td
+                                                        key={col.key || colIndex}
+                                                        className={cn(
+                                                            'border border-gray-400 px-2 py-0.5',
+                                                            getColumnAlignClass(col.align),
+                                                            'print:break-words print:overflow-wrap-anywhere'
+                                                        )}
+                                                    >
+                                                        {renderReadonlyCellValue(col, val)}
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+
+        // Default table rendering for custom/ai-code
+        const columns = table.columns || [];
+        const dataRows = tableData || [];
+        const rowsCount = table.rows || dataRows.length || 5;
+        const useMobileCards = isMobile && !isPrintMode;
+
+        if (useMobileCards) {
+            return (
+                <div className="space-y-2 print:hidden">
+                    {Array.from({ length: Math.max(rowsCount, dataRows.length) }).map((_, rowIndex) => {
+                        const row = dataRows[rowIndex] || [];
+                        return (
+                            <div
+                                key={rowIndex}
+                                className="rounded-lg border border-gray-200 bg-white px-3 py-2.5 space-y-2"
+                            >
+                                <div className="flex items-center justify-between">
+                                    <span className="text-[11px] font-semibold text-gray-500">
+                                        {showRowNumbers ? `${rowHeaderLabel} ${rowIndex + 1}` : `صف ${rowIndex + 1}`}
+                                    </span>
+                                </div>
+                                <div className="space-y-2">
+                                    {columns.map((col, colIndex) => (
+                                        <div key={col.key || colIndex} className="rounded-md border border-gray-100 px-2.5 py-2">
+                                            <div className="text-[11px] font-semibold text-gray-500 mb-1">{col.label || `عمود ${colIndex + 1}`}</div>
+                                            <div className="text-gray-900 text-right">
+                                                {renderReadonlyCellValue(col, row[colIndex], true)}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            );
+        }
+
+        const visibleColumnIndexes = getVisibleColumnIndexes(table.id, columns.length, MOBILE_CUSTOM_COLUMNS_PER_VIEW);
+        const visibleColumns = visibleColumnIndexes.map((index) => ({ index, column: columns[index] })).filter((entry) => !!entry.column);
+        const rowNumberWidthPercent = showRowNumbers ? 7 : 0;
+        const availableColumnsWidthPercent = 100 - rowNumberWidthPercent;
+        const normalizedColumnWidths = (() => {
+            const weights = visibleColumns.map(({ index }) => Math.max(1, Number(columns[index]?.width) || 100));
+            const total = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+            return weights.map((weight) => (weight / total) * availableColumnsWidthPercent);
+        })();
+
+        return (
+            <div className="space-y-2 print:space-y-0">
+                {renderMobileColumnPager({
+                    tableId: table.id,
+                    totalColumns: columns.length,
+                    visibleIndexes: visibleColumnIndexes,
+                    windowSize: MOBILE_CUSTOM_COLUMNS_PER_VIEW,
+                    labels: columns.map((column) => column.label || '-'),
+                })}
+                <div className="overflow-x-hidden print-table-container">
                     <table
                         className="w-full border-collapse text-xs print:text-[10px]"
-                        style={{ tableLayout: 'auto' }}
+                        style={{
+                            tableLayout: 'fixed',
+                        }}
                     >
                         <colgroup>
-                            {/* Row number - fixed small */}
-                            <col style={{ width: '40px' }} />
-                            {/* Data columns - responsive */}
-                            {columns.map((_, i) => (
-                                <col key={i} style={{ minWidth: '100px', maxWidth: '300px' }} />
+                            {showRowNumbers && <col style={{ width: `${rowNumberWidthPercent}%` }} />}
+                            {visibleColumns.map(({ index }, visibleIndex) => (
+                                <col
+                                    key={`custom-col-${index}`}
+                                    style={{
+                                        width: `${normalizedColumnWidths[visibleIndex] || 0}%`,
+                                    }}
+                                />
                             ))}
                         </colgroup>
                         <thead>
-                            <tr className="bg-gray-800 text-white">
-                                <th className="border border-gray-400 px-2 py-1.5 text-center w-10 font-bold">
-                                    #
-                                </th>
-                                {columns.map((col) => (
-                                    <th
-                                        key={col.key}
-                                        className="border border-gray-400 px-2 py-1.5 text-center font-bold"
-                                    >
-                                        {col.label}
-                                    </th>
-                                ))}
-                            </tr>
+                            {hasCustomHeaderRows ? (
+                                customHeaderRows.map((headerRow, headerRowIndex) => (
+                                    <tr key={`custom-header-row-${headerRowIndex}`} className="bg-gray-800 text-white">
+                                        {showRowNumbers && headerRowIndex === 0 && (
+                                            <th
+                                                rowSpan={customHeaderRows.length}
+                                                className="border border-gray-400 px-2 py-1.5 text-center w-10 font-bold"
+                                            >
+                                                {rowHeaderLabel}
+                                            </th>
+                                        )}
+                                        {headerRow.map((cell, cellIndex) => (
+                                            <th
+                                                key={`custom-header-cell-${headerRowIndex}-${cellIndex}`}
+                                                colSpan={cell.col_span || 1}
+                                                rowSpan={cell.row_span || 1}
+                                                className={cn(
+                                                    'border border-gray-400 px-2 py-1.5 font-bold',
+                                                    getColumnAlignClass(cell.align),
+                                                    cell.class_name
+                                                )}
+                                                style={{
+                                                    backgroundColor: cell.background_color || undefined,
+                                                    color: cell.text_color || undefined,
+                                                }}
+                                            >
+                                                {cell.label}
+                                            </th>
+                                        ))}
+                                    </tr>
+                                ))
+                            ) : (
+                                <tr className="bg-gray-800 text-white">
+                                    {showRowNumbers && (
+                                        <th className="border border-gray-400 px-2 py-1.5 text-center w-10 font-bold">
+                                            {rowHeaderLabel}
+                                        </th>
+                                    )}
+                                    {visibleColumns.map(({ index, column: col }) => (
+                                        <th
+                                            key={col.key || index}
+                                            className={cn(
+                                                'border border-gray-400 px-2 py-1.5 font-bold',
+                                                getColumnAlignClass(col.align)
+                                            )}
+                                        >
+                                            {col.label}
+                                        </th>
+                                    ))}
+                                </tr>
+                            )}
                         </thead>
                         <tbody>
                             {Array.from({ length: Math.max(rowsCount, dataRows.length) }).map((_, rowIndex) => {
                                 const row = dataRows[rowIndex] || [];
                                 return (
                                     <tr key={rowIndex} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                                        <td className="border border-gray-400 px-2 py-1 text-center text-gray-500">
-                                            {rowIndex + 1}
-                                        </td>
-                                        {columns.map((col, colIndex) => {
+                                        {showRowNumbers && (
+                                            <td className="border border-gray-400 px-2 py-1 text-center text-gray-500">
+                                                {rowIndex + 1}
+                                            </td>
+                                        )}
+                                        {visibleColumns.map(({ index: colIndex, column: col }) => {
                                             const val = row[colIndex];
-
-                                            if (col.type === 'image') {
-                                                let images: string[] = [];
-                                                if (Array.isArray(val)) {
-                                                    images = val;
-                                                } else if (typeof val === 'string') {
-                                                    if (val.trim().startsWith('[')) {
-                                                        try {
-                                                            const parsed = JSON.parse(val);
-                                                            if (Array.isArray(parsed)) images = parsed;
-                                                            else images = [val];
-                                                        } catch (e) {
-                                                            images = [val];
-                                                        }
-                                                    } else {
-                                                        images = [val];
-                                                    }
-                                                }
-                                                // Filter out empty/null values
-                                                images = images.filter(img => img && typeof img === 'string' && img.length > 10);
-
-                                                return (
-                                                    <td key={col.key} className="border border-gray-400 px-2 py-1 text-center" style={{ minWidth: '150px' }}>
-                                                        <div className="flex flex-col gap-1 w-full">
-                                                            {images.map((img: string, idx: number) => (
-                                                                <div key={idx} className="w-full relative pt-[12.5%] border border-gray-100 rounded overflow-hidden">
-                                                                    {/* pt-12.5% creates 8:1 aspect ratio (100/8 = 12.5) */}
-                                                                    <img
-                                                                        src={img}
-                                                                        alt="Item"
-                                                                        className="absolute top-0 left-0 w-full h-full object-cover"
-                                                                    />
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    </td>
-                                                );
-                                            }
-
-                                            if (col.type === 'long-text') {
-                                                return (
-                                                    <td key={col.key} className="border border-gray-400 px-2 py-1 text-right" style={{ minWidth: '200px' }}>
-                                                        <div className="whitespace-pre-wrap text-xs">
-                                                            {val !== undefined && val !== '' ? String(val) : '-'}
-                                                        </div>
-                                                    </td>
-                                                );
-                                            }
-
-                                            if (col.type === 'boolean-check') {
-                                                const isTrue = val === true || val === 'true' || val === 'checked' || val === 'مقبول';
-                                                const isFalse = val === false || val === 'false' || val === 'unchecked' || val === 'مرفوض';
-                                                return (
-                                                    <td key={col.key} className="border border-gray-400 px-2 py-1 text-center font-bold font-sans">
-                                                        {isTrue ? <span className="text-green-600 text-lg">✓</span> : (isFalse ? <span className="text-red-600 text-lg">✗</span> : '-')}
-                                                    </td>
-                                                );
-                                            }
-
-                                            if (col.type === 'boolean-yesno') {
-                                                const isTrue = val === true || val === 'true' || val === 'yes' || val === 'نعم';
-                                                const isFalse = val === false || val === 'false' || val === 'no' || val === 'لا';
-                                                return (
-                                                    <td key={col.key} className="border border-gray-400 px-2 py-1 text-center">
-                                                        {isTrue ? 'نعم' : (isFalse ? 'لا' : '-')}
-                                                    </td>
-                                                );
-                                            }
-
-                                            // For other types: apply smart cell styling
-                                            const cellStyle = getSmartCellStyle(val);
-
                                             return (
                                                 <td
-                                                    key={col.key}
+                                                    key={col.key || colIndex}
                                                     className={cn(
-                                                        'border border-gray-400 px-2 py-0.5 text-center',
-                                                        'print:break-words print:overflow-wrap-anywhere',
-                                                        cellStyle.className
+                                                        'border border-gray-400 px-2 py-0.5',
+                                                        getColumnAlignClass(col.align),
+                                                        'print:break-words print:overflow-wrap-anywhere'
                                                     )}
-                                                    style={cellStyle.fontSize ? { fontSize: cellStyle.fontSize } : undefined}
                                                 >
-                                                    {val !== undefined && val !== '' ? String(val) : '-'}
+                                                    {renderReadonlyCellValue(col, val)}
                                                 </td>
                                             );
                                         })}
@@ -1000,134 +1589,6 @@ const ReportViewer: React.FC = () => {
                         </tbody>
                     </table>
                 </div>
-            );
-        }
-
-        // Default table rendering for custom/ai-code
-        const columns = table.columns || [];
-        const dataRows = tableData || [];
-        const rowsCount = table.rows || dataRows.length || 5;
-
-        return (
-            <div className="overflow-x-auto">
-                <table
-                    className="w-full border-collapse text-xs print:text-[10px]"
-                    style={{ tableLayout: 'auto' }}
-                >
-                    <thead>
-                        <tr className="bg-gray-800 text-white">
-                            <th className="border border-gray-400 px-2 py-1.5 text-center w-10 font-bold">
-                                #
-                            </th>
-                            {columns.map((col) => (
-                                <th
-                                    key={col.key}
-                                    className="border border-gray-400 px-2 py-1.5 text-center font-bold"
-                                >
-                                    {col.label}
-                                </th>
-                            ))}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {Array.from({ length: Math.max(rowsCount, dataRows.length) }).map((_, rowIndex) => {
-                            const row = dataRows[rowIndex] || [];
-                            return (
-                                <tr key={rowIndex} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                                    <td className="border border-gray-400 px-2 py-1 text-center text-gray-500">
-                                        {rowIndex + 1}
-                                    </td>
-                                    {columns.map((col, colIndex) => {
-                                        const val = row[colIndex];
-
-                                        if (col.type === 'image') {
-                                            let images: string[] = [];
-                                            if (Array.isArray(val)) {
-                                                images = val;
-                                            } else if (typeof val === 'string') {
-                                                if (val.trim().startsWith('[')) {
-                                                    try {
-                                                        const parsed = JSON.parse(val);
-                                                        if (Array.isArray(parsed)) images = parsed;
-                                                        else images = [val];
-                                                    } catch (e) {
-                                                        images = [val];
-                                                    }
-                                                } else {
-                                                    images = [val];
-                                                }
-                                            }
-                                            // Filter out empty/null values
-                                            images = images.filter(img => img && typeof img === 'string' && img.length > 10);
-
-                                            return (
-                                                <td key={col.key} className="border border-gray-400 px-2 py-1 text-center" style={{ minWidth: '150px' }}>
-                                                    <div className="flex flex-col gap-1 w-full">
-                                                        {images.map((img: string, idx: number) => (
-                                                            <div key={idx} className="w-full relative pt-[12.5%] border border-gray-100 rounded overflow-hidden">
-                                                                {/* pt-12.5% creates 8:1 aspect ratio (100/8 = 12.5) */}
-                                                                <img
-                                                                    src={img}
-                                                                    alt="Item"
-                                                                    className="absolute top-0 left-0 w-full h-full object-cover"
-                                                                />
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                </td>
-                                            );
-                                        }
-
-                                        if (col.type === 'long-text') {
-                                            return (
-                                                <td key={col.key} className="border border-gray-400 px-2 py-1 text-right whitespace-pre-wrap min-w-[200px]">
-                                                    {val || '-'}
-                                                </td>
-                                            );
-                                        }
-
-                                        if (col.type === 'boolean-check') {
-                                            const isTrue = val === true || val === 'true' || val === 'checked' || val === 'مقبول';
-                                            const isFalse = val === false || val === 'false' || val === 'unchecked' || val === 'مرفوض';
-                                            return (
-                                                <td key={col.key} className="border border-gray-400 px-2 py-1 text-center font-bold font-sans">
-                                                    {isTrue ? <span className="text-green-600 text-lg">✓</span> : (isFalse ? <span className="text-red-600 text-lg">✗</span> : '-')}
-                                                </td>
-                                            );
-                                        }
-
-                                        if (col.type === 'boolean-yesno') {
-                                            const isTrue = val === true || val === 'true' || val === 'yes' || val === 'نعم';
-                                            const isFalse = val === false || val === 'false' || val === 'no' || val === 'لا';
-                                            return (
-                                                <td key={col.key} className="border border-gray-400 px-2 py-1 text-center">
-                                                    {isTrue ? 'نعم' : (isFalse ? 'لا' : '-')}
-                                                </td>
-                                            );
-                                        }
-
-                                        // For all other types: apply smart cell styling
-                                        const cellStyle = getSmartCellStyle(val);
-
-                                        return (
-                                            <td
-                                                key={col.key}
-                                                className={cn(
-                                                    'border border-gray-400 px-2 py-0.5 text-center',
-                                                    'print:break-words print:overflow-wrap-anywhere',
-                                                    cellStyle.className
-                                                )}
-                                                style={cellStyle.fontSize ? { fontSize: cellStyle.fontSize } : undefined}
-                                            >
-                                                {val !== undefined && val !== '' ? String(val) : '-'}
-                                            </td>
-                                        );
-                                    })}
-                                </tr>
-                            );
-                        })}
-                    </tbody>
-                </table>
             </div>
         );
     };
@@ -1135,23 +1596,23 @@ const ReportViewer: React.FC = () => {
     const statusInfo = getStatusInfo(instance?.status);
 
     return (
-        <div className="h-full flex flex-col bg-gray-100 dark:bg-gray-900 print:bg-white">
+        <div className="report-print-root h-full flex flex-col bg-gray-100 dark:bg-gray-900 print:bg-white" dir="rtl">
             {/* Header - Hidden in print */}
-            <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 print:hidden">
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
+            <div className="sticky top-0 z-20 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-3 sm:px-6 py-3 sm:py-4 print:hidden">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="flex items-center gap-2 sm:gap-4 min-w-0">
                         <button
-                            onClick={() => navigate(-1)}
-                            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+                            onClick={handleBack}
+                            className="p-1.5 sm:p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
                         >
-                            <ArrowLeftIcon className="w-5 h-5" />
+                            <ArrowLeftIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                         </button>
-                        <div>
-                            <h1 className="text-xl font-bold text-gray-900 dark:text-white">
+                        <div className="min-w-0">
+                            <h1 className="text-base sm:text-xl font-bold text-gray-900 dark:text-white">
                                 معاينة التقرير
                             </h1>
-                            <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
-                                <span>{template.name}</span>
+                            <div className="flex flex-wrap items-center gap-1.5 sm:gap-3 text-xs sm:text-sm text-gray-500 dark:text-gray-400">
+                                <span className="truncate max-w-[220px] sm:max-w-none">{template.name}</span>
                                 <span>•</span>
                                 <span>الإصدار {template.version}</span>
                                 {instance && (
@@ -1167,112 +1628,39 @@ const ReportViewer: React.FC = () => {
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
-                        {/* Review Panel for reviewers (when under review) - Compact mode */}
-                        {instance && instance.status === 'under_review' && (
-                            <ReportReviewPanel
-                                report={instance}
-                                compact={true}
-                                onActionComplete={(action, success) => {
-                                    if (success) {
-                                        window.location.reload();
-                                    }
-                                }}
-                            />
-                        )}
-
-                        {/* Claim button for submitted reports (for reviewers) */}
-                        {instance && instance.status === 'submitted' && (
+                    <div className="w-full lg:w-auto overflow-x-auto pb-1 -mx-1 px-1 lg:overflow-visible lg:pb-0 lg:mx-0 lg:px-0">
+                        <div className="flex items-center gap-2 sm:gap-3 min-w-max lg:min-w-0 snap-x snap-mandatory">
                             <button
-                                onClick={handleClaim}
-                                disabled={isProcessing}
-                                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 
-                                         text-white rounded-lg shadow-sm font-medium text-sm
-                                         hover:from-blue-600 hover:to-blue-700 transition-all
-                                         disabled:opacity-50 disabled:cursor-not-allowed"
-                                title="استلام التقرير للمراجعة"
+                                onClick={handlePrint}
+                                className="snap-start flex-none min-h-[40px] min-w-[88px] whitespace-nowrap justify-center flex items-center gap-2 px-3 sm:px-4 py-2 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
                             >
-                                <CheckCircleIcon className="w-4 h-4" />
-                                {isProcessing ? 'جاري الاستلام...' : 'استلام للمراجعة'}
+                                <PrinterIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                                {isMobile ? 'طباعة' : 'طباعة'}
                             </button>
-                        )}
 
-                        {/* Action buttons for approved reports */}
-                        {instance && instance.status === 'approved' && (
-                            <>
-                                <button
-                                    onClick={handleReopen}
-                                    disabled={isProcessing}
-                                    className="flex items-center gap-2 px-3 py-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 disabled:opacity-50"
-                                    title="إعادة فتح التقرير للتعديل"
-                                >
-                                    <ArrowPathIcon className="w-4 h-4" />
-                                    إعادة فتح
-                                </button>
-                                <button
-                                    onClick={handleArchive}
-                                    disabled={isProcessing}
-                                    className="flex items-center gap-2 px-3 py-2 text-gray-700 bg-gray-100 border border-gray-200 rounded-lg hover:bg-gray-200 disabled:opacity-50"
-                                    title="أرشفة التقرير"
-                                >
-                                    <ArchiveBoxIcon className="w-4 h-4" />
-                                    أرشفة
-                                </button>
-                            </>
-                        )}
-
-                        {/* Action buttons for rejected reports */}
-                        {instance && instance.status === 'rejected' && (
-                            <>
-                                <button
-                                    onClick={handleEditRejected}
-                                    disabled={isProcessing}
-                                    className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 
-                                             text-white rounded-lg shadow-sm font-medium text-sm
-                                             hover:from-amber-600 hover:to-amber-700 transition-all
-                                             disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title="تعديل التقرير وتصحيح الأخطاء"
-                                >
-                                    <ArrowPathIcon className="w-4 h-4" />
-                                    تعديل التقرير
-                                </button>
-                                <button
-                                    onClick={handleResubmit}
-                                    disabled={isProcessing}
-                                    className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 
-                                             text-white rounded-lg shadow-sm font-medium text-sm
-                                             hover:from-green-600 hover:to-green-700 transition-all
-                                             disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title="إعادة إرسال التقرير للمراجعة"
-                                >
-                                    <CheckCircleIcon className="w-4 h-4" />
-                                    إعادة الإرسال
-                                </button>
-                            </>
-                        )}
-
-                        <button
-                            onClick={handleExportPDF}
-                            className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
-                        >
-                            <DocumentArrowDownIcon className="w-5 h-5" />
-                            تصدير PDF
-                        </button>
+                            <button
+                                onClick={handleExportPDF}
+                                className="snap-start flex-none min-h-[40px] min-w-[88px] whitespace-nowrap justify-center flex items-center gap-2 px-3 sm:px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+                            >
+                                <DocumentArrowDownIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                                {isMobile ? 'PDF' : 'تصدير PDF'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
 
             {/* Report Content - A4 Paper Style */}
-            <div className="flex-1 overflow-y-auto p-6 print:p-0 print:overflow-visible">
-                <div className="max-w-[210mm] mx-auto bg-white shadow-lg print:shadow-none print:max-w-none print:w-full overflow-hidden">
+            <div className="report-scroll-container flex-1 overflow-y-visible p-2 sm:p-6 print:p-0 print:overflow-visible">
+                <div className="report-paper max-w-[210mm] mx-auto bg-white shadow-lg print:shadow-none print:max-w-none print:w-full overflow-visible">
                     {/* Inner container to constrain all content */}
-                    <div className="w-full max-w-full overflow-hidden print:px-2">
+                    <div className="report-paper-body w-full max-w-full overflow-visible print:px-2">
                         {/* Official Document Header */}
                         <div className="border-b-2 border-gray-800 print:border-black">
                             {/* Top Header - Compact */}
-                            <div className="flex items-center justify-between px-4 py-2">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-3 sm:px-4 py-2">
                                 {/* Right: Document Control Info - Vertical layout */}
-                                <div className="text-right text-[9px] min-w-[120px]">
+                                <div className="text-right text-[9px] w-full sm:w-auto sm:min-w-[120px]">
                                     {template.document_control && (
                                         <div className="space-y-0">
                                             {/* Document Code */}
@@ -1302,7 +1690,7 @@ const ReportViewer: React.FC = () => {
                                 </div>
 
                                 {/* Center: Document Title + Status */}
-                                <div className="flex-1 text-center px-4">
+                                <div className="flex-1 text-center px-0 sm:px-4">
                                     <h1 className="text-lg font-bold text-gray-900">
                                         {template.name}
                                     </h1>
@@ -1318,7 +1706,7 @@ const ReportViewer: React.FC = () => {
                                 </div>
 
                                 {/* Left: Company Logo + Name */}
-                                <div className="flex flex-col items-center justify-center min-w-[140px]">
+                                <div className="flex flex-col items-center justify-center w-full sm:w-auto sm:min-w-[140px]">
                                     <div className="w-36 h-16 flex items-center justify-center">
                                         <img
                                             src={logoUrl || '/Logo.png'}
@@ -1334,34 +1722,36 @@ const ReportViewer: React.FC = () => {
                             </div>
                         </div>
 
-                        {/* Report Info Table - Compact */}
+                        {/* Report Info Table */}
                         {instance && (
-                            <div className="px-4 py-2">
-                                <table className="w-full border-collapse text-xs">
-                                    <tbody>
-                                        <tr>
-                                            <td className="border border-gray-400 bg-gray-800 text-white px-2 py-1 font-bold w-1/6 text-center">التاريخ</td>
-                                            <td className="border border-gray-400 px-2 py-1 w-1/3 font-mono text-center">{formData?.report_date || '-'}</td>
-                                            <td className="border border-gray-400 bg-gray-800 text-white px-2 py-1 font-bold w-1/6 text-center">الوردية</td>
-                                            <td className="border border-gray-400 px-2 py-1 w-1/3 text-center">{formData?.shift || '-'}</td>
-                                        </tr>
-                                        {/* Hide batch number row for data-collection type */}
-                                        {template.type !== 'data-collection' && (
+                            <div className="px-2 sm:px-4 py-2">
+                                <div className="overflow-x-hidden print-table-container">
+                                    <table className="w-full border-collapse text-xs">
+                                        <tbody>
                                             <tr>
-                                                <td className="border border-gray-400 bg-gray-800 text-white px-2 py-1 font-bold text-center">رقم الدُفعة</td>
-                                                <td className="border border-gray-400 px-2 py-1 font-mono font-bold text-primary-700 text-center">{formData?.batch_number || '-'}</td>
-                                                <td className="border border-gray-400 bg-gray-800 text-white px-2 py-1 font-bold text-center">خط الإنتاج</td>
-                                                <td className="border border-gray-400 px-2 py-1 text-center">{formData?.production_line || '-'}</td>
+                                                <td className="border border-gray-400 bg-gray-800 text-white px-2 py-1 font-bold w-1/6 text-center">التاريخ</td>
+                                                <td className="border border-gray-400 px-2 py-1 w-1/3 font-mono text-center">{formData?.report_date || '-'}</td>
+                                                <td className="border border-gray-400 bg-gray-800 text-white px-2 py-1 font-bold w-1/6 text-center">الوردية</td>
+                                                <td className="border border-gray-400 px-2 py-1 w-1/3 text-center">{formData?.shift || '-'}</td>
                                             </tr>
-                                        )}
-                                        <tr>
-                                            <td className="border border-gray-400 bg-gray-800 text-white px-2 py-1 font-bold text-center">المشغل</td>
-                                            <td className="border border-gray-400 px-2 py-1 text-center">{formData?.operator || '-'}</td>
-                                            <td className="border border-gray-400 bg-gray-800 text-white px-2 py-1 font-bold text-center">وقت البدء</td>
-                                            <td className="border border-gray-400 px-2 py-1 font-mono text-center">{formData?.inspection_start_time || '-'}</td>
-                                        </tr>
-                                    </tbody>
-                                </table>
+                                            {/* Hide batch number row for data-collection type */}
+                                            {template.type !== 'data-collection' && (
+                                                <tr>
+                                                    <td className="border border-gray-400 bg-gray-800 text-white px-2 py-1 font-bold text-center">رقم الدُفعة</td>
+                                                    <td className="border border-gray-400 px-2 py-1 font-mono font-bold text-primary-700 text-center">{formData?.batch_number || '-'}</td>
+                                                    <td className="border border-gray-400 bg-gray-800 text-white px-2 py-1 font-bold text-center">خط الإنتاج</td>
+                                                    <td className="border border-gray-400 px-2 py-1 text-center">{formData?.production_line || '-'}</td>
+                                                </tr>
+                                            )}
+                                            <tr>
+                                                <td className="border border-gray-400 bg-gray-800 text-white px-2 py-1 font-bold text-center">المشغل</td>
+                                                <td className="border border-gray-400 px-2 py-1 text-center">{formData?.operator || '-'}</td>
+                                                <td className="border border-gray-400 bg-gray-800 text-white px-2 py-1 font-bold text-center">وقت البدء</td>
+                                                <td className="border border-gray-400 px-2 py-1 font-mono text-center">{formData?.inspection_start_time || '-'}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         )}
                     </div>
@@ -1375,10 +1765,12 @@ const ReportViewer: React.FC = () => {
                                 <div key={section.id || `section-${sectionIndex}`}>
                                     {/* Section Header */}
                                     <div className="flex items-center gap-2 bg-gray-800 text-white px-3 py-1.5 mb-2">
-                                        <span className="text-xs font-bold">{sectionIndex + 1}.</span>
-                                        <h3 className="text-xs font-bold">
-                                            {section.name}
-                                        </h3>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs font-bold">{sectionIndex + 1}.</span>
+                                            <h3 className="text-xs font-bold">
+                                                {section.name}
+                                            </h3>
+                                        </div>
                                     </div>
 
                                     <div className="space-y-2">
@@ -1423,9 +1815,9 @@ const ReportViewer: React.FC = () => {
 
                                         {/* Section-level Quality Criteria */}
                                         {section.quality_criteria && section.quality_criteria.length > 0 && (
-                                            <div className="mt-3 print:break-inside-avoid">
+                                            <div className="report-quality-block mt-3">
                                                 <div className="font-bold text-xs text-green-800 mb-2">معايير الجودة</div>
-                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 print:grid-cols-3">
+                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 print:grid-cols-1">
                                                     {section.quality_criteria.map((criteria, index) => {
                                                         const colorMap: Record<string, string> = {
                                                             'green': 'bg-green-100 border-green-400 text-green-800',
@@ -1478,11 +1870,11 @@ const ReportViewer: React.FC = () => {
 
                     {/* Quality Criteria Section */}
                     {template.quality_criteria && template.quality_criteria.length > 0 && (
-                        <div className="p-4 border-t-2 border-gray-800 print:break-inside-avoid">
+                        <div className="report-quality-block p-4 border-t-2 border-gray-800">
                             <div className="bg-gray-800 text-white px-3 py-2 mb-3">
                                 <h3 className="text-sm font-bold">معايير الجودة والقبول</h3>
                             </div>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 print:grid-cols-3">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 print:grid-cols-1">
                                 {template.quality_criteria.map((criteria, index) => (
                                     <div key={criteria.id || index} className="border border-gray-400">
                                         <div className={cn(
@@ -1531,11 +1923,11 @@ const ReportViewer: React.FC = () => {
 
                     {/* Signatures Section */}
                     {template.signatures && template.signatures.length > 0 && (
-                        <div className="p-4 border-t-2 border-gray-800 print:break-inside-avoid">
+                        <div className="report-signatures-block p-4 border-t-2 border-gray-800">
                             <div className="bg-gray-800 text-white px-3 py-2 mb-3">
                                 <h3 className="text-sm font-bold">التواقيع والاعتمادات</h3>
                             </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 print:grid-cols-3">
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 print:grid-cols-2">
                                 {template.signatures.map((sig, index) => {
                                     const signatureData = instance?.signatures?.[index];
 
@@ -1571,7 +1963,7 @@ const ReportViewer: React.FC = () => {
 
                     {/* Footer */}
                     <div className="border-t-2 border-gray-800 p-3 text-center text-[10px] text-gray-500 bg-gray-50">
-                        <div className="flex justify-between items-center">
+                        <div className="flex flex-col sm:flex-row justify-between items-center gap-1 sm:gap-0">
                             <span>تم إنشاء هذا التقرير بواسطة نظام الجودة الشامل</span>
                             <span>صفحة 1 من 1</span>
                             <span>تاريخ الطباعة: {formatDate(new Date())}</span>

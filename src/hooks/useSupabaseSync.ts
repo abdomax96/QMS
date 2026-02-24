@@ -15,6 +15,31 @@ import { isSupabaseConfigured } from '../config/supabase';
 import { progressiveLoader, type ProgressiveLoadProgress } from '../services/progressiveLoader';
 import { logger } from '../utils/logger';
 
+const ESSENTIAL_LOAD_TIMEOUT_MS = 8000;
+const SESSION_CHECK_TIMEOUT_MS = 5000;
+const INIT_FAILSAFE_TIMEOUT_MS = 10000;
+const FULL_SYNC_TIMEOUT_MS = 45000;
+
+const withTimeout = async <T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    timeoutMessage: string
+): Promise<T> => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const timeoutPromise = new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+    });
+
+    try {
+        return await Promise.race([promise, timeoutPromise]);
+    } finally {
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+        }
+    }
+};
+
 export const useSupabaseSync = () => {
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncError, setSyncError] = useState<string | null>(null);
@@ -25,6 +50,22 @@ export const useSupabaseSync = () => {
 
     // Progressive loading from Supabase
     useEffect(() => {
+        let isCancelled = false;
+        const initFailsafeTimer = setTimeout(() => {
+            if (isCancelled) {
+                return;
+            }
+
+            logger.warn('[Progressive Loading] Init failsafe triggered. Forcing app initialization.');
+            setIsInitialized(true);
+        }, INIT_FAILSAFE_TIMEOUT_MS);
+        const markInitialized = () => {
+            if (!isCancelled) {
+                setIsInitialized(true);
+            }
+            clearTimeout(initFailsafeTimer);
+        };
+
         const loadProgressively = async () => {
             if (!isInitialLoadRef.current) return;
             isInitialLoadRef.current = false;
@@ -32,112 +73,173 @@ export const useSupabaseSync = () => {
             // If Supabase is not configured, skip loading and mark as initialized
             if (!isSupabaseConfigured) {
                 logger.warn('Supabase not configured - skipping data sync. App will work with local data only.');
-                setIsInitialized(true);
-                setSyncError('Supabase not configured');
+                if (!isCancelled) {
+                    markInitialized();
+                    setSyncError('Supabase not configured');
+                }
                 return;
             }
 
-            // Check for auth session FIRST - don't try to load data if not logged in
-            const { data: { session } } = await import('../config/supabase').then(m => m.supabase.auth.getSession());
+            // Check for auth session FIRST - don't try to load data if not logged in.
+            // Keep this check bounded with timeout to avoid stuck initialization UI.
+            let session: any = null;
+            try {
+                const sessionResult = await withTimeout(
+                    import('../config/supabase').then(m => m.supabase.auth.getSession()),
+                    SESSION_CHECK_TIMEOUT_MS,
+                    'SESSION_CHECK_TIMEOUT'
+                );
+                session = sessionResult?.data?.session ?? null;
+            } catch (sessionError) {
+                logger.warn('[Progressive Loading] Session check timed out/failed. Continuing with initialized app.', sessionError);
+                if (!isCancelled) {
+                    markInitialized();
+                    setSyncError(sessionError instanceof Error ? sessionError.message : 'SESSION_CHECK_FAILED');
+                }
+                return;
+            }
+
             if (!session?.user) {
                 // User is not authenticated - this is normal on login page
                 logger.debug('[Progressive Loading] No authenticated user - skipping data load');
-                setIsInitialized(true);
+                if (!isCancelled) {
+                    markInitialized();
+                }
                 // Don't set syncError - this is expected behavior, not an error
                 return;
             }
 
-            setIsSyncing(true);
-            setSyncError(null);
+            // Unblock UI immediately. Remaining data is prefetched in background.
+            if (!isCancelled) {
+                markInitialized();
+                setIsSyncing(true);
+                setSyncError(null);
+            }
 
             try {
                 logger.info('🚀 [Progressive Loading] Starting optimized data load...');
 
                 // ==================== STAGE 1: ESSENTIAL DATA ====================
-                // تحميل البيانات الأساسية فقط - فوري!
                 logger.info('📦 [Stage 1/3] Loading essential data (user, permissions)...');
 
                 const essentialsStartTime = performance.now();
-                const essentials = await progressiveLoader.loadEssentials((progress) => {
-                    setLoadingProgress(progress);
-                    logger.debug(`Progress: ${progress.progress}% - ${progress.message}`);
-                });
+                await withTimeout(
+                    progressiveLoader.loadEssentials((progress) => {
+                        if (isCancelled) {
+                            return;
+                        }
+                        setLoadingProgress(progress);
+                        logger.debug(`Progress: ${progress.progress}% - ${progress.message}`);
+                    }),
+                    ESSENTIAL_LOAD_TIMEOUT_MS,
+                    'ESSENTIAL_LOAD_TIMEOUT'
+                );
 
                 const essentialsTime = performance.now() - essentialsStartTime;
                 logger.info(`✅ [Stage 1/3] Essential data loaded in ${essentialsTime.toFixed(0)}ms`);
 
-                // تخزين بيانات المستخدm والصلاحيات فوراً
+                // Keep store warm for quick first navigation.
                 useStore.setState(() => ({
-                    // سيتم تعيين المستخدم في App.tsx من useSupabaseAuth
-                    // لكن نضمن وجود البيانات
+                    // User profile itself is hydrated from auth store.
                 }));
-
-                // ✅ المستخدم يمكنه البدء الآن! - تحسين كبير في UX
-                setIsInitialized(true);
-                logger.info('🎉 [Progressive Loading] App ready! User can interact now.');
+                logger.info('🎉 [Progressive Loading] Essentials ready, continuing background prefetch.');
 
                 // ==================== STAGE 2: SECONDARY DATA ====================
-                // تحميل البيانات الثانوية في الخلفية (لا يؤثر على UX)
-                setTimeout(async () => {
-                    try {
-                        logger.info('📦 [Stage 2/3] Loading secondary data (folders, recent items)...');
+                logger.info('📦 [Stage 2/3] Loading secondary data (folders, recent items)...');
 
-                        const secondaryStartTime = performance.now();
-                        const secondary = await progressiveLoader.loadSecondary((progress) => {
-                            setLoadingProgress(progress);
-                        });
+                const secondaryStartTime = performance.now();
+                const secondary = await progressiveLoader.loadSecondary((progress) => {
+                    if (!isCancelled) {
+                        setLoadingProgress(progress);
+                    }
+                });
 
-                        const secondaryTime = performance.now() - secondaryStartTime;
-                        logger.info(`✅ [Stage 2/3] Secondary data loaded in ${secondaryTime.toFixed(0)}ms`);
+                const secondaryTime = performance.now() - secondaryStartTime;
+                logger.info(`✅ [Stage 2/3] Secondary data loaded in ${secondaryTime.toFixed(0)}ms`);
 
-                        // تحديث Store بالبيانات الثانوية
-                        useStore.setState(() => ({
-                            folders: secondary.folders,
-                            formTemplates: secondary.recentTemplates,
-                            formInstances: secondary.recentInstances
-                        }));
+                if (!isCancelled) {
+                    useStore.setState(() => ({
+                        folders: secondary.folders,
+                        formTemplates: secondary.recentTemplates,
+                        formInstances: secondary.recentInstances
+                    }));
 
-                        logger.info('📊 Loaded data summary:', {
-                            folders: Object.keys(secondary.folders).length,
-                            templates: Object.keys(secondary.recentTemplates).length,
-                            instances: Object.keys(secondary.recentInstances).length
-                        });
+                    logger.info('📊 Loaded data summary:', {
+                        folders: Object.keys(secondary.folders).length,
+                        templates: Object.keys(secondary.recentTemplates).length,
+                        instances: Object.keys(secondary.recentInstances).length
+                    });
 
-                        // ==================== STAGE 3: LAZY LOADING ====================
-                        // البيانات الإضافية ستحمل عند الحاجة فقط
-                        logger.info('✅ [Stage 3/3] Lazy loading configured - data will load on demand');
+                    // ==================== STAGE 3: LAZY LOADING ====================
+                    logger.info('✅ [Stage 3/3] Lazy loading configured - data will load on demand');
+                    setLoadingProgress({
+                        stage: 'complete',
+                        progress: 100,
+                        message: 'جاري مزامنة باقي البيانات...'
+                    });
+                }
+
+                // Final full sync in background: ensures all templates/reports are available.
+                try {
+                    logger.info('📦 [Stage 4/4] Running full background sync...');
+                    await withTimeout(
+                        useStore.getState().fetchAllData(),
+                        FULL_SYNC_TIMEOUT_MS,
+                        'FULL_SYNC_TIMEOUT'
+                    );
+
+                    if (!isCancelled) {
                         setLoadingProgress({
                             stage: 'complete',
                             progress: 100,
-                            message: 'جميع البيانات جاهزة'
+                            message: 'تم تحديث جميع البيانات'
                         });
-
-                    } catch (secondaryError) {
-                        logger.warn('⚠️ Secondary data loading failed, but app still works:', secondaryError);
-                        // التطبيق يعمل حتى لو فشلت البيانات الثانوية
                     }
-                }, 100); // تأخير بسيط لإعطاء الأولوية للUI
+                    logger.info('✅ [Stage 4/4] Full background sync completed');
+                } catch (fullSyncError) {
+                    logger.warn('⚠️ Full background sync failed (keeping partial data):', fullSyncError);
+                }
 
             } catch (error) {
-                logger.error('❌ Error loading essential data:', error);
+                logger.warn('⚠️ Progressive preload failed. App stays usable; data will load on demand.', error);
 
-                // Set empty data so app can function
-                useStore.setState(() => ({
-                    folders: {},
-                    formTemplates: {},
-                    formInstances: {}
-                }));
+                // Keep app functional and avoid hard blocking on transient network issues.
+                // Do NOT wipe current store data on preload failure.
+                if (!isCancelled) {
+                    setSyncError(error instanceof Error ? error.message : 'Failed to preload data');
+                }
 
-                setSyncError(error instanceof Error ? error.message : 'Failed to load data');
-
-                // Still mark as initialized so user can at least see the app
-                setIsInitialized(true);
+                // Best effort fallback: try full sync once even if staged preload failed.
+                try {
+                    await withTimeout(
+                        useStore.getState().fetchAllData(),
+                        FULL_SYNC_TIMEOUT_MS,
+                        'FULL_SYNC_TIMEOUT_AFTER_PRELOAD_ERROR'
+                    );
+                    if (!isCancelled) {
+                        setLoadingProgress({
+                            stage: 'complete',
+                            progress: 100,
+                            message: 'تم تحديث البيانات بعد إعادة المحاولة'
+                        });
+                    }
+                    logger.info('✅ Full sync fallback succeeded after preload error');
+                } catch (fallbackError) {
+                    logger.warn('⚠️ Full sync fallback failed after preload error:', fallbackError);
+                }
             } finally {
-                setIsSyncing(false);
+                if (!isCancelled) {
+                    setIsSyncing(false);
+                }
             }
         };
 
         loadProgressively();
+
+        return () => {
+            isCancelled = true;
+            clearTimeout(initFailsafeTimer);
+        };
     }, []);
 
     // AUDIT FIX: Realtime sync is now handled by useRealtimeSync hook (see App.tsx)

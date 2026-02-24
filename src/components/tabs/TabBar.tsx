@@ -35,6 +35,7 @@ const TabBar: React.FC<TabBarProps> = ({ className }) => {
 
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
+    const hasSkippedInitialSyncRef = useRef(false);
 
     // Get icon for tab type
     const getTabIcon = (type: string) => {
@@ -60,6 +61,15 @@ const TabBar: React.FC<TabBarProps> = ({ className }) => {
         }
     };
 
+    const resolveReturnPath = (returnPath?: string): string | null => {
+        if (!returnPath) return null;
+        if (returnPath === '/folders') return '/forms&reports';
+        if (returnPath.startsWith('/folders/')) {
+            return returnPath.replace('/folders/', '/forms&reports/');
+        }
+        return returnPath;
+    };
+
     const handleCloseTab = async (tabId: string, e: React.MouseEvent) => {
         e.stopPropagation();
         const tab = getTab(tabId);
@@ -71,7 +81,9 @@ const TabBar: React.FC<TabBarProps> = ({ className }) => {
         // Special handling for inactive tabs with returnPath
         // Problem: If user closes inactive report tab, old code only removed it from tabs array
         // without navigating away, leaving report content visible
-        if (activeTabId !== tabId && tab.returnPath) {
+        const closeReturnPath = resolveReturnPath(tab.returnPath);
+
+        if (activeTabId !== tabId && closeReturnPath) {
             console.log('📌 Closing inactive tab with returnPath - switching first');
 
             // Switch to the tab first (makes it active)
@@ -79,16 +91,16 @@ const TabBar: React.FC<TabBarProps> = ({ className }) => {
             // Close it without auto-switch (we'll navigate manually)
             closeTab(tabId, false, false);
             // Navigate to return path (this removes report from view)
-            navigate(tab.returnPath);
+            navigate(closeReturnPath);
             return;
         }
 
         // Active tab with returnPath (existing logic - already works correctly)
-        if (activeTabId === tabId && tab.returnPath) {
+        if (activeTabId === tabId && closeReturnPath) {
             // Disable auto-switch in store logic
             closeTab(tabId, false, false);
             // Manually navigate to return path
-            navigate(tab.returnPath);
+            navigate(closeReturnPath);
             return;
         }
 
@@ -119,48 +131,30 @@ const TabBar: React.FC<TabBarProps> = ({ className }) => {
         }
     }, [activeTabId]);
 
-    // Sync Router with Active Tab (Handle closes and auto-switches)
-    // NOTE: Skip navigation on initial page reload to preserve user's intended URL
+    // Sync Router with active tab after initial mount.
+    // On first hydrated render we preserve current URL to avoid refresh redirects.
     const hasHydrated = useTabsStore.persist?.hasHydrated?.() ?? true;
 
     React.useEffect(() => {
-        // Don't redirect during initial hydration - let the router handle the URL
         if (!hasHydrated) return;
+
+        if (!hasSkippedInitialSyncRef.current) {
+            hasSkippedInitialSyncRef.current = true;
+            console.log('[TabBar] Initial hydrated render - preserving URL:', location.pathname);
+            return;
+        }
 
         if (activeTabId) {
             const tab = getTab(activeTabId);
             if (tab?.path) {
-                // ✅ FIXED: Check if this is the initial load after page refresh
-                // On reload, preserve user's URL instead of forcing navigation to active tab
-                const isInitialLoad = sessionStorage.getItem('qms-tab-nav-init') !== 'done';
-
-                if (isInitialLoad) {
-                    // First render after hydration - don't navigate
-                    // Let user stay at their current URL (e.g., /reports/123)
-                    sessionStorage.setItem('qms-tab-nav-init', 'done');
-                    console.log('[TabBar] Initial load - preserving URL:', location.pathname);
-                    return;
-                }
-
-                // Subsequent renders (user tab switches) - navigate normally
-                // Only navigate if we're not already at the target path
+                // Only navigate if we're not already at the target path.
                 if (location.pathname !== tab.path) {
                     console.log('[TabBar] Navigating to active tab:', tab.path);
                     navigate(tab.path);
                 }
             }
         }
-        // REMOVED: Auto-redirect to home when no tabs
-        // This caused issues on page reload because tabs array is empty before hydration
-        // Let the router handle the initial URL instead
     }, [activeTabId, hasHydrated, getTab, navigate, location.pathname]);
-
-    // Cleanup: Reset navigation flag when component unmounts (e.g., logout)
-    React.useEffect(() => {
-        return () => {
-            sessionStorage.removeItem('qms-tab-nav-init');
-        };
-    }, []);
 
     // if (tabs.length === 0) return null;
 

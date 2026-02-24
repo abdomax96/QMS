@@ -3,7 +3,7 @@
  * خدمات Supabase لاستبدال Firebase
  */
 
-import { supabase, supabaseRestQuery } from '../config/supabase';
+import { supabase } from '../config/supabase';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import type { Folder, FormTemplate, FormInstance } from '../types';
 
@@ -44,11 +44,14 @@ export const foldersService = {
 
     // Get a single folder
     async getFolder(id: string): Promise<Folder | null> {
-        const { data, error } = await supabaseRestQuery('unified_folders', {
-            filters: { id }
-        });
-        if (error || !data || data.length === 0) return null;
-        return this.mapToFolder(data[0]);
+        const { data, error } = await supabase
+            .from('unified_folders')
+            .select('id, name, name_en, type, icon, color, parent_id, path, created_at, created_by, updated_at, stats, is_system, department_id, sort_order, description, tags')
+            .eq('id', id)
+            .maybeSingle();
+
+        if (error || !data) return null;
+        return this.mapToFolder(data);
     },
 
     // Get all folders - using REST API directly, with optional department filter
@@ -489,13 +492,31 @@ export const instancesService = {
     },
 
     // Get a single instance
-    async getInstance(id: string): Promise<FormInstance | null> {
+    async getInstance(
+        id: string,
+        options?: { throwOnError?: boolean }
+    ): Promise<FormInstance | null> {
         const { data, error } = await supabase
             .from('form_instances')
             .select('id, name, template_id, template_version, folder_id, unified_folder_id, status, created_at, created_by, submitted_at, submitted_by, form_data, calculations, signatures, workflow, company_id, archived, archived_at, archived_by')
             .eq('id', id)
-            .single();
-        if (error) return null;
+            .maybeSingle();
+        if (error) {
+            console.warn('[instancesService.getInstance] Failed to load instance', {
+                id,
+                code: (error as any)?.code,
+                message: error.message,
+                details: (error as any)?.details,
+                hint: (error as any)?.hint,
+            });
+            if (options?.throwOnError) {
+                throw error;
+            }
+            return null;
+        }
+        if (!data) {
+            return null;
+        }
         return this.mapToInstance(data);
     },
 
@@ -524,30 +545,34 @@ export const instancesService = {
         return instances;
     },
 
-    // Delete an instance (Soft Delete)
-    // Delete an instance (Soft Delete)
+    // Delete an instance
+    // Primary path: hard delete (item is already captured in recycle_bin snapshot).
+    // Fallback path: soft archive flags only (without status transition) for strict DB policies.
     async deleteInstance(id: string): Promise<void> {
-        // 1. Try to use the admin RPC for audit logs (best effort)
-        try {
-            await supabase.rpc('admin_delete_report', { p_report_id: id });
-        } catch (e) {
-            console.warn('RPC admin_delete_report failed, proceeding with standard soft delete');
+        const { error: deleteError } = await supabase
+            .from('form_instances')
+            .delete()
+            .eq('id', id);
+
+        if (!deleteError) {
+            return;
         }
 
-        // 2. ALWAYS Perform Standard Soft Delete via Update
-        // This ensures the record is actually marked archived even if RPC does nothing or fails
-        const { error: updateError } = await supabase
+        console.warn('Hard delete failed, falling back to soft archive flags:', deleteError);
+
+        // IMPORTANT: do not set status='archived' here because workflow trigger
+        // only allows approved->archived transitions.
+        const { error: fallbackUpdateError } = await supabase
             .from('form_instances')
             .update({
                 archived: true,
                 archived_at: new Date().toISOString(),
-                status: 'archived' // Explicitly update status and force archived
             })
             .eq('id', id);
 
-        if (updateError) {
-            console.error('Standard soft-delete failed:', updateError);
-            throw updateError;
+        if (fallbackUpdateError) {
+            console.error('Soft archive fallback failed:', fallbackUpdateError);
+            throw fallbackUpdateError;
         }
     },
 

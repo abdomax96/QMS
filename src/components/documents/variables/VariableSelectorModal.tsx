@@ -27,22 +27,22 @@ export const VariableSelectorModal: React.FC<VariableSelectorModalProps> = ({
     );
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[80vh]">
-                <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-900/50">
-                    <h3 className="font-bold text-lg text-slate-800 dark:text-white flex items-center gap-2">
+        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-2 sm:p-4" onClick={onClose}>
+            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[calc(100vh-1rem)] sm:max-h-[80vh]" onClick={(e) => e.stopPropagation()}>
+                <div className="p-3 sm:p-4 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-900/50">
+                    <h3 className="font-bold text-base sm:text-lg text-slate-800 dark:text-white flex items-center gap-2">
                         <Variable className="w-5 h-5 text-indigo-500" />
                         Insert Variable
                     </h3>
                     <button
                         onClick={onClose}
-                        className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full text-slate-500"
+                        className="min-h-[36px] min-w-[36px] p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full text-slate-500"
                     >
                         <X className="w-5 h-5" />
                     </button>
                 </div>
 
-                <div className="p-4 border-b border-slate-200 dark:border-slate-700">
+                <div className="p-3 sm:p-4 border-b border-slate-200 dark:border-slate-700">
                     <div className="relative">
                         <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
                         <input
@@ -50,7 +50,7 @@ export const VariableSelectorModal: React.FC<VariableSelectorModalProps> = ({
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
                             placeholder="Search variables..."
-                            className="w-full pl-9 pr-4 py-2 border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white"
+                            className="w-full pl-9 pr-4 py-2.5 text-sm border rounded-lg dark:bg-slate-700 dark:border-slate-600 dark:text-white"
                             autoFocus
                         />
                     </div>
@@ -69,18 +69,18 @@ export const VariableSelectorModal: React.FC<VariableSelectorModalProps> = ({
                                 <button
                                     key={variable.id}
                                     onClick={() => onSelect(variable)}
-                                    className="flex items-start justify-between p-3 rounded-lg border border-slate-100 dark:border-slate-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:border-indigo-200 dark:hover:border-indigo-800 transition-all text-left group"
+                                    className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 p-3 rounded-lg border border-slate-100 dark:border-slate-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:border-indigo-200 dark:hover:border-indigo-800 transition-all text-left group"
                                 >
-                                    <div>
-                                        <div className="font-mono text-indigo-600 dark:text-indigo-400 font-medium group-hover:underline">
+                                    <div className="min-w-0">
+                                        <div className="font-mono text-indigo-600 dark:text-indigo-400 font-medium group-hover:underline break-all">
                                             {`{{${variable.name}}}`}
                                         </div>
                                         {variable.description && (
-                                            <div className="text-xs text-slate-500 mt-1">{variable.description}</div>
+                                            <div className="text-xs text-slate-500 mt-1 break-words">{variable.description}</div>
                                         )}
                                     </div>
-                                    <div className="text-right">
-                                        <div className="font-medium text-slate-800 dark:text-slate-200">
+                                    <div className="text-left sm:text-right">
+                                        <div className="font-medium text-slate-800 dark:text-slate-200 break-words">
                                             {variable.value}
                                         </div>
                                         {variable.unit && (

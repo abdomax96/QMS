@@ -158,16 +158,16 @@ const TasksPage: React.FC = () => {
     };
 
     return (
-        <div className="p-6">
+        <div className="p-3 sm:p-4 lg:p-6">
             {/* Header */}
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
                 <div>
-                    <h1 className="text-3xl font-bold text-gray-900 dark:text-white">المهام</h1>
-                    <p className="text-gray-600 dark:text-gray-400 mt-1">إدارة وتتبع مهام الفريق</p>
+                    <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">المهام</h1>
+                    <p className="text-sm sm:text-base text-gray-600 dark:text-gray-400 mt-1">إدارة وتتبع مهام الفريق</p>
                 </div>
                 <button
                     onClick={() => setShowNewTaskModal(true)}
-                    className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-primary-600 to-purple-600 text-white rounded-xl hover:from-primary-700 hover:to-purple-700 transition-all shadow-lg hover:shadow-xl"
+                    className="inline-flex items-center justify-center gap-2 px-4 sm:px-6 py-3 bg-gradient-to-r from-primary-600 to-purple-600 text-white rounded-xl hover:from-primary-700 hover:to-purple-700 transition-all shadow-lg hover:shadow-xl w-full sm:w-auto"
                 >
                     <PlusIcon className="w-5 h-5" />
                     مهمة جديدة
@@ -175,7 +175,7 @@ const TasksPage: React.FC = () => {
             </div>
 
             {/* Stats */}
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4 mb-6">
                 <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700">
                     <div className="flex items-center gap-3">
                         <div className="p-2 bg-blue-100 dark:bg-blue-900 rounded-lg">
@@ -245,7 +245,7 @@ const TasksPage: React.FC = () => {
             </div>
 
             {/* Toolbar */}
-            <div className="flex flex-col sm:flex-row gap-4 mb-6">
+            <div className="flex flex-col lg:flex-row gap-3 mb-6">
                 {/* Search */}
                 <div className="relative flex-1">
                     <MagnifyingGlassIcon className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -267,7 +267,7 @@ const TasksPage: React.FC = () => {
                 </div>
 
                 {/* Filter & View Toggle */}
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                     <button
                         onClick={() => fetchTasks()}
                         disabled={isLoading}
@@ -286,7 +286,7 @@ const TasksPage: React.FC = () => {
                         }`}
                     >
                         <FunnelIcon className="w-5 h-5" />
-                        فلتر
+                        <span className="sm:inline">فلتر</span>
                     </button>
 
                     <div className="flex border border-gray-300 dark:border-gray-600 rounded-xl overflow-hidden">
@@ -380,121 +380,207 @@ const TasksPage: React.FC = () => {
                     </button>
                 </div>
             ) : (
-                <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-                    <table className="min-w-full text-sm">
-                        <thead className="bg-gray-50 dark:bg-gray-900/40">
-                            <tr className="text-right text-gray-600 dark:text-gray-300">
-                                <th className="px-4 py-3 font-medium">رقم</th>
-                                <th className="px-4 py-3 font-medium">العنوان</th>
-                                <th className="px-4 py-3 font-medium">المرحلة</th>
-                                <th className="px-4 py-3 font-medium">الحالة</th>
-                                <th className="px-4 py-3 font-medium">الأولوية</th>
-                                <th className="px-4 py-3 font-medium">المسؤول</th>
-                                <th className="px-4 py-3 font-medium">الموعد النهائي</th>
-                                <th className="px-4 py-3 font-medium">آخر تحديث</th>
-                                <th className="px-4 py-3 font-medium"></th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                            {filteredTasks.map(task => {
-                                const stageColor = taskStageColors[task.current_stage] || taskStageColors.assignment;
-                                const statusColor = taskStatusColors[task.status] || taskStatusColors.pending;
-                                const priorityColor = taskPriorityColors[task.priority] || taskPriorityColors.medium;
-                                const isOverdue = !!(
-                                    task.due_date &&
-                                    task.status !== 'completed' &&
-                                    task.status !== 'cancelled' &&
-                                    new Date(task.due_date) < new Date()
-                                );
+                <>
+                    <div className="md:hidden space-y-3">
+                        {filteredTasks.map(task => {
+                            const stageColor = taskStageColors[task.current_stage] || taskStageColors.assignment;
+                            const statusColor = taskStatusColors[task.status] || taskStatusColors.pending;
+                            const priorityColor = taskPriorityColors[task.priority] || taskPriorityColors.medium;
+                            const isOverdue = !!(
+                                task.due_date &&
+                                task.status !== 'completed' &&
+                                task.status !== 'cancelled' &&
+                                new Date(task.due_date) < new Date()
+                            );
 
-                                const assigneeLabel =
-                                    task.assigned_to_name ||
-                                    (task.assignment_type === 'role'
-                                        ? 'حسب الدور'
-                                        : task.assignment_type === 'department'
-                                            ? 'حسب القسم'
-                                            : 'غير محدد');
+                            const assigneeLabel =
+                                task.assigned_to_name ||
+                                (task.assignment_type === 'role'
+                                    ? 'حسب الدور'
+                                    : task.assignment_type === 'department'
+                                        ? 'حسب القسم'
+                                        : 'غير محدد');
 
-                                return (
-                                    <tr
-                                        key={task.id}
-                                        className="hover:bg-gray-50 dark:hover:bg-gray-700/40 cursor-pointer transition-colors"
-                                        onClick={() => navigate(`/tasks/${task.id}`)}
-                                    >
-                                        <td className="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
-                                            {task.task_number || '-'}
-                                        </td>
-                                        <td className="px-4 py-3 min-w-[260px]">
-                                            <div className="font-medium text-gray-900 dark:text-white">
-                                                {task.title}
-                                            </div>
-                                            {task.description && (
-                                                <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate max-w-[320px]">
-                                                    {task.description}
+                            return (
+                                <div
+                                    key={task.id}
+                                    className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 space-y-3"
+                                >
+                                    <div className="flex items-start justify-between gap-2">
+                                        <button
+                                            onClick={() => navigate(`/tasks/${task.id}`)}
+                                            className="text-right"
+                                        >
+                                            <p className="font-semibold text-gray-900 dark:text-white">{task.title}</p>
+                                            <p className="text-xs text-gray-500">#{task.task_number || '-'}</p>
+                                        </button>
+                                        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${priorityColor.bg} ${priorityColor.text}`}>
+                                            {taskPriorityLabels[task.priority] || task.priority}
+                                        </span>
+                                    </div>
+
+                                    {task.description && (
+                                        <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2">
+                                            {task.description}
+                                        </p>
+                                    )}
+
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${stageColor.bg} ${stageColor.text}`}>
+                                            {TASK_STAGE_LABELS[task.current_stage]?.ar || task.current_stage}
+                                        </span>
+                                        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${statusColor.bg} ${statusColor.text}`}>
+                                            {taskStatusLabels[task.status] || task.status}
+                                        </span>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 gap-1 text-xs">
+                                        <p className="text-gray-600 dark:text-gray-300">
+                                            <span className="text-gray-500">المسؤول:</span> {assigneeLabel}
+                                        </p>
+                                        <p className={isOverdue ? 'text-red-600 dark:text-red-400 font-medium' : 'text-gray-600 dark:text-gray-300'}>
+                                            <span className="text-gray-500">الموعد:</span> {task.due_date ? new Date(task.due_date).toLocaleDateString('ar-EG') : 'غير محدد'}
+                                        </p>
+                                        <p className="text-gray-500">
+                                            <span>آخر تحديث:</span> {new Date(task.updated_at || task.created_at).toLocaleDateString('ar-EG')}
+                                        </p>
+                                    </div>
+
+                                    <div className="flex items-center gap-2 pt-1">
+                                        <button
+                                            onClick={() => handleOpenEditTask(task)}
+                                            className="flex-1 px-3 py-2 text-xs rounded-lg border border-amber-300 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20"
+                                        >
+                                            تعديل
+                                        </button>
+                                        <button
+                                            onClick={() => navigate(`/tasks/${task.id}`)}
+                                            className="flex-1 px-3 py-2 text-xs rounded-lg border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700"
+                                        >
+                                            فتح
+                                        </button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    <div className="hidden md:block overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                        <table className="min-w-full text-sm">
+                            <thead className="bg-gray-50 dark:bg-gray-900/40">
+                                <tr className="text-right text-gray-600 dark:text-gray-300">
+                                    <th className="px-4 py-3 font-medium">رقم</th>
+                                    <th className="px-4 py-3 font-medium">العنوان</th>
+                                    <th className="px-4 py-3 font-medium">المرحلة</th>
+                                    <th className="px-4 py-3 font-medium">الحالة</th>
+                                    <th className="px-4 py-3 font-medium">الأولوية</th>
+                                    <th className="px-4 py-3 font-medium">المسؤول</th>
+                                    <th className="px-4 py-3 font-medium">الموعد النهائي</th>
+                                    <th className="px-4 py-3 font-medium">آخر تحديث</th>
+                                    <th className="px-4 py-3 font-medium"></th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                                {filteredTasks.map(task => {
+                                    const stageColor = taskStageColors[task.current_stage] || taskStageColors.assignment;
+                                    const statusColor = taskStatusColors[task.status] || taskStatusColors.pending;
+                                    const priorityColor = taskPriorityColors[task.priority] || taskPriorityColors.medium;
+                                    const isOverdue = !!(
+                                        task.due_date &&
+                                        task.status !== 'completed' &&
+                                        task.status !== 'cancelled' &&
+                                        new Date(task.due_date) < new Date()
+                                    );
+
+                                    const assigneeLabel =
+                                        task.assigned_to_name ||
+                                        (task.assignment_type === 'role'
+                                            ? 'حسب الدور'
+                                            : task.assignment_type === 'department'
+                                                ? 'حسب القسم'
+                                                : 'غير محدد');
+
+                                    return (
+                                        <tr
+                                            key={task.id}
+                                            className="hover:bg-gray-50 dark:hover:bg-gray-700/40 cursor-pointer transition-colors"
+                                            onClick={() => navigate(`/tasks/${task.id}`)}
+                                        >
+                                            <td className="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                                                {task.task_number || '-'}
+                                            </td>
+                                            <td className="px-4 py-3 min-w-[260px]">
+                                                <div className="font-medium text-gray-900 dark:text-white">
+                                                    {task.title}
                                                 </div>
-                                            )}
-                                        </td>
-                                        <td className="px-4 py-3 whitespace-nowrap">
-                                            <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${stageColor.bg} ${stageColor.text}`}>
-                                                {TASK_STAGE_LABELS[task.current_stage]?.ar || task.current_stage}
-                                            </span>
-                                        </td>
-                                        <td className="px-4 py-3 whitespace-nowrap">
-                                            <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${statusColor.bg} ${statusColor.text}`}>
-                                                {taskStatusLabels[task.status] || task.status}
-                                            </span>
-                                        </td>
-                                        <td className="px-4 py-3 whitespace-nowrap">
-                                            <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${priorityColor.bg} ${priorityColor.text}`}>
-                                                {taskPriorityLabels[task.priority] || task.priority}
-                                            </span>
-                                        </td>
-                                        <td className="px-4 py-3 text-gray-700 dark:text-gray-300 whitespace-nowrap">
-                                            {assigneeLabel}
-                                        </td>
-                                        <td className={`px-4 py-3 whitespace-nowrap ${isOverdue ? 'text-red-600 dark:text-red-400 font-medium' : 'text-gray-700 dark:text-gray-300'}`}>
-                                            {task.due_date ? new Date(task.due_date).toLocaleDateString('ar-EG') : 'غير محدد'}
-                                        </td>
-                                        <td className="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
-                                            {new Date(task.updated_at || task.created_at).toLocaleDateString('ar-EG')}
-                                        </td>
-                                        <td className="px-4 py-3 whitespace-nowrap">
-                                            <div className="flex items-center gap-2">
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        handleOpenEditTask(task);
-                                                    }}
-                                                    className="px-3 py-1.5 text-xs rounded-lg border border-amber-300 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20"
-                                                >
-                                                    تعديل
-                                                </button>
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        navigate(`/tasks/${task.id}`);
-                                                    }}
-                                                    className="px-3 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700"
-                                                >
-                                                    فتح
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                </div>
+                                                {task.description && (
+                                                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate max-w-[320px]">
+                                                        {task.description}
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${stageColor.bg} ${stageColor.text}`}>
+                                                    {TASK_STAGE_LABELS[task.current_stage]?.ar || task.current_stage}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${statusColor.bg} ${statusColor.text}`}>
+                                                    {taskStatusLabels[task.status] || task.status}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${priorityColor.bg} ${priorityColor.text}`}>
+                                                    {taskPriorityLabels[task.priority] || task.priority}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3 text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                                                {assigneeLabel}
+                                            </td>
+                                            <td className={`px-4 py-3 whitespace-nowrap ${isOverdue ? 'text-red-600 dark:text-red-400 font-medium' : 'text-gray-700 dark:text-gray-300'}`}>
+                                                {task.due_date ? new Date(task.due_date).toLocaleDateString('ar-EG') : 'غير محدد'}
+                                            </td>
+                                            <td className="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                                                {new Date(task.updated_at || task.created_at).toLocaleDateString('ar-EG')}
+                                            </td>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleOpenEditTask(task);
+                                                        }}
+                                                        className="px-3 py-1.5 text-xs rounded-lg border border-amber-300 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20"
+                                                    >
+                                                        تعديل
+                                                    </button>
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            navigate(`/tasks/${task.id}`);
+                                                        }}
+                                                        className="px-3 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700"
+                                                    >
+                                                        فتح
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </>
             )}
 
             {/* Edit Task Modal */}
             {showEditTaskModal && editingTask && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-                    <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-                        <div className="sticky top-0 bg-white dark:bg-gray-800 p-6 border-b border-gray-200 dark:border-gray-700 z-10">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl sm:rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto">
+                        <div className="sticky top-0 bg-white dark:bg-gray-800 p-4 sm:p-6 border-b border-gray-200 dark:border-gray-700 z-10">
                             <div className="flex items-center justify-between">
-                                <h2 className="text-xl font-bold text-gray-900 dark:text-white">تعديل المهمة</h2>
+                                <h2 className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white">تعديل المهمة</h2>
                                 <button
                                     onClick={() => {
                                         setShowEditTaskModal(false);
@@ -506,7 +592,7 @@ const TasksPage: React.FC = () => {
                                 </button>
                             </div>
                         </div>
-                        <div className="p-6">
+                        <div className="p-4 sm:p-6">
                             <TaskForm
                                 mode="edit"
                                 initialData={mapTaskToFormData(editingTask)}
@@ -525,10 +611,10 @@ const TasksPage: React.FC = () => {
             {/* New Task Modal */}
             {showNewTaskModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-                    <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-                        <div className="sticky top-0 bg-white dark:bg-gray-800 p-6 border-b border-gray-200 dark:border-gray-700 z-10">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl sm:rounded-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto">
+                        <div className="sticky top-0 bg-white dark:bg-gray-800 p-4 sm:p-6 border-b border-gray-200 dark:border-gray-700 z-10">
                             <div className="flex items-center justify-between">
-                                <h2 className="text-xl font-bold text-gray-900 dark:text-white">مهمة جديدة</h2>
+                                <h2 className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white">مهمة جديدة</h2>
                                 <button
                                     onClick={() => setShowNewTaskModal(false)}
                                     className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
@@ -537,7 +623,7 @@ const TasksPage: React.FC = () => {
                                 </button>
                             </div>
                         </div>
-                        <div className="p-6">
+                        <div className="p-4 sm:p-6">
                             <TaskForm
                                 mode="create"
                                 onSubmit={handleCreateTask}

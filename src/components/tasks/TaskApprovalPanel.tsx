@@ -93,7 +93,7 @@ const TaskApprovalPanel: React.FC<TaskApprovalPanelProps> = ({
     if (!canApprove && !canReject) return null;
 
     return (
-        <div className="bg-white dark:bg-gray-800 rounded-xl border-2 border-amber-300 dark:border-amber-700 p-5">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border-2 border-amber-300 dark:border-amber-700 p-4 sm:p-5">
             <div className="flex items-center gap-2 mb-4">
                 <ChatBubbleBottomCenterTextIcon className="h-5 w-5 text-amber-600 dark:text-amber-400" />
                 <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
@@ -102,7 +102,7 @@ const TaskApprovalPanel: React.FC<TaskApprovalPanelProps> = ({
             </div>
 
             {mode === 'idle' && (
-                <div className="flex gap-3">
+                <div className="flex flex-col sm:flex-row gap-3">
                     {canApprove && (
                         <button
                             onClick={() => setMode('approve')}
@@ -135,7 +135,7 @@ const TaskApprovalPanel: React.FC<TaskApprovalPanelProps> = ({
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm resize-none"
                         rows={2}
                     />
-                    <div className="flex gap-2 justify-end">
+                    <div className="flex flex-col-reverse sm:flex-row gap-2 justify-end">
                         <button
                             onClick={() => { setMode('idle'); setNotes(''); }}
                             className="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400"
@@ -163,7 +163,7 @@ const TaskApprovalPanel: React.FC<TaskApprovalPanelProps> = ({
                         rows={2}
                         required
                     />
-                    <div className="flex gap-2 justify-end">
+                    <div className="flex flex-col-reverse sm:flex-row gap-2 justify-end">
                         <button
                             onClick={() => { setMode('idle'); setReason(''); }}
                             className="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400"

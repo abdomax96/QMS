@@ -14,6 +14,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { cn } from '../../utils';
 import { supabase } from '../../config/supabase';
+import { useOpenInTab } from '../../hooks/useOpenInTab';
 
 interface FolderContentViewProps {
     folderId: string;
@@ -45,6 +46,7 @@ const FolderContentView: React.FC<FolderContentViewProps> = ({
     contentTypes,
 }) => {
     const navigate = useNavigate();
+    const { openDraftForEdit } = useOpenInTab();
     const [templates, setTemplates] = useState<Template[]>([]);
     const [instances, setInstances] = useState<Instance[]>([]);
     const [loading, setLoading] = useState(true);
@@ -100,6 +102,19 @@ const FolderContentView: React.FC<FolderContentViewProps> = ({
         navigate(`/forms&reports?folder=${folderId}&action=newReport`);
     };
 
+    const getReportStatusLabel = (status: string) => {
+        switch (status) {
+            case 'completed':
+                return 'مكتمل';
+            case 'draft':
+                return 'مسودة';
+            case 'pending':
+                return 'قيد المراجعة';
+            default:
+                return status;
+        }
+    };
+
     if (loading) {
         return (
             <div className="flex items-center justify-center py-12">
@@ -109,41 +124,43 @@ const FolderContentView: React.FC<FolderContentViewProps> = ({
     }
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-5 sm:space-y-6">
             {/* Tabs */}
-            <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-700">
-                {contentTypes.includes('forms') && (
-                    <button
-                        onClick={() => setActiveTab('forms')}
-                        className={cn(
-                            'px-4 py-2 border-b-2 font-medium text-sm transition-colors',
-                            activeTab === 'forms'
-                                ? 'border-primary-600 text-primary-600'
-                                : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                        )}
-                    >
-                        <span className="flex items-center gap-2">
-                            <DocumentTextIcon className="w-4 h-4" />
-                            النماذج ({templates.length})
-                        </span>
-                    </button>
-                )}
-                {contentTypes.includes('reports') && (
-                    <button
-                        onClick={() => setActiveTab('reports')}
-                        className={cn(
-                            'px-4 py-2 border-b-2 font-medium text-sm transition-colors',
-                            activeTab === 'reports'
-                                ? 'border-primary-600 text-primary-600'
-                                : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                        )}
-                    >
-                        <span className="flex items-center gap-2">
-                            <ClipboardDocumentCheckIcon className="w-4 h-4" />
-                            التقارير ({instances.length})
-                        </span>
-                    </button>
-                )}
+            <div className="border-b border-slate-200 dark:border-slate-700 overflow-x-auto pb-1 -mx-1 px-1">
+                <div className="flex items-center gap-2 min-w-max">
+                    {contentTypes.includes('forms') && (
+                        <button
+                            onClick={() => setActiveTab('forms')}
+                            className={cn(
+                                'min-h-[40px] px-3 sm:px-4 py-2 border-b-2 font-medium text-sm transition-colors whitespace-nowrap',
+                                activeTab === 'forms'
+                                    ? 'border-primary-600 text-primary-600'
+                                    : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                            )}
+                        >
+                            <span className="flex items-center gap-2">
+                                <DocumentTextIcon className="w-4 h-4" />
+                                النماذج ({templates.length})
+                            </span>
+                        </button>
+                    )}
+                    {contentTypes.includes('reports') && (
+                        <button
+                            onClick={() => setActiveTab('reports')}
+                            className={cn(
+                                'min-h-[40px] px-3 sm:px-4 py-2 border-b-2 font-medium text-sm transition-colors whitespace-nowrap',
+                                activeTab === 'reports'
+                                    ? 'border-primary-600 text-primary-600'
+                                    : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                            )}
+                        >
+                            <span className="flex items-center gap-2">
+                                <ClipboardDocumentCheckIcon className="w-4 h-4" />
+                                التقارير ({instances.length})
+                            </span>
+                        </button>
+                    )}
+                </div>
             </div>
 
             {/* Content */}
@@ -238,14 +255,14 @@ const FolderContentView: React.FC<FolderContentViewProps> = ({
                             {instances.map((instance) => (
                                 <div
                                     key={instance.id}
-                                    className="bg-white dark:bg-slate-800 rounded-corporate p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow cursor-pointer"
+                                    className="bg-white dark:bg-slate-800 rounded-corporate p-3 sm:p-4 border border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow cursor-pointer"
                                     onClick={() => navigate(`/reports/view/${instance.id}`)}
                                 >
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center gap-3">
+                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                        <div className="flex items-center gap-3 min-w-0">
                                             <ClipboardDocumentCheckIcon className="w-5 h-5 text-emerald-500" />
-                                            <div>
-                                                <h4 className="font-medium text-slate-900 dark:text-white">
+                                            <div className="min-w-0">
+                                                <h4 className="font-medium text-slate-900 dark:text-white truncate">
                                                     {instance.template_name}
                                                 </h4>
                                                 <p className="text-xs text-slate-500">
@@ -253,14 +270,14 @@ const FolderContentView: React.FC<FolderContentViewProps> = ({
                                                 </p>
                                             </div>
                                         </div>
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex items-center justify-between sm:justify-end gap-2">
                                             {instance.status === 'draft' && (
                                                 <button
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        navigate(`/reports/edit/${instance.id}`);
+                                                        openDraftForEdit(instance.id, instance.template_name || '');
                                                     }}
-                                                    className="px-3 py-1 text-xs font-medium bg-primary-100 text-primary-700 hover:bg-primary-200 dark:bg-primary-900/40 dark:text-primary-300 dark:hover:bg-primary-900/60 rounded transition-colors flex items-center gap-1"
+                                                    className="min-h-[34px] px-3 py-1 text-xs font-medium bg-primary-100 text-primary-700 hover:bg-primary-200 dark:bg-primary-900/40 dark:text-primary-300 dark:hover:bg-primary-900/60 rounded transition-colors flex items-center gap-1"
                                                 >
                                                     <PencilIcon className="w-3 h-3" />
                                                     استكمال
@@ -272,7 +289,7 @@ const FolderContentView: React.FC<FolderContentViewProps> = ({
                                                 instance.status === 'draft' && 'bg-yellow-100 text-yellow-700',
                                                 instance.status === 'pending' && 'bg-blue-100 text-blue-700'
                                             )}>
-                                                {instance.status}
+                                                {getReportStatusLabel(instance.status)}
                                             </span>
                                         </div>
                                     </div>

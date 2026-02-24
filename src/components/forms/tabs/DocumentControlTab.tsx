@@ -6,6 +6,72 @@ interface DocumentControlTabProps {
     onChange: (updates: Partial<FormTemplate>) => void;
 }
 
+const formatDateForDisplay = (value?: string): string => {
+    const trimmed = (value || '').trim();
+    if (!trimmed) {
+        return '';
+    }
+
+    const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoMatch) {
+        return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
+    }
+
+    return trimmed;
+};
+
+const toDateInputValue = (value?: string): string => {
+    const trimmed = (value || '').trim();
+    if (!trimmed) {
+        return '';
+    }
+
+    const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (isoMatch) {
+        return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+    }
+
+    const slashMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (slashMatch) {
+        return `${slashMatch[3]}-${slashMatch[2]}-${slashMatch[1]}`;
+    }
+
+    return '';
+};
+
+const fromDateInputValue = (value: string): string => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return '';
+    }
+
+    const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!isoMatch) {
+        return '';
+    }
+
+    return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
+};
+
+const blockManualDateEntry = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    event.preventDefault();
+};
+
+const preventDatePasteDrop = (
+    event: React.ClipboardEvent<HTMLInputElement> | React.DragEvent<HTMLInputElement>
+) => {
+    event.preventDefault();
+};
+
+const showNativeDatePicker = (
+    event: React.FocusEvent<HTMLInputElement> | React.MouseEvent<HTMLInputElement>
+) => {
+    const input = event.currentTarget as HTMLInputElement & { showPicker?: () => void };
+    if (typeof input.showPicker === 'function') {
+        input.showPicker();
+    }
+};
+
 const DocumentControlTab: React.FC<DocumentControlTabProps> = ({ template, onChange }) => {
     const handleDocumentChange = (field: string, value: string) => {
         onChange({
@@ -69,8 +135,13 @@ const DocumentControlTab: React.FC<DocumentControlTabProps> = ({ template, onCha
                         </label>
                         <input
                             type="date"
-                            value={template.document_control?.issue_date || ''}
-                            onChange={(e) => handleDocumentChange('issue_date', e.target.value)}
+                            value={toDateInputValue(template.document_control?.issue_date)}
+                            onChange={(e) => handleDocumentChange('issue_date', fromDateInputValue(e.target.value))}
+                            onKeyDown={blockManualDateEntry}
+                            onPaste={preventDatePasteDrop}
+                            onDrop={preventDatePasteDrop}
+                            onFocus={showNativeDatePicker}
+                            onClick={showNativeDatePicker}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
                         />
                     </div>
@@ -81,8 +152,13 @@ const DocumentControlTab: React.FC<DocumentControlTabProps> = ({ template, onCha
                         </label>
                         <input
                             type="date"
-                            value={template.document_control?.review_date || ''}
-                            onChange={(e) => handleDocumentChange('review_date', e.target.value)}
+                            value={toDateInputValue(template.document_control?.review_date)}
+                            onChange={(e) => handleDocumentChange('review_date', fromDateInputValue(e.target.value))}
+                            onKeyDown={blockManualDateEntry}
+                            onPaste={preventDatePasteDrop}
+                            onDrop={preventDatePasteDrop}
+                            onFocus={showNativeDatePicker}
+                            onClick={showNativeDatePicker}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
                         />
                     </div>
@@ -118,13 +194,13 @@ const DocumentControlTab: React.FC<DocumentControlTabProps> = ({ template, onCha
                         <div className="text-center p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800">
                             <div className="text-gray-500 dark:text-gray-400 text-xs">تاريخ الإصدار</div>
                             <div className="font-semibold text-gray-900 dark:text-white">
-                                {template.document_control?.issue_date || '-'}
+                                {formatDateForDisplay(template.document_control?.issue_date) || '-'}
                             </div>
                         </div>
                         <div className="text-center p-2 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800">
                             <div className="text-gray-500 dark:text-gray-400 text-xs">تاريخ المراجعة</div>
                             <div className="font-semibold text-gray-900 dark:text-white">
-                                {template.document_control?.review_date || '-'}
+                                {formatDateForDisplay(template.document_control?.review_date) || '-'}
                             </div>
                         </div>
                     </div>

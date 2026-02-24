@@ -1,15 +1,19 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import React, { useRef, useState, useEffect } from 'react';
+import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import {
     ArrowLeftIcon,
     EyeIcon,
+    ArrowDownTrayIcon,
+    ArrowUpTrayIcon,
     CheckCircleIcon,
     Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
 import useStore from '../store';
+import { useTabsStore } from '../store/tabsStore';
 import { generateId } from '../utils';
 import { usePrompt } from '../hooks/usePrompt';
 import type { FormTemplate } from '../types';
+import { exportTemplateBackupFile, parseTemplateBackupFile } from '../services/templateBackupService';
 import StaticTabs from '../components/forms/StaticTabs';
 import BasicInfoTab from '../components/forms/tabs/BasicInfoTab';
 import DocumentControlTab from '../components/forms/tabs/DocumentControlTab';
@@ -35,12 +39,21 @@ const defaultTabs: TabConfig[] = [
     { id: 'signatures', label: 'التواقيع', icon: 'signature' },
 ];
 
+const formatDateDDMMYYYY = (date: Date): string => {
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = String(date.getFullYear());
+    return `${day}/${month}/${year}`;
+};
+
 const FormDesigner: React.FC = () => {
     const { templateId } = useParams<{ templateId?: string }>();
     const navigate = useNavigate();
+    const location = useLocation();
     const [searchParams, setSearchParams] = useSearchParams();
     const folderIdFromUrl = searchParams.get('folderId') || searchParams.get('folder');
     const tabFromUrl = searchParams.get('tab');
+    const importFileInputRef = useRef<HTMLInputElement | null>(null);
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     const [isDirty, setIsDirty] = useState(false);
 
@@ -50,6 +63,7 @@ const FormDesigner: React.FC = () => {
         updateFormTemplate,
         currentFolderId
     } = useStore();
+    const { getActiveTab } = useTabsStore();
 
     // Use folder ID from URL if available, otherwise use current folder from store
     // Convert empty string to null for UUID field
@@ -61,7 +75,29 @@ const FormDesigner: React.FC = () => {
         return tabFromUrl && validTabs.includes(tabFromUrl) ? tabFromUrl : 'basic';
     });
     const [isSaving, setIsSaving] = useState(false);
+    const [isImporting, setIsImporting] = useState(false);
     const [lastSaved, setLastSaved] = useState<Date | null>(null);
+
+    const resolveReturnPath = () => {
+        const activeTab = getActiveTab();
+        const tabReturnPath = activeTab?.path === location.pathname ? activeTab.returnPath : undefined;
+
+        if (tabReturnPath) {
+            if (tabReturnPath === '/folders') {
+                return '/forms&reports';
+            }
+            if (tabReturnPath.startsWith('/folders/')) {
+                return tabReturnPath.replace('/folders/', '/forms&reports/');
+            }
+            return tabReturnPath;
+        }
+
+        if (targetFolderId) {
+            return `/forms&reports/${targetFolderId}`;
+        }
+
+        return '/forms&reports';
+    };
 
     // Update activeTab and URL together
     const setActiveTab = (tabId: string) => {
@@ -110,7 +146,7 @@ const FormDesigner: React.FC = () => {
                 doc_code: '',
                 issue_no: '01',
                 review_no: '00',
-                issue_date: new Date().toISOString().split('T')[0],
+                issue_date: formatDateDDMMYYYY(new Date()),
                 review_date: '',
             },
             batch_configuration: {
@@ -279,13 +315,110 @@ const FormDesigner: React.FC = () => {
         }
     };
 
+    const buildImportedTemplateName = (baseName: string, folderId: string | null): string => {
+        const normalizedBaseName = baseName.trim() || 'نموذج مستورد';
+        const existingNames = new Set(
+            Object.values(formTemplates)
+                .filter(t => t.folder_id === folderId && !t.archived)
+                .map(t => t.name.trim())
+        );
+
+        if (!existingNames.has(normalizedBaseName)) {
+            return normalizedBaseName;
+        }
+
+        let candidate = `${normalizedBaseName} (مستورد)`;
+        let counter = 2;
+        while (existingNames.has(candidate)) {
+            candidate = `${normalizedBaseName} (مستورد ${counter})`;
+            counter += 1;
+        }
+
+        return candidate;
+    };
+
+    const handleExportTemplate = () => {
+        try {
+            exportTemplateBackupFile(template);
+        } catch (error) {
+            console.error('❌ Error exporting template backup:', error);
+            alert('فشل تصدير نسخة النموذج. يرجى المحاولة مرة أخرى.');
+        }
+    };
+
+    const handleTriggerImportTemplate = () => {
+        importFileInputRef.current?.click();
+    };
+
+    const handleImportTemplateFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+        if (!file) return;
+
+        if (hasUnsavedChanges) {
+            const shouldContinue = window.confirm(
+                'لديك تغييرات غير محفوظة في النموذج الحالي. هل تريد متابعة الاستيراد وإنشاء نموذج جديد من الملف؟'
+            );
+            if (!shouldContinue) return;
+        }
+
+        setIsImporting(true);
+        try {
+            const parsedTemplate = await parseTemplateBackupFile(file);
+            const importFolderId =
+                targetFolderId ||
+                currentFolderId ||
+                parsedTemplate.unified_folder_id ||
+                parsedTemplate.folder_id ||
+                template.folder_id ||
+                null;
+
+            const importedTemplate: FormTemplate = {
+                ...parsedTemplate,
+                id: generateId(),
+                name: buildImportedTemplateName(parsedTemplate.name, importFolderId),
+                created_at: new Date().toISOString(),
+                folder_id: importFolderId,
+                unified_folder_id: importFolderId,
+                archived: false,
+                archived_at: undefined,
+                archived_by: undefined,
+                version: parsedTemplate.version || 1,
+                custom_properties: parsedTemplate.custom_properties || {},
+                sections: parsedTemplate.sections || {},
+            };
+
+            await addFormTemplate(importedTemplate);
+            setTemplate(importedTemplate);
+            setLastSaved(new Date());
+            setHasUnsavedChanges(false);
+            setIsDirty(false);
+
+            const nextParams = new URLSearchParams();
+            if (importFolderId) {
+                nextParams.set('folderId', importFolderId);
+            }
+            nextParams.set('tab', 'basic');
+            const query = nextParams.toString();
+            navigate(`/forms/edit/${importedTemplate.id}${query ? `?${query}` : ''}`);
+        } catch (error) {
+            console.error('❌ Error importing template backup:', error);
+            alert(
+                'تعذر استيراد الملف.\n\nتأكد أن الملف تم تصديره من QMS بصيغة النسخ الاحتياطي للنماذج، ثم حاول مرة أخرى.'
+            );
+        } finally {
+            setIsImporting(false);
+        }
+    };
+
     const handleBack = () => {
+        const returnPath = resolveReturnPath();
         if (hasUnsavedChanges) {
             if (window.confirm('لديك تغييرات غير محفوظة. هل تريد المغادرة بدون حفظ؟')) {
-                navigate('/forms&reports');
+                navigate(returnPath);
             }
         } else {
-            navigate('/forms&reports');
+            navigate(returnPath);
         }
     };
 
@@ -294,7 +427,7 @@ const FormDesigner: React.FC = () => {
         try {
             await handleSave();
             // Only navigate if save was successful (no error thrown)
-            navigate('/forms&reports');
+            navigate(resolveReturnPath());
         } catch (error) {
             // Error already handled in handleSave
             // Stay on page for user to retry
@@ -385,25 +518,25 @@ const FormDesigner: React.FC = () => {
     return (
         <div className="h-full flex flex-col bg-gray-50 dark:bg-gray-900">
             {/* Header */}
-            <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4">
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4 flex-1 min-w-0">
+            <div className="sticky top-0 z-20 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-3 sm:px-6 py-3 sm:py-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="flex items-center gap-2 sm:gap-4 flex-1 min-w-0">
                         <button
                             onClick={handleBack}
-                            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg flex-shrink-0"
+                            className="p-1.5 sm:p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg flex-shrink-0"
                         >
-                            <ArrowLeftIcon className="w-5 h-5" />
+                            <ArrowLeftIcon className="w-4 h-4 sm:w-5 sm:h-5" />
                         </button>
                         <div className="flex-1 min-w-0 overflow-hidden">
                             <input
                                 type="text"
                                 value={template.name}
                                 onChange={(e) => handleTemplateChange({ name: e.target.value })}
-                                className="text-xl font-bold bg-transparent border-none focus:ring-0 p-0 text-gray-900 dark:text-white w-full truncate"
+                                className="text-lg sm:text-xl font-bold bg-transparent border-none focus:ring-0 p-0 text-gray-900 dark:text-white w-full truncate"
                                 placeholder="اسم النموذج"
                                 title={template.name}
                             />
-                            <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs sm:text-sm text-gray-500 dark:text-gray-400">
                                 <span>الإصدار {template.version}</span>
                                 {lastSaved && (
                                     <>
@@ -421,40 +554,69 @@ const FormDesigner: React.FC = () => {
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-3">
-                        <button
-                            onClick={() => navigate(`/forms/preview/${template.id}`)}
-                            className="flex items-center gap-2 px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
-                        >
-                            <EyeIcon className="w-5 h-5" />
-                            معاينة
-                        </button>
-                        <button
-                            onClick={() => handleSave()}
-                            disabled={isSaving}
-                            className="flex items-center gap-2 px-4 py-2 border border-primary-600 text-primary-600 rounded-lg hover:bg-primary-50 dark:hover:bg-primary-900/20 disabled:opacity-50"
-                        >
-                            {isSaving ? (
-                                <Cog6ToothIcon className="w-5 h-5 animate-spin" />
-                            ) : (
-                                <CheckCircleIcon className="w-5 h-5" />
-                            )}
-                            حفظ
-                        </button>
-                        <button
-                            onClick={handleSaveAndExit}
-                            disabled={isSaving}
-                            className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
-                        >
-                            {isSaving ? (
-                                <Cog6ToothIcon className="w-5 h-5 animate-spin" />
-                            ) : (
-                                <CheckCircleIcon className="w-5 h-5" />
-                            )}
-                            حفظ والعودة
-                        </button>
+                    <div className="w-full lg:w-auto overflow-x-auto pb-1 -mx-1 px-1 lg:overflow-visible lg:pb-0 lg:mx-0 lg:px-0">
+                        <div className="flex items-center gap-2 sm:gap-3 min-w-max lg:min-w-0 snap-x snap-mandatory">
+                            <button
+                                onClick={() => navigate(`/forms/preview/${template.id}`)}
+                                className="snap-start flex-none min-h-[40px] whitespace-nowrap justify-center flex items-center gap-2 px-3 sm:px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+                            >
+                                <EyeIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                                معاينة
+                            </button>
+                            <button
+                                onClick={handleExportTemplate}
+                                className="snap-start flex-none min-h-[40px] whitespace-nowrap justify-center flex items-center gap-2 px-3 sm:px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+                            >
+                                <ArrowDownTrayIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                                تصدير
+                            </button>
+                            <button
+                                onClick={handleTriggerImportTemplate}
+                                disabled={isImporting || isSaving}
+                                className="snap-start flex-none min-h-[40px] whitespace-nowrap justify-center flex items-center gap-2 px-3 sm:px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg disabled:opacity-50"
+                            >
+                                {isImporting ? (
+                                    <Cog6ToothIcon className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+                                ) : (
+                                    <ArrowUpTrayIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                                )}
+                                استيراد
+                            </button>
+                            <button
+                                onClick={() => handleSave()}
+                                disabled={isSaving}
+                                className="snap-start flex-none min-h-[40px] whitespace-nowrap justify-center flex items-center gap-2 px-3 sm:px-4 py-2 text-sm border border-primary-600 text-primary-600 rounded-lg hover:bg-primary-50 dark:hover:bg-primary-900/20 disabled:opacity-50"
+                            >
+                                {isSaving ? (
+                                    <Cog6ToothIcon className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+                                ) : (
+                                    <CheckCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                                )}
+                                حفظ
+                            </button>
+                            <button
+                                onClick={handleSaveAndExit}
+                                disabled={isSaving}
+                                className="snap-start flex-none min-h-[40px] whitespace-nowrap justify-center flex items-center gap-2 px-3 sm:px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+                            >
+                                {isSaving ? (
+                                    <Cog6ToothIcon className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+                                ) : (
+                                    <CheckCircleIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+                                )}
+                                <span className="sm:hidden">حفظ وخروج</span>
+                                <span className="hidden sm:inline">حفظ والعودة</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
+                <input
+                    ref={importFileInputRef}
+                    type="file"
+                    accept=".json,.qms-template.json,application/json"
+                    className="hidden"
+                    onChange={handleImportTemplateFile}
+                />
             </div>
 
             {/* Tabs - Fixed position, no drag-and-drop */}
@@ -465,7 +627,7 @@ const FormDesigner: React.FC = () => {
             />
 
             {/* Content */}
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto p-3 sm:p-6">
                 <div className="max-w-4xl mx-auto">
                     {renderTabContent()}
                 </div>

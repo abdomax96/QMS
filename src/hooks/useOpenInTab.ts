@@ -21,6 +21,10 @@ export const useOpenInTab = () => {
     const { openTab, switchTab, getTabByFormId, activeTabId } = useTabsStore();
     const { addToast } = useToastStore();
 
+    const resolveReturnPath = useCallback(() => {
+        return location.pathname + location.search;
+    }, [location.pathname, location.search]);
+
     /**
      * Open a template for creating a new report
      */
@@ -30,7 +34,7 @@ export const useOpenInTab = () => {
         options: OpenInTabOptions = { navigateToTab: true }
     ) => {
         const path = `/reports/new/${templateId}`;
-        const returnPath = options.returnPath || location.pathname + location.search;
+        const returnPath = options.returnPath || resolveReturnPath();
         const tabId = openTab('instance', templateId, templateName, path, returnPath);
 
         if (!tabId) {
@@ -47,7 +51,7 @@ export const useOpenInTab = () => {
         }
 
         return tabId;
-    }, [openTab, navigate]);
+    }, [openTab, navigate, resolveReturnPath]);
 
     /**
      * Open an existing instance/report for viewing or editing
@@ -58,7 +62,7 @@ export const useOpenInTab = () => {
         options: OpenInTabOptions = { navigateToTab: true }
     ) => {
         const path = `/reports/view/${instanceId}`;
-        const returnPath = options.returnPath || location.pathname + location.search;
+        const returnPath = options.returnPath || resolveReturnPath();
         const tabId = openTab('instance', instanceId, instanceName, path, returnPath);
 
         if (options.navigateToTab && tabId) {
@@ -66,7 +70,27 @@ export const useOpenInTab = () => {
         }
 
         return tabId;
-    }, [openTab, navigate]);
+    }, [openTab, navigate, resolveReturnPath]);
+
+    /**
+     * Open an existing draft instance in edit mode
+     */
+    const openDraftForEdit = useCallback((
+        instanceId: string,
+        instanceName: string,
+        options: OpenInTabOptions = { navigateToTab: true }
+    ) => {
+        const path = `/reports/edit/${instanceId}`;
+        const returnPath = options.returnPath || resolveReturnPath();
+        const title = instanceName ? `مسودة - ${instanceName}` : 'تعديل مسودة';
+        const tabId = openTab('instance', instanceId, title, path, returnPath);
+
+        if (options.navigateToTab && tabId) {
+            navigate(path);
+        }
+
+        return tabId;
+    }, [openTab, navigate, resolveReturnPath]);
 
     /**
      * Open a template for editing its design
@@ -77,7 +101,7 @@ export const useOpenInTab = () => {
         options: OpenInTabOptions = { navigateToTab: true }
     ) => {
         const path = `/forms/edit/${templateId}`;
-        const returnPath = options.returnPath || location.pathname + location.search;
+        const returnPath = options.returnPath || resolveReturnPath();
         const tabId = openTab('template', templateId, `تحرير: ${templateName}`, path, returnPath);
 
         if (options.navigateToTab && tabId) {
@@ -85,7 +109,7 @@ export const useOpenInTab = () => {
         }
 
         return tabId;
-    }, [openTab, navigate]);
+    }, [openTab, navigate, resolveReturnPath]);
 
     /**
      * Check if a form is already open in a tab
@@ -110,6 +134,7 @@ export const useOpenInTab = () => {
     return {
         openTemplateForEntry,
         openInstanceForEdit,
+        openDraftForEdit,
         openTemplateForEdit,
         isFormOpen,
         focusForm,

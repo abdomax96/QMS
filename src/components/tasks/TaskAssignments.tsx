@@ -145,9 +145,9 @@ const TaskAssignments: React.FC<TaskAssignmentsProps> = ({
     };
 
     return (
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
-            <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 sm:p-5">
+            <div className="flex flex-wrap items-start justify-between gap-2 mb-4">
+                <div className="flex flex-wrap items-center gap-2">
                     <UserGroupIcon className="h-5 w-5 text-gray-500" />
                     <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
                         المُسند إليهم
@@ -191,7 +191,7 @@ const TaskAssignments: React.FC<TaskAssignmentsProps> = ({
                     <p className="text-sm text-yellow-700 dark:text-yellow-300 mb-2">
                         هذه المهمة متاحة لك. هل تريد قبولها؟
                     </p>
-                    <div className="flex gap-2">
+                    <div className="flex flex-col sm:flex-row gap-2">
                         <button
                             onClick={onAccept}
                             className="flex items-center gap-1 px-3 py-1.5 text-xs bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
@@ -216,15 +216,15 @@ const TaskAssignments: React.FC<TaskAssignmentsProps> = ({
                     {assignments.map(assignment => (
                         <div
                             key={assignment.id}
-                            className="flex items-center justify-between p-2 rounded-lg bg-gray-50 dark:bg-gray-700/50"
+                            className="flex items-start justify-between gap-2 p-2 rounded-lg bg-gray-50 dark:bg-gray-700/50"
                         >
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-start gap-2 min-w-0">
                                 <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center text-xs font-medium text-blue-700 dark:text-blue-300">
                                     {(assignment.user_name || '?').charAt(0)}
                                 </div>
-                                <div>
-                                    <div className="flex items-center gap-1.5">
-                                        <span className="text-sm font-medium text-gray-900 dark:text-white">
+                                <div className="min-w-0">
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                        <span className="text-sm font-medium text-gray-900 dark:text-white break-words">
                                             {assignment.user_name || 'مستخدم'}
                                         </span>
                                         {assignment.is_primary && (
@@ -258,7 +258,7 @@ const TaskAssignments: React.FC<TaskAssignmentsProps> = ({
             {showAssignForm && (
                 <div className="mt-4 border-t border-gray-200 dark:border-gray-700 pt-4 space-y-3">
                     {/* Type Selector */}
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                         {(['individual', 'role', 'department'] as TaskAssignmentType[]).map(type => (
                             <button
                                 key={type}
@@ -286,7 +286,7 @@ const TaskAssignments: React.FC<TaskAssignmentsProps> = ({
                                 {users.map(user => (
                                     <label
                                         key={user.id}
-                                        className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+                                        className="flex flex-wrap items-center gap-2 px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
                                     >
                                         <input
                                             type="checkbox"
@@ -353,7 +353,7 @@ const TaskAssignments: React.FC<TaskAssignmentsProps> = ({
                     )}
 
                     {/* Submit */}
-                    <div className="flex justify-end gap-2">
+                    <div className="flex flex-col-reverse sm:flex-row justify-end gap-2">
                         <button
                             onClick={() => setShowAssignForm(false)}
                             className="px-3 py-1.5 text-xs text-gray-600 dark:text-gray-400"

@@ -86,8 +86,8 @@ interface StoreState extends AppState {
   // Utils
   getFolderPath: (id: string) => string[];
   getFolderChildren: (parentId: string | null) => Folder[];
-  getTemplatesInFolder: (folderId: string) => FormTemplate[];
-  getInstancesInFolder: (folderId: string) => FormInstance[];
+  getTemplatesInFolder: (folderId: string | null) => FormTemplate[];
+  getInstancesInFolder: (folderId: string | null) => FormInstance[];
 
   // Realtime Sync Actions (Surgical Updates)
   syncFolder: (folder: Folder) => void;
@@ -967,15 +967,17 @@ const useStore = create<StoreState>()(
 
       getTemplatesInFolder: (folderId) => {
         const state = get();
+        const normalizedFolderId = folderId && folderId.trim() !== '' ? folderId : null;
         return Object.values(state.formTemplates)
-          .filter(t => t.folder_id === folderId && !t.archived)
+          .filter(t => (t.folder_id ?? null) === normalizedFolderId && !t.archived)
           .sort((a, b) => a.name.localeCompare(b.name));
       },
 
       getInstancesInFolder: (folderId) => {
         const state = get();
+        const normalizedFolderId = folderId && folderId.trim() !== '' ? folderId : null;
         return Object.values(state.formInstances)
-          .filter(i => i.folder_id === folderId && !i.archived)
+          .filter(i => (i.folder_id ?? null) === normalizedFolderId && !i.archived)
           .sort((a, b) => a.created_at.localeCompare(b.created_at));
       },
 
