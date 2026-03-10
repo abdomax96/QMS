@@ -11,6 +11,7 @@ export type LabSampleType = 'raw_material' | 'in_process' | 'finished_product' |
 
 export type MaterialType = 'packaging' | 'ingredient' | 'chemical' | 'additive' | 'other' | 'raw_material';
 export type MaterialReceivingStatus = 'pending' | 'inspecting' | 'in_testing' | 'accepted' | 'approved' | 'rejected' | 'on_hold';
+export type MaterialDateFormat = 'dmy' | 'my';
 
 // ============ Lab Test Interfaces ============
 
@@ -129,6 +130,8 @@ export interface MaterialReceiving {
     // Dates
     productionDate?: string;
     expiryDate?: string;
+    productionDateFormat?: MaterialDateFormat;
+    expiryDateFormat?: MaterialDateFormat;
     receivedAt: string;
     receivedBy: string;
     receivedByName: string;
@@ -156,6 +159,11 @@ export interface MaterialReceiving {
     acceptedQuantity?: number;
     rejectedQuantity?: number;
     rejectionReason?: string;
+    consumedQuantity?: number;
+    remainingQuantity?: number;
+    isManuallyDepleted?: boolean;
+    manualDepletionReason?: string;
+    manualDepletedAt?: string;
 
     // Snapshots for audit trail - لقطات للتتبع
     testRequirementsSnapshot?: TestRequirementSnapshot[];
@@ -166,8 +174,6 @@ export interface MaterialReceiving {
 
     // Vehicle Inspection - بيانات فحص السيارة
     vehicleInspection?: {
-        vehiclePlate: string;
-        driverName: string;
         vehicleType: string;
         cleanliness: 'pass' | 'fail' | '';
         noOdors: 'pass' | 'fail' | '';
@@ -227,6 +233,9 @@ export interface CreateMaterialReceivingInput {
     packagingType?: string;
     productionDate?: string;
     expiryDate?: string;
+    receivedAt?: string;
+    productionDateFormat?: MaterialDateFormat;
+    expiryDateFormat?: MaterialDateFormat;
     deliveryNoteNumber?: string;
     invoiceNumber?: string;
     certificateOfAnalysis?: string;
@@ -238,8 +247,6 @@ export interface CreateMaterialReceivingInput {
 
     // فحص السيارة
     vehicleInspection?: {
-        vehiclePlate: string;
-        driverName: string;
         vehicleType: string;
         cleanliness: 'pass' | 'fail' | '';
         noOdors: 'pass' | 'fail' | '';
@@ -252,6 +259,9 @@ export interface CreateMaterialReceivingInput {
 
     // النتيجة النهائية
     overallResult?: 'pending' | 'accepted' | 'rejected';
+    acceptedQuantity?: number;
+    rejectedQuantity?: number;
+    rejectionReason?: string;
 
     // نتائج الفحص الأولية عند الاستلام
     initialTestResults?: {

@@ -40,8 +40,8 @@ const LabV2DashboardPage: React.FC = () => {
       iconColor: 'text-indigo-600',
     },
     {
-      title: 'سجل الفحوصات',
-      description: 'تشغيل الفحوصات على الباتشات واعتماد النتائج',
+      title: 'تسجيل الفحوصات',
+      description: 'اختيار الفحص وربطه بالتشغيلة وتسجيل النتائج',
       icon: ClipboardDocumentCheckIcon,
       path: '/lab/tests/runs',
       gradient: 'from-amber-500 to-amber-600',
@@ -70,13 +70,7 @@ const LabV2DashboardPage: React.FC = () => {
 
   return (
     <div className="p-6 min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800" dir="rtl">
-      <div className="mb-8 text-center">
-        <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-primary-500 to-indigo-600 rounded-2xl shadow-lg mb-4">
-          <BeakerIcon className="w-12 h-12 text-white" />
-        </div>
-        <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2">نظام إدارة المختبر (V2)</h1>
-        <p className="text-lg text-slate-600 dark:text-slate-400">إدارة الأجهزة والمواد وتعريف الفحوصات وتشغيلها مع Workflow</p>
-      </div>
+     
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-7xl mx-auto">
         {sections.map((section) => (

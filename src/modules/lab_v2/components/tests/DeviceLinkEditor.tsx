@@ -35,7 +35,7 @@ export const DeviceLinkEditor: React.FC<{
   }
 
   return (
-    <div className="space-y-3" dir="rtl">
+    <div className="space-y-2" dir="rtl">
       <div className="text-sm font-semibold text-slate-900 dark:text-white">الأجهزة المرتبطة</div>
 
       <div className="space-y-2">
@@ -44,7 +44,7 @@ export const DeviceLinkEditor: React.FC<{
           const isDefault = value.find((v) => v.device_id === d.id)?.is_default;
 
           return (
-            <div key={d.id} className="flex items-center justify-between p-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+            <div key={d.id} className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
               <label className="flex items-center gap-3">
                 <input type="checkbox" className="h-4 w-4" checked={isChecked} onChange={() => toggle(d.id)} />
                 <div className="text-sm text-slate-800 dark:text-slate-200">
@@ -75,4 +75,3 @@ export const DeviceLinkEditor: React.FC<{
 };
 
 export default DeviceLinkEditor;
-

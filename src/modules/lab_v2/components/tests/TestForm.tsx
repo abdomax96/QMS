@@ -1,7 +1,8 @@
 import React from 'react';
 import Input from '../../../../components/common/Input';
 import Select from '../../../../components/common/Select';
-import type { LabV2Test, LabV2TestScope } from '../../types/test.types';
+import { LAB_TEST_FAMILY_OPTIONS } from '../../types/test.types';
+import type { LabV2Test, LabV2TestFamily, LabV2TestScope } from '../../types/test.types';
 
 const scopeOptions: { value: LabV2TestScope; label: string }[] = [
   { value: 'global', label: 'عام' },
@@ -28,15 +29,16 @@ export const TestForm: React.FC<{
           onChange={(e) => onChange({ ...value, name: e.target.value })}
           required
         />
+        <Select
+          label="فئة الفحص"
+          options={[{ value: '', label: 'اختر...' }, ...LAB_TEST_FAMILY_OPTIONS]}
+          value={(value.test_family as any) || ''}
+          onChange={(e) => onChange({ ...value, test_family: e.target.value as LabV2TestFamily })}
+        />
         <Input
           label="الاسم (عربي)"
           value={value.name_ar || ''}
           onChange={(e) => onChange({ ...value, name_ar: e.target.value })}
-        />
-        <Input
-          label="الفئة"
-          value={value.category || ''}
-          onChange={(e) => onChange({ ...value, category: e.target.value })}
         />
         <Input
           label="المعيار"
@@ -92,4 +94,3 @@ export const TestForm: React.FC<{
 };
 
 export default TestForm;
-

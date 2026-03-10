@@ -10,7 +10,8 @@ import type {
     CreateMaterialReceivingInput,
     CreateLabTestInput,
     MaterialReceivingStatus,
-    LabTestStatus
+    LabTestStatus,
+    MaterialDateFormat
 } from '../domain/lab/types';
 
 // ============ Multi-Tenant Enforcement ============
@@ -27,6 +28,61 @@ function validateCompanyId(companyId: string | undefined, operationName: string)
     if (MULTI_TENANT_MODE && !companyId) {
         console.warn(`[Multi-Tenant] ${operationName} called without companyId`);
     }
+}
+
+let inventoryViewAvailability: 'unknown' | 'checking' | 'available' | 'missing' = 'unknown';
+
+function isInventoryViewMissingError(error: any): boolean {
+    if (!error) return false;
+
+    const status = Number(error?.status ?? error?.statusCode ?? 0);
+    const code = String(error?.code ?? '').toUpperCase();
+    const message = String(error?.message ?? '').toLowerCase();
+    const details = String(error?.details ?? '').toLowerCase();
+
+    return (
+        status === 404 ||
+        code === 'PGRST205' ||
+        code === '42P01' ||
+        message.includes('v_material_receiving_inventory') ||
+        details.includes('v_material_receiving_inventory')
+    );
+}
+
+function shouldUseInventoryView(): boolean {
+    if (inventoryViewAvailability === 'missing' || inventoryViewAvailability === 'checking') {
+        return false;
+    }
+
+    if (inventoryViewAvailability === 'unknown') {
+        // Allow only the first in-flight query to probe the view.
+        inventoryViewAvailability = 'checking';
+    }
+
+    return true;
+}
+
+function markInventoryViewAvailable(): void {
+    inventoryViewAvailability = 'available';
+}
+
+function handleInventoryViewError(error: any): void {
+    if (isInventoryViewMissingError(error)) {
+        if (inventoryViewAvailability !== 'missing') {
+            console.warn(
+                '[labService] v_material_receiving_inventory is unavailable. Falling back to material_receiving.'
+            );
+        }
+        inventoryViewAvailability = 'missing';
+        return;
+    }
+
+    if (inventoryViewAvailability === 'checking') {
+        // Transient errors should allow future retries.
+        inventoryViewAvailability = 'unknown';
+    }
+
+    console.warn('Inventory view query failed, falling back to material_receiving:', error);
 }
 
 // ============ Type Normalization ============
@@ -49,6 +105,8 @@ function normalizeMaterialReceiving(data: any): MaterialReceiving {
         packagingType: data.packaging_type,
         productionDate: data.production_date,
         expiryDate: data.expiry_date,
+        productionDateFormat: data.production_date_format || 'dmy',
+        expiryDateFormat: data.expiry_date_format || 'dmy',
         receivedAt: data.received_at,
         receivedBy: data.received_by,
         receivedByName: data.received_by_name,
@@ -66,13 +124,18 @@ function normalizeMaterialReceiving(data: any): MaterialReceiving {
         acceptedQuantity: data.accepted_quantity,
         rejectedQuantity: data.rejected_quantity,
         rejectionReason: data.rejection_reason,
+        consumedQuantity: data.consumed_quantity,
+        remainingQuantity: data.remaining_quantity,
+        isManuallyDepleted: data.is_manually_depleted,
+        manualDepletionReason: data.manual_depletion_reason,
+        manualDepletedAt: data.manual_depleted_at,
         notes: data.notes,
         attachments: data.attachments || [],
         companyId: data.company_id,
         testRequirementsSnapshot: data.test_requirements_snapshot,
         supplierApprovalSnapshot: data.supplier_approval_snapshot,
         testResults: data.initial_test_results, // نتائج الفحص الأولية
-        vehicleInspection: data.vehicle_inspection, // بيانات فحص السيارة
+        vehicleInspection: sanitizeVehicleInspection(data.vehicle_inspection), // بيانات فحص السيارة
         createdAt: data.created_at,
         updatedAt: data.updated_at
     };
@@ -123,6 +186,25 @@ function normalizeLabTest(data: any): LabTest {
     };
 }
 
+function normalizeReceivedAtInput(value?: string): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+        ? new Date(`${trimmed}T12:00:00`)
+        : new Date(trimmed);
+
+    if (Number.isNaN(parsedDate.getTime())) return null;
+    return parsedDate.toISOString();
+}
+
+function sanitizeVehicleInspection(input: any): any {
+    if (!input || typeof input !== 'object') return input ?? null;
+    const { vehiclePlate: _removedVehiclePlate, driverName: _removedDriverName, ...rest } = input;
+    return rest;
+}
+
 // ============ Batch Lookup for Traceability ============
 
 export interface MaterialBatch {
@@ -132,12 +214,18 @@ export interface MaterialBatch {
     lotNumber?: string;
     productionDate?: string;
     expiryDate?: string;
+    productionDateFormat?: MaterialDateFormat;
+    expiryDateFormat?: MaterialDateFormat;
     quantity: number;
     unit: string;
     supplierName: string;
     supplierId?: string;
     receivedAt: string;
     status: string;
+    consumedQuantity?: number;
+    remainingQuantity?: number;
+    isManuallyDepleted?: boolean;
+    isAvailableForIssue?: boolean;
 }
 
 /**
@@ -152,61 +240,175 @@ export async function getMaterialBatches(
         companyId?: string;
     }
 ): Promise<MaterialBatch[]> {
-    let query = supabase
-        .from('material_receiving')
-        .select(`
-            id,
-            receiving_number,
-            batch_number,
-            lot_number,
-            production_date,
-            expiry_date,
-            quantity,
-            unit,
-            supplier_name,
-            supplier_id,
-            received_at,
-            status
-        `)
-        .eq('raw_material_id', rawMaterialId)
-        .order('received_at', { ascending: false });
+    const applyStatusFilter = (query: any) => {
+        if (options?.status === 'accepted') return query.eq('status', 'accepted');
+        if (options?.status === 'approved') return query.eq('status', 'approved');
+        if (options?.status === 'all') return query;
+        return query.in('status', ['accepted', 'approved']);
+    };
 
-    // Filter by status (default: only accepted/approved)
-    if (options?.status !== 'all') {
-        query = query.in('status', ['accepted', 'approved']);
+    const mapInventoryRows = (rows: any[]): MaterialBatch[] =>
+        rows.map((item: any) => ({
+            id: item.id,
+            receivingNumber: item.receiving_number,
+            batchNumber: item.batch_number,
+            lotNumber: item.lot_number,
+            productionDate: item.production_date,
+            expiryDate: item.expiry_date,
+            productionDateFormat: item.production_date_format || 'dmy',
+            expiryDateFormat: item.expiry_date_format || 'dmy',
+            quantity: item.quantity,
+            unit: item.unit,
+            supplierName: item.supplier_name,
+            supplierId: item.supplier_id,
+            receivedAt: item.received_at,
+            status: item.status,
+            consumedQuantity: item.consumed_quantity,
+            remainingQuantity: item.remaining_quantity,
+            isManuallyDepleted: item.is_manually_depleted,
+            isAvailableForIssue: item.is_available_for_issue
+        }));
+
+    const runInventoryQuery = async (useCompanyFilter: boolean) => {
+        let query = supabase
+            .from('v_material_receiving_inventory')
+            .select(`
+                id,
+                receiving_number,
+                batch_number,
+                lot_number,
+                production_date,
+                expiry_date,
+                production_date_format,
+                expiry_date_format,
+                quantity,
+                unit,
+                supplier_name,
+                supplier_id,
+                received_at,
+                status,
+                consumed_quantity,
+                remaining_quantity,
+                is_manually_depleted,
+                is_available_for_issue
+            `)
+            .eq('raw_material_id', rawMaterialId)
+            .eq('is_available_for_issue', true)
+            .order('received_at', { ascending: false });
+
+        query = applyStatusFilter(query);
+
+        if (useCompanyFilter && options?.companyId) {
+            query = query.eq('company_id', options.companyId);
+        }
+
+        if (options?.productionDate) {
+            query = query.eq('production_date', options.productionDate);
+        }
+
+        return await query;
+    };
+
+    if (shouldUseInventoryView()) {
+        const inventoryPrimary = await runInventoryQuery(true);
+
+        if (!inventoryPrimary.error) {
+            markInventoryViewAvailable();
+            if ((inventoryPrimary.data || []).length > 0) {
+                return mapInventoryRows(inventoryPrimary.data || []);
+            }
+
+            if (options?.companyId) {
+                const inventoryFallbackCompany = await runInventoryQuery(false);
+                if (!inventoryFallbackCompany.error) {
+                    markInventoryViewAvailable();
+                    if ((inventoryFallbackCompany.data || []).length > 0) {
+                        return mapInventoryRows(inventoryFallbackCompany.data || []);
+                    }
+                } else {
+                    handleInventoryViewError(inventoryFallbackCompany.error);
+                }
+            }
+        } else {
+            handleInventoryViewError(inventoryPrimary.error);
+        }
     }
 
-    // Filter by company
-    if (options?.companyId) {
-        query = query.eq('company_id', options.companyId);
+    const runLegacyQuery = async (useCompanyFilter: boolean) => {
+        let query = supabase
+            .from('material_receiving')
+            .select(`
+                id,
+                receiving_number,
+                batch_number,
+                lot_number,
+                production_date,
+                expiry_date,
+                quantity,
+                accepted_quantity,
+                unit,
+                supplier_name,
+                supplier_id,
+                received_at,
+                status
+            `)
+            .eq('raw_material_id', rawMaterialId)
+            .order('received_at', { ascending: false });
+
+        query = applyStatusFilter(query);
+
+        if (useCompanyFilter && options?.companyId) {
+            query = query.eq('company_id', options.companyId);
+        }
+
+        if (options?.productionDate) {
+            query = query.eq('production_date', options.productionDate);
+        }
+
+        return await query;
+    };
+
+    const legacyPrimary = await runLegacyQuery(true);
+    let legacyData = legacyPrimary.data || [];
+    let legacyError = legacyPrimary.error;
+
+    if (!legacyError && legacyData.length === 0 && options?.companyId) {
+        const legacyFallbackCompany = await runLegacyQuery(false);
+        legacyData = legacyFallbackCompany.data || legacyData;
+        legacyError = legacyFallbackCompany.error || legacyError;
     }
 
-    // Filter by production date
-    if (options?.productionDate) {
-        query = query.eq('production_date', options.productionDate);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-        console.error('Error fetching material batches:', error);
+    if (legacyError) {
+        console.error('Error fetching material batches:', legacyError);
         return [];
     }
 
-    return (data || []).map((item: any) => ({
-        id: item.id,
-        receivingNumber: item.receiving_number,
-        batchNumber: item.batch_number,
-        lotNumber: item.lot_number,
-        productionDate: item.production_date,
-        expiryDate: item.expiry_date,
-        quantity: item.quantity,
-        unit: item.unit,
-        supplierName: item.supplier_name,
-        supplierId: item.supplier_id,
-        receivedAt: item.received_at,
-        status: item.status
-    }));
+    return legacyData
+        .map((item: any) => {
+            const baseQuantity = Number(item.accepted_quantity ?? item.quantity ?? 0);
+            const remainingQuantity = Number.isFinite(baseQuantity) ? Math.max(baseQuantity, 0) : 0;
+            return {
+                id: item.id,
+                receivingNumber: item.receiving_number,
+                batchNumber: item.batch_number,
+                lotNumber: item.lot_number,
+                productionDate: item.production_date,
+                expiryDate: item.expiry_date,
+                productionDateFormat: 'dmy' as MaterialDateFormat,
+                expiryDateFormat: 'dmy' as MaterialDateFormat,
+                quantity: Number(item.quantity ?? 0),
+                unit: item.unit,
+                supplierName: item.supplier_name,
+                supplierId: item.supplier_id,
+                receivedAt: item.received_at,
+                status: item.status,
+                consumedQuantity: 0,
+                remainingQuantity,
+                isManuallyDepleted: false,
+                isAvailableForIssue: remainingQuantity > 0,
+            } as MaterialBatch;
+        })
+        .filter((item) => (item.remainingQuantity ?? 0) > 0);
 }
 
 /**
@@ -217,7 +419,30 @@ export async function getAvailableProductionDates(
     rawMaterialId: string,
     companyId?: string
 ): Promise<string[]> {
-    let query = supabase
+    if (shouldUseInventoryView()) {
+        let inventoryQuery = supabase
+            .from('v_material_receiving_inventory')
+            .select('production_date')
+            .eq('raw_material_id', rawMaterialId)
+            .eq('is_available_for_issue', true)
+            .not('production_date', 'is', null)
+            .order('production_date', { ascending: false });
+
+        if (companyId) {
+            inventoryQuery = inventoryQuery.eq('company_id', companyId);
+        }
+
+        const { data, error } = await inventoryQuery;
+        if (!error) {
+            markInventoryViewAvailable();
+            const uniqueDates = [...new Set((data || []).map((d: any) => d.production_date))];
+            return uniqueDates.filter((d: any) => d !== null) as string[];
+        }
+
+        handleInventoryViewError(error);
+    }
+
+    let legacyQuery = supabase
         .from('material_receiving')
         .select('production_date')
         .eq('raw_material_id', rawMaterialId)
@@ -226,18 +451,17 @@ export async function getAvailableProductionDates(
         .order('production_date', { ascending: false });
 
     if (companyId) {
-        query = query.eq('company_id', companyId);
+        legacyQuery = legacyQuery.eq('company_id', companyId);
     }
 
-    const { data, error } = await query;
+    const { data: legacyData, error: legacyError } = await legacyQuery;
 
-    if (error) {
-        console.error('Error fetching production dates:', error);
+    if (legacyError) {
+        console.error('Error fetching production dates:', legacyError);
         return [];
     }
 
-    // Return unique dates
-    const uniqueDates = [...new Set((data || []).map((d: any) => d.production_date))];
+    const uniqueDates = [...new Set((legacyData || []).map((d: any) => d.production_date))];
     return uniqueDates.filter((d: any) => d !== null) as string[];
 }
 
@@ -257,48 +481,72 @@ export async function getMaterialReceivings(
         toDate?: string;
     }
 ): Promise<MaterialReceiving[]> {
-    let query = supabase
-        .from('material_receiving')
-        .select(`
-            *,
-            suppliers (id, name, code),
-            raw_materials (id, name, code),
-            lab_tests (id, test_number, status)
-        `)
-        .order('received_at', { ascending: false });
+    const applyFilters = (query: any) => {
+        if (companyId) {
+            query = query.eq('company_id', companyId);
+        }
 
-    if (companyId) {
-        query = query.eq('company_id', companyId);
+        if (filters?.status) {
+            query = query.eq('status', filters.status);
+        }
+
+        if (filters?.materialType) {
+            query = query.eq('material_type', filters.materialType);
+        }
+
+        if (filters?.supplierId) {
+            query = query.eq('supplier_id', filters.supplierId);
+        }
+
+        if (filters?.fromDate) {
+            query = query.gte('received_at', filters.fromDate);
+        }
+
+        if (filters?.toDate) {
+            query = query.lte('received_at', filters.toDate);
+        }
+
+        return query;
+    };
+
+    if (shouldUseInventoryView()) {
+        const inventoryQuery = applyFilters(
+            supabase
+                .from('v_material_receiving_inventory')
+                .select('*')
+                .order('received_at', { ascending: false })
+        );
+
+        const { data, error } = await inventoryQuery;
+        if (!error) {
+            markInventoryViewAvailable();
+            return (data || []).map(normalizeMaterialReceiving);
+        }
+
+        handleInventoryViewError(error);
     }
 
-    if (filters?.status) {
-        query = query.eq('status', filters.status);
-    }
+    const legacyQuery = applyFilters(
+        supabase
+            .from('material_receiving')
+            .select('*')
+            .order('received_at', { ascending: false })
+    );
+    const { data: legacyData, error: legacyError } = await legacyQuery;
 
-    if (filters?.materialType) {
-        query = query.eq('material_type', filters.materialType);
-    }
-
-    if (filters?.supplierId) {
-        query = query.eq('supplier_id', filters.supplierId);
-    }
-
-    if (filters?.fromDate) {
-        query = query.gte('received_at', filters.fromDate);
-    }
-
-    if (filters?.toDate) {
-        query = query.lte('received_at', filters.toDate);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-        console.error('Error fetching material receivings:', error);
+    if (legacyError) {
+        console.error('Error fetching material receivings:', legacyError);
         return [];
     }
 
-    return (data || []).map(normalizeMaterialReceiving);
+    return (legacyData || []).map((item: any) =>
+        normalizeMaterialReceiving({
+            ...item,
+            consumed_quantity: 0,
+            remaining_quantity: item.accepted_quantity ?? item.quantity ?? 0,
+            is_manually_depleted: item.is_manually_depleted ?? false,
+        })
+    );
 }
 
 /**
@@ -321,8 +569,26 @@ export async function getMaterialReceivingById(id: string): Promise<MaterialRece
         console.error('Error fetching material receiving:', error);
         return null;
     }
+    let inventoryData: any = null;
+    if (shouldUseInventoryView()) {
+        const { data: inventoryRow, error: inventoryError } = await supabase
+            .from('v_material_receiving_inventory')
+            .select('consumed_quantity, remaining_quantity, is_manually_depleted, manual_depletion_reason, manual_depleted_at')
+            .eq('id', id)
+            .maybeSingle();
 
-    return normalizeMaterialReceiving(data);
+        if (!inventoryError) {
+            markInventoryViewAvailable();
+            inventoryData = inventoryRow;
+        } else {
+            handleInventoryViewError(inventoryError);
+        }
+    }
+
+    return normalizeMaterialReceiving({
+        ...data,
+        ...(inventoryData || {}),
+    });
 }
 
 /**
@@ -344,6 +610,7 @@ export async function createMaterialReceiving(
     companyId?: string
 ): Promise<MaterialReceiving | null> {
     const now = new Date().toISOString();
+    const receivedAt = normalizeReceivedAtInput(input.receivedAt) || now;
 
     // Generate receiving number
     const { count } = await supabase
@@ -405,7 +672,9 @@ export async function createMaterialReceiving(
             packaging_type: input.packagingType,
             production_date: input.productionDate || null,
             expiry_date: input.expiryDate || null,
-            received_at: now,
+            production_date_format: input.productionDateFormat || 'dmy',
+            expiry_date_format: input.expiryDateFormat || 'dmy',
+            received_at: receivedAt,
             received_by: userId,
             received_by_name: userName,
             delivery_note_number: input.deliveryNoteNumber,
@@ -414,7 +683,14 @@ export async function createMaterialReceiving(
             inspection_required: input.inspectionRequired ?? true,
             storage_location: input.storageLocation,
             storage_condition: input.storageCondition,
+            accepted_quantity: input.acceptedQuantity ?? input.quantity,
+            rejected_quantity: input.rejectedQuantity ?? 0,
+            rejection_reason: (input.rejectedQuantity ?? 0) > 0 ? (input.rejectionReason || null) : null,
             notes: input.notes,
+            vehicle_inspection: sanitizeVehicleInspection(input.vehicleInspection),
+            initial_test_results: input.initialTestResults || null,
+            test_requirements_snapshot: testRequirementsSnapshot || [],
+            supplier_approval_snapshot: supplierApprovalSnapshot,
             company_id: companyId || null,
             created_at: now,
             updated_at: now
@@ -443,6 +719,9 @@ export async function updateMaterialReceiving(
         unit?: string;
         productionDate?: string;
         expiryDate?: string;
+        receivedAt?: string;
+        productionDateFormat?: MaterialDateFormat;
+        expiryDateFormat?: MaterialDateFormat;
         supplierName?: string;
         supplierId?: string;
         invoiceNumber?: string;
@@ -450,8 +729,12 @@ export async function updateMaterialReceiving(
         packagingType?: string;
         storageLocation?: string;
         storageCondition?: string;
+        acceptedQuantity?: number;
+        rejectedQuantity?: number;
+        rejectionReason?: string;
         notes?: string;
         testResults?: any;
+        vehicleInspection?: any;
     }
 ): Promise<boolean> {
     // Build update object with snake_case keys
@@ -465,6 +748,12 @@ export async function updateMaterialReceiving(
     if (updates.unit !== undefined) updateData.unit = updates.unit;
     if (updates.productionDate !== undefined) updateData.production_date = updates.productionDate;
     if (updates.expiryDate !== undefined) updateData.expiry_date = updates.expiryDate;
+    if (updates.receivedAt !== undefined) {
+        const normalizedReceivedAt = normalizeReceivedAtInput(updates.receivedAt);
+        if (normalizedReceivedAt) updateData.received_at = normalizedReceivedAt;
+    }
+    if (updates.productionDateFormat !== undefined) updateData.production_date_format = updates.productionDateFormat;
+    if (updates.expiryDateFormat !== undefined) updateData.expiry_date_format = updates.expiryDateFormat;
     if (updates.supplierName !== undefined) updateData.supplier_name = updates.supplierName;
     if (updates.supplierId !== undefined) updateData.supplier_id = updates.supplierId;
     if (updates.invoiceNumber !== undefined) updateData.invoice_number = updates.invoiceNumber;
@@ -472,8 +761,14 @@ export async function updateMaterialReceiving(
     if (updates.packagingType !== undefined) updateData.packaging_type = updates.packagingType;
     if (updates.storageLocation !== undefined) updateData.storage_location = updates.storageLocation;
     if (updates.storageCondition !== undefined) updateData.storage_condition = updates.storageCondition;
+    if (updates.acceptedQuantity !== undefined) updateData.accepted_quantity = updates.acceptedQuantity;
+    if (updates.rejectedQuantity !== undefined) updateData.rejected_quantity = updates.rejectedQuantity;
+    if (updates.rejectionReason !== undefined) updateData.rejection_reason = updates.rejectionReason || null;
     if (updates.notes !== undefined) updateData.notes = updates.notes;
-    if (updates.testResults !== undefined) updateData.test_results = updates.testResults;
+    if (updates.testResults !== undefined) updateData.initial_test_results = updates.testResults;
+    if (updates.vehicleInspection !== undefined) {
+        updateData.vehicle_inspection = sanitizeVehicleInspection(updates.vehicleInspection);
+    }
 
     const { error } = await supabase
         .from('material_receiving')
@@ -507,6 +802,47 @@ export async function updateMaterialReceivingStatus(
         .eq('id', id);
 
     return !error;
+}
+
+/**
+ * Mark/unmark material batch as manually depleted
+ * تحديد/إلغاء تحديد نفاد الباتش يدوياً
+ */
+export async function setMaterialReceivingManualDepletion(
+    id: string,
+    isManuallyDepleted: boolean,
+    reason?: string
+): Promise<boolean> {
+    const { data: authData } = await supabase.auth.getUser();
+    const now = new Date().toISOString();
+
+    const updates = isManuallyDepleted
+        ? {
+            is_manually_depleted: true,
+            manual_depletion_reason: reason || null,
+            manual_depleted_at: now,
+            manual_depleted_by: authData?.user?.id || null,
+            updated_at: now,
+        }
+        : {
+            is_manually_depleted: false,
+            manual_depletion_reason: null,
+            manual_depleted_at: null,
+            manual_depleted_by: null,
+            updated_at: now,
+        };
+
+    const { error } = await supabase
+        .from('material_receiving')
+        .update(updates)
+        .eq('id', id);
+
+    if (error) {
+        console.error('Error updating manual depletion state:', error);
+        return false;
+    }
+
+    return true;
 }
 
 /**

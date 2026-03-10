@@ -17,6 +17,7 @@ import {
 import { DetailPageSkeleton } from '../../components/common/LoadingStates';
 import { useSuppliers } from '../../hooks/useMasterData';
 import * as masterDataService from '../../services/masterDataService';
+import { shelfLifeUnitLabels } from '../../domain/masterData/types';
 import type { RawMaterial } from '../../domain/masterData/types';
 
 interface LinkedSupplier {
@@ -183,7 +184,15 @@ const MaterialDetailsPage: React.FC = () => {
                     <div>
                         <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">مدة الصلاحية</div>
                         <div className="font-medium text-gray-900 dark:text-white">
-                            {material.shelfLife ? `${material.shelfLife} يوم` : 'غير محدد'}
+                            {material.shelfLife
+                                ? `${material.shelfLife} ${shelfLifeUnitLabels[material.shelfLifeUnit || 'days']}`
+                                : 'غير محدد'}
+                        </div>
+                    </div>
+                    <div>
+                        <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">خصم أيام عند الشهر/السنة</div>
+                        <div className="font-medium text-gray-900 dark:text-white">
+                            {material.expirySubtractDays || 0}
                         </div>
                     </div>
                     {material.specifications && (

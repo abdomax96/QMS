@@ -294,7 +294,7 @@ const ListView: React.FC<ListViewProps> = ({
                                 <StatusIcon className={cn('w-4 h-4', statusColor)} />
                             </div>
                             <div className="min-w-0">
-                                <span className="text-sm font-medium text-gray-900 dark:text-white truncate block">{template?.name || 'تقرير'}</span>
+                                <span className="text-sm font-medium text-gray-900 dark:text-white truncate block">{instance.name || template?.name || 'تقرير'}</span>
                                 {instance.form_data?.batch_number && <span className="text-xs text-gray-500 dark:text-gray-400">{instance.form_data.batch_number}</span>}
                             </div>
                         </div>

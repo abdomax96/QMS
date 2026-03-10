@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { useDebouncedCallback } from '../../../hooks/useDebounce';
 import { useTabsStore } from '../../../store/tabsStore';
 import { useToastStore } from '../../../store/toastStore';
@@ -15,13 +16,13 @@ import { PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { useLabV2Devices, useLabV2Device } from '../hooks/useDevices';
 import { useLabV2Tests } from '../hooks/useTests';
 import { labV2TestRunService } from '../services/testRunService';
-import { useLabV2Run, useCompleteLabV2Run, useApproveLabV2Run, useRejectLabV2Run } from '../hooks/useTestRuns';
-import RunStatusBadge from '../components/runs/RunStatusBadge';
+import { useLabV2Run, useCompleteLabV2Run } from '../hooks/useTestRuns';
 import CalibrationWarning from '../components/runs/CalibrationWarning';
 import ValidationMessage from '../components/runs/ValidationMessage';
 import { evaluateLabV2ParameterValue } from '../utils/evaluateSpec';
-import type { LabV2AcceptanceRule, LabV2TestParameter } from '../types/test.types';
-import type { LabV2RunMaterial, LabV2RunMeasurement, LabV2RunValue, LabV2TestRun } from '../types/run.types';
+import type { LabV2AcceptanceRule, LabV2TestFamily, LabV2TestParameter } from '../types/test.types';
+import { LAB_TEST_FAMILY_LABELS } from '../types/test.types';
+import type { LabV2RunMaterial, LabV2RunMaterialSelection, LabV2RunMeasurement, LabV2RunValue, LabV2TestRun } from '../types/run.types';
 
 interface BatchOption {
   id: string;
@@ -41,7 +42,13 @@ type RunSheetRow = {
   error?: string | null;
 };
 
-type RunWithDetails = LabV2TestRun & { values: LabV2RunValue[]; materials: LabV2RunMaterial[] };
+type RunWithDetails = LabV2TestRun & {
+  measurements: LabV2RunMeasurement[];
+  values: LabV2RunValue[];
+  materials: LabV2RunMaterial[];
+  material_selections?: LabV2RunMaterialSelection[];
+};
+
 
 function nowHHMM(d: Date = new Date()): string {
   const h = String(d.getHours()).padStart(2, '0');
@@ -79,6 +86,17 @@ function hhmmToIsoOnBase(baseIso: string | null | undefined, hhmm: string): stri
 
   base.setHours(h, m, 0, 0);
   return base.toISOString();
+}
+
+function formatTimeWithEnglishDigits(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
 }
 
 function bestRuleForParam(rules: LabV2AcceptanceRule[] | undefined, parameter: LabV2TestParameter): LabV2AcceptanceRule | null {
@@ -137,8 +155,58 @@ function buildValuesByKeyFromDb(values: LabV2RunValue[] | undefined, paramsSnaps
   return fromDb;
 }
 
+function getRunEntryResultText(run: (LabV2TestRun & { values?: LabV2RunValue[] }) | null | undefined): string | null {
+  if (!run) return null;
+  const values = Array.isArray((run as any).values) ? (((run as any).values || []) as LabV2RunValue[]) : [];
+  const filledCount = values.filter((value) => {
+    const text = typeof value.value === 'string' ? value.value.trim() : '';
+    return (value.numeric_value != null && Number.isFinite(Number(value.numeric_value))) || Boolean(text);
+  }).length;
+
+  if (filledCount > 0) return `تم إدخال ${filledCount} قيمة`;
+
+  const status = String(run.status || '').toLowerCase();
+  if (status === 'in_progress' || status === 'completed' || status === 'approved') {
+    return 'تم إدخال نتائج';
+  }
+
+  return null;
+}
+
+function recomputeRunEvaluationFromMeasurements(measurements: LabV2RunMeasurement[] | undefined): {
+  evaluation_result: 'pass' | 'fail' | 'warning' | 'na';
+  failed_params: string[] | null;
+} {
+  const rows = (measurements || []).flatMap((measurement) => measurement.values || []);
+  const norm = (value: any) => String(value || '').trim().toLowerCase();
+
+  const hasFail = rows.some((row) => row.out_of_spec || norm(row.evaluation_result) === 'fail');
+  const hasWarning = rows.some((row) => norm(row.evaluation_result) === 'warning');
+  const hasPass = rows.some((row) => norm(row.evaluation_result) === 'pass');
+
+  let evaluation_result: 'pass' | 'fail' | 'warning' | 'na' = 'na';
+  if (hasFail) evaluation_result = 'fail';
+  else if (hasWarning) evaluation_result = 'warning';
+  else if (hasPass) evaluation_result = 'pass';
+
+  const failed_params = Array.from(
+    new Set(
+      rows
+        .filter((row) => row.out_of_spec || norm(row.evaluation_result) === 'fail')
+        .map((row) => String(row.param_key || '').trim())
+        .filter(Boolean)
+    )
+  );
+
+  return {
+    evaluation_result,
+    failed_params: failed_params.length ? failed_params : null,
+  };
+}
+
 const TestRunPage: React.FC = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { runId } = useParams();
   const isNew = runId === 'new';
   const [searchParams] = useSearchParams();
@@ -149,15 +217,33 @@ const TestRunPage: React.FC = () => {
   const markDirty = useTabsStore((s) => s.markDirty);
 
   const toast = useToastStore.getState();
+  const invalidateRunQueries = (targetRunId: string) => {
+    queryClient.invalidateQueries({ queryKey: ['lab_v2', 'run', targetRunId] });
+    queryClient.invalidateQueries({ queryKey: ['lab_v2', 'runs'] });
+  };
+  const invalidateRunQueriesDebounced = useDebouncedCallback((targetRunId: string) => {
+    queryClient.invalidateQueries({ queryKey: ['lab_v2', 'run', targetRunId] });
+    queryClient.invalidateQueries({ queryKey: ['lab_v2', 'runs'] });
+  }, 1800);
+
+  const patchRunCache = (
+    targetRunId: string,
+    updater: (current: RunWithDetails) => RunWithDetails
+  ) => {
+    queryClient.setQueryData(['lab_v2', 'run', targetRunId], (previous: any) => {
+      if (!previous) return previous;
+      return updater(previous as RunWithDetails);
+    });
+  };
 
   // ============= New run wizard state =============
   const { selectedCompanyId } = useCompanyStore();
-  const { data: tests } = useLabV2Tests({ activeOnly: true });
+  const [productId, setProductId] = useState('');
+  const { data: tests } = useLabV2Tests({ activeOnly: true, product_id: productId || undefined });
   const { data: devices } = useLabV2Devices({ status: 'active' });
   const [products, setProducts] = useState<Product[]>([]);
   const [batches, setBatches] = useState<BatchOption[]>([]);
 
-  const [productId, setProductId] = useState('');
   const [batchId, setBatchId] = useState('');
   const [sheetRows, setSheetRows] = useState<RunSheetRow[]>([]);
   const [completingAll, setCompletingAll] = useState(false);
@@ -303,8 +389,6 @@ const TestRunPage: React.FC = () => {
   // ============= Existing run state =============
   const { data: runData, isLoading } = useLabV2Run(!isNew ? (runId as string) : undefined);
   const completeRun = useCompleteLabV2Run();
-  const approveRun = useApproveLabV2Run();
-  const rejectRun = useRejectLabV2Run();
 
   const paramsSnapshot = useMemo(() => {
     return ((runData as any)?.params_snapshot || []) as LabV2TestParameter[];
@@ -326,9 +410,23 @@ const TestRunPage: React.FC = () => {
   const [activeMeasurementTimeHHMM, setActiveMeasurementTimeHHMM] = useState<string>('');
 
   const [valuesByKey, setValuesByKey] = useState<Record<string, any>>({});
+  const [selectedParameterKey, setSelectedParameterKey] = useState<string>('');
   const [localNotes, setLocalNotes] = useState<string>('');
-  const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'error'>('idle');
+  const [deletingMeasurementId, setDeletingMeasurementId] = useState<string | null>(null);
   const initializedRunIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (isNew) return;
+    if (!paramsSnapshot.length) {
+      setSelectedParameterKey('');
+      return;
+    }
+    if (selectedParameterKey && paramsSnapshot.some((p) => p.param_key === selectedParameterKey)) return;
+    const first = paramsSnapshot
+      .slice()
+      .sort((a, b) => (a.display_order || 0) - (b.display_order || 0))[0];
+    setSelectedParameterKey(first?.param_key || '');
+  }, [isNew, paramsSnapshot, selectedParameterKey]);
 
   // Initialize local state from DB + (first) tab snapshot
   useEffect(() => {
@@ -357,6 +455,7 @@ const TestRunPage: React.FC = () => {
     setValuesByKey(canUseTabValues ? (tabValues as any) : fromDb);
     setLocalNotes(typeof tabNotes === 'string' ? tabNotes : (runData.notes || ''));
   }, [isNew, runData?.id]);
+
 
   // Persist local state into tab store (marks dirty)
   useEffect(() => {
@@ -406,45 +505,31 @@ const TestRunPage: React.FC = () => {
     return out;
   };
 
-  const autoSave = useDebouncedCallback(async () => {
-    if (isNew) return;
-    if (!runData) return;
+  const saveRunNotes = async (showSuccessToast: boolean): Promise<boolean> => {
+    if (isNew || !runData) return true;
+    const nextNotes = localNotes.trim();
+    const currentNotes = String(runData.notes || '').trim();
+    if (nextNotes === currentNotes) return true;
 
     try {
-      setAutoSaveStatus('saving');
-
-      const payload = buildUpsertPayload();
-      if (activeMeasurementId && paramsSnapshot.length && payload.length > 0) {
-        await labV2TestRunService.saveRunValues({
-          run_id: runData.id,
-          measurement_id: activeMeasurementId,
-          values: payload,
-          params_snapshot: paramsSnapshot,
-          rules_snapshot: rulesSnapshot,
-        });
-      }
-      // Persist notes best-effort (separate from values).
-      await labV2TestRunService.updateRun(runData.id, { notes: localNotes || null });
-      setAutoSaveStatus('idle');
-
-      if (tab?.id) {
-        markDirty(tab.id, false);
-      }
-    } catch (e) {
-      console.error('Auto-save failed:', e);
-      setAutoSaveStatus('error');
+      await labV2TestRunService.updateRun(runData.id, { notes: nextNotes || null });
+      patchRunCache(runData.id, (current) => ({ ...current, notes: nextNotes || null }));
+      invalidateRunQueriesDebounced(runData.id);
+      if (tab?.id) markDirty(tab.id, false);
+      if (showSuccessToast) toast.success('تم حفظ المسودة');
+      return true;
+    } catch (e: any) {
+      toast.error(showSuccessToast ? 'فشل الحفظ' : 'فشل حفظ الملاحظات', e?.message);
+      return false;
     }
-  }, 900);
-
-  // Kick autosave on changes (only after init)
-  useEffect(() => {
-    if (isNew) return;
-    if (!runData) return;
-    autoSave();
-  }, [isNew, runData?.id, activeMeasurementId, valuesByKey, localNotes, autoSave]);
+  };
 
   if (isNew) {
-    const testOptions = (tests || []).map((t) => ({ value: t.id, label: `${t.code} - ${t.name_ar || t.name}` }));
+    const filteredTests = (tests || []).filter((t: any) => t.test_family !== 'ipc' || Boolean(productId));
+    const testOptions = filteredTests.map((t: any) => ({
+      value: t.id,
+      label: `${t.code} - ${t.name_ar || t.name}${t.test_family ? ` (${LAB_TEST_FAMILY_LABELS[t.test_family as LabV2TestFamily] || t.test_family})` : ''}`,
+    }));
     const deviceOptions = (devices || []).map((d) => ({ value: d.id, label: `${d.code} - ${d.name_ar || d.name}` }));
     const productOptions = (products || []).map((p) => ({ value: p.id, label: p.name }));
     const batchOptions = (batches || []).map((b) => ({ value: b.id, label: `${b.batch_number}${b.production_date ? ` (${b.production_date})` : ''}` }));
@@ -581,6 +666,7 @@ const TestRunPage: React.FC = () => {
             })
           );
         }
+        invalidateRunQueries(modalRun.id);
 
         toast.success('تم حفظ النتائج');
       } catch (e: any) {
@@ -615,6 +701,7 @@ const TestRunPage: React.FC = () => {
             return next ? { ...r, run: next } : r;
           })
         );
+        queryClient.invalidateQueries({ queryKey: ['lab_v2', 'runs'] });
 
         toast.success('تم إكمال الفحوصات');
         navigate('/lab/tests/runs');
@@ -653,6 +740,11 @@ const TestRunPage: React.FC = () => {
               <Select label="المنتج" options={[{ value: '', label: '—' }, ...productOptions]} value={productId} onChange={(e) => setProductId(e.target.value)} />
               <Select label="الباتش" options={[{ value: '', label: '—' }, ...batchOptions]} value={batchId} onChange={(e) => setBatchId(e.target.value)} />
             </div>
+            {!productId ? (
+              <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                اختر المنتج لإظهار فحوصات IPC المرتبطة به.
+              </div>
+            ) : null}
             <div className="flex items-center justify-between gap-3">
               <Button variant="outline" leftIcon={<PlusIcon className="w-4 h-4" />} onClick={addRow}>
                 إضافة فحص
@@ -670,15 +762,16 @@ const TestRunPage: React.FC = () => {
                     <th className="text-right px-4 py-3 font-semibold">الفحص</th>
                     <th className="text-right px-4 py-3 font-semibold">الوقت</th>
                     <th className="text-right px-4 py-3 font-semibold">الجهاز</th>
-                    <th className="text-right px-4 py-3 font-semibold">النتيجة</th>
-                    <th className="text-right px-4 py-3 font-semibold">الحالة</th>
+                    <th className="text-center px-4 py-3 font-semibold">النتيجة</th>
                     <th className="text-right px-4 py-3 font-semibold">ملاحظات</th>
                     <th className="text-right px-4 py-3 font-semibold">القيم</th>
                     <th className="text-right px-4 py-3 font-semibold">إجراءات</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                  {sheetRows.map((row, idx) => (
+                  {sheetRows.map((row, idx) => {
+                    const rowResultHint = getRunEntryResultText(row.run as (LabV2TestRun & { values?: LabV2RunValue[] }) | undefined);
+                    return (
                     <tr key={row.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-850/40 align-top">
                       <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{idx + 1}</td>
 
@@ -702,6 +795,8 @@ const TestRunPage: React.FC = () => {
                       <td className="px-4 py-3 min-w-[120px]">
                         <input
                           type="time"
+                          lang="en"
+                          dir="ltr"
                           value={row.time_hhmm}
                           onChange={(e) => updateRow(row.id, { time_hhmm: e.target.value })}
                           onBlur={async () => {
@@ -735,12 +830,16 @@ const TestRunPage: React.FC = () => {
                         </select>
                       </td>
 
-                      <td className="px-4 py-3 min-w-[160px]">
-                        {row.run?.evaluation_result ? <ValidationMessage result={row.run.evaluation_result} /> : <span className="text-slate-500">—</span>}
-                      </td>
-
-                      <td className="px-4 py-3 min-w-[120px]">
-                        {row.run?.status ? <RunStatusBadge status={row.run.status} /> : <span className="text-slate-500">—</span>}
+                      <td className="px-4 py-3 min-w-[160px] text-center">
+                        <div className="flex items-center justify-center">
+                          {row.run?.evaluation_result ? (
+                            <ValidationMessage result={row.run.evaluation_result} />
+                          ) : rowResultHint ? (
+                            <span className="text-slate-600 dark:text-slate-300">{rowResultHint}</span>
+                          ) : (
+                            <span className="text-slate-500">—</span>
+                          )}
+                        </div>
                       </td>
 
                       <td className="px-4 py-3 min-w-[280px]">
@@ -781,15 +880,15 @@ const TestRunPage: React.FC = () => {
                         </Button>
                       </td>
                     </tr>
-                  ))}
+                  )})}
 
-                  {sheetRows.length === 0 ? (
-                    <tr>
-                      <td className="px-4 py-10 text-center text-slate-600 dark:text-slate-400" colSpan={9}>
-                        لا توجد صفوف. اضغط "إضافة فحص" للبدء.
-                      </td>
-                    </tr>
-                  ) : null}
+                {sheetRows.length === 0 ? (
+                  <tr>
+                    <td className="px-4 py-10 text-center text-slate-600 dark:text-slate-400" colSpan={8}>
+                      لا توجد صفوف. اضغط "إضافة فحص" للبدء.
+                    </td>
+                  </tr>
+                ) : null}
                 </tbody>
               </table>
             </div>
@@ -823,17 +922,9 @@ const TestRunPage: React.FC = () => {
                     <div className="text-lg font-semibold text-slate-900 dark:text-white">
                       {modalTest.code ? `${modalTest.code} - ${modalTest.name_ar || modalTest.name}` : modalRun.test_id}
                     </div>
-                    <div className="text-sm text-slate-600 dark:text-slate-400">
-                      الحالة: <RunStatusBadge status={modalRun.status} />{' '}
-                      {modalRun.evaluation_result ? (
-                        <span className="mr-2">
-                          <ValidationMessage result={modalRun.evaluation_result} />
-                        </span>
-                      ) : null}
-                    </div>
                   </div>
                   <div className="text-sm text-slate-600 dark:text-slate-400">
-                    الوقت: {modalRun.started_at ? new Date(modalRun.started_at).toLocaleTimeString() : '—'}
+                    الوقت: {formatTimeWithEnglishDigits(modalRun.started_at)}
                   </div>
                 </div>
 
@@ -957,8 +1048,7 @@ const TestRunPage: React.FC = () => {
   const testSnapshot: any = (runData as any).test_snapshot || {};
 
   const isEditable = runData.status === 'draft' || runData.status === 'in_progress';
-  const valuesDisabled = !isEditable || !activeMeasurementId;
-  const activeMeasurementNo = measurements.find((m) => m.id === activeMeasurementId)?.measurement_no ?? null;
+  const valuesDisabled = !isEditable;
 
   return (
     <div className="p-6 min-h-screen bg-slate-50 dark:bg-slate-900" dir="rtl">
@@ -968,43 +1058,24 @@ const TestRunPage: React.FC = () => {
             <div className="text-sm text-slate-600 dark:text-slate-300">رقم الفحص</div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-bold text-slate-900 dark:text-white">{runData.run_number}</h1>
-              <RunStatusBadge status={runData.status} />
-              <span className="text-sm text-slate-600 dark:text-slate-300">النتيجة: {runData.evaluation_result || '—'}</span>
             </div>
             <div className="text-sm text-slate-600 dark:text-slate-400">
               {testSnapshot.code ? `${testSnapshot.code} - ${testSnapshot.name_ar || testSnapshot.name}` : '—'}
             </div>
+            {runData.batch_number_snapshot || runData.shift_snapshot ? (
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                {runData.batch_number_snapshot ? `الباتش: ${runData.batch_number_snapshot}` : null}
+                {runData.batch_number_snapshot && runData.shift_snapshot ? ' | ' : null}
+                {runData.shift_snapshot ? `الوردية: ${runData.shift_snapshot}` : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="text-xs text-slate-500 dark:text-slate-400 self-center">
-              {autoSaveStatus === 'saving' ? 'جاري الحفظ...' : autoSaveStatus === 'error' ? 'فشل الحفظ التلقائي' : 'محفوظ'}
-            </div>
             <Button
               variant="outline"
               onClick={async () => {
-                try {
-                  if (!activeMeasurementId) {
-                    toast.error('الرجاء إضافة نتيجة للفحص أولاً');
-                    return;
-                  }
-
-                  const payload = buildUpsertPayload();
-                  if (paramsSnapshot.length && payload.length > 0) {
-                    await labV2TestRunService.saveRunValues({
-                      run_id: runData.id,
-                      measurement_id: activeMeasurementId,
-                      values: payload,
-                      params_snapshot: paramsSnapshot,
-                      rules_snapshot: rulesSnapshot,
-                    });
-                  }
-                  await labV2TestRunService.updateRun(runData.id, { notes: localNotes || null });
-                  toast.success('تم حفظ المسودة');
-                  if (tab?.id) markDirty(tab.id, false);
-                } catch (e: any) {
-                  toast.error('فشل الحفظ', e?.message);
-                }
+                await saveRunNotes(true);
               }}
               disabled={!isEditable}
             >
@@ -1015,7 +1086,7 @@ const TestRunPage: React.FC = () => {
               isLoading={completeRun.isPending}
               disabled={!isEditable}
             >
-              إكمال
+              حفظ وإغلاق
             </Button>
           </div>
         </div>
@@ -1023,12 +1094,162 @@ const TestRunPage: React.FC = () => {
         <CalibrationWarning calibration_due_date={deviceData?.calibration_due_date || null} />
 
         {(() => {
-          const active = measurements.find((m) => m.id === activeMeasurementId) || null;
-          const measurementResult = (m: LabV2RunMeasurement): 'pass' | 'fail' | 'warning' | 'na' => {
-            if (m.evaluation_result) return m.evaluation_result as any;
-            const vals = (m.values || []) as LabV2RunValue[];
-            if (!vals.length) return 'na';
-            return vals.some((v) => Boolean(v.out_of_spec)) ? 'fail' : 'pass';
+          const orderedParameters = paramsSnapshot
+            .slice()
+            .sort((a, b) => (a.display_order || 0) - (b.display_order || 0));
+          const selectedParameter = orderedParameters.find((p) => p.param_key === selectedParameterKey) || orderedParameters[0] || null;
+          const selectedRule = selectedParameter ? bestRuleForParam(rulesSnapshot, selectedParameter) : null;
+          const specText = selectedParameter ? formatParamSpec(selectedRule, selectedParameter) : '—';
+          const unitText = selectedParameter?.unit || selectedRule?.spec_unit || '';
+
+          const getValueRecord = (measurement: LabV2RunMeasurement): LabV2RunValue | null => {
+            if (!selectedParameter) return null;
+            const values = (measurement.values || []) as LabV2RunValue[];
+            return values.find((v) => v.param_key === selectedParameter.param_key) || null;
+          };
+
+          const getRowRawValue = (measurement: LabV2RunMeasurement): string => {
+            const record = getValueRecord(measurement);
+            if (!record) return '';
+            if (selectedParameter?.data_type === 'number') {
+              if (record.numeric_value != null && Number.isFinite(Number(record.numeric_value))) return String(record.numeric_value);
+              return String(record.value || '');
+            }
+            return String(record.value || '');
+          };
+
+          const saveMeasurementValue = async (measurementId: string, rawInput: string | string[]) => {
+            if (!selectedParameter) return;
+
+            let value: string | null = null;
+            let numeric_value: number | null = null;
+
+            if (selectedParameter.data_type === 'number') {
+              const text = String(rawInput ?? '').trim();
+              const num = text === '' ? null : Number(text);
+              value = text || null;
+              numeric_value = Number.isFinite(num as any) ? (num as number) : null;
+            } else if (selectedParameter.data_type === 'multi_select') {
+              const arr = Array.isArray(rawInput) ? rawInput.map(String).filter(Boolean) : [];
+              value = arr.length ? JSON.stringify(arr) : null;
+            } else {
+              const text = String(rawInput ?? '').trim();
+              value = text || null;
+            }
+
+            const spec = evaluateLabV2ParameterValue(
+              selectedParameter,
+              numeric_value ?? value ?? '',
+              rulesSnapshot
+            );
+            const nowIso = new Date().toISOString();
+
+            try {
+              await labV2TestRunService.saveRunValues({
+                run_id: runData.id,
+                measurement_id: measurementId,
+                values: [
+                  {
+                    parameter_id: selectedParameter.id,
+                    param_key: selectedParameter.param_key,
+                    value,
+                    numeric_value,
+                  },
+                ],
+                params_snapshot: paramsSnapshot,
+                rules_snapshot: rulesSnapshot,
+              });
+              patchRunCache(runData.id, (current) => {
+                const nextMeasurements = (current.measurements || []).map((measurement) => {
+                  if (measurement.id !== measurementId) return measurement;
+
+                  const currentValues = [...(measurement.values || [])];
+                  const existingIndex = currentValues.findIndex((v) => v.param_key === selectedParameter.param_key);
+                  const base = existingIndex >= 0 ? currentValues[existingIndex] : null;
+                  const nextValue: LabV2RunValue = {
+                    id: base?.id || `tmp_${measurementId}_${selectedParameter.param_key}`,
+                    run_id: current.id,
+                    measurement_id: measurementId,
+                    parameter_id: selectedParameter.id,
+                    param_key: selectedParameter.param_key,
+                    value,
+                    numeric_value,
+                    evaluation_result: spec.evaluation_result,
+                    out_of_spec: spec.out_of_spec,
+                    notes: base?.notes || null,
+                    created_at: base?.created_at || nowIso,
+                    updated_at: nowIso,
+                  };
+
+                  if (existingIndex >= 0) {
+                    currentValues[existingIndex] = nextValue;
+                  } else {
+                    currentValues.push(nextValue);
+                  }
+
+                  return { ...measurement, values: currentValues };
+                });
+
+                const sortedMeasurements = [...nextMeasurements].sort((a, b) => (a.measurement_no || 0) - (b.measurement_no || 0));
+                const latestValues = (sortedMeasurements[sortedMeasurements.length - 1]?.values || []).slice();
+                const aggregate = recomputeRunEvaluationFromMeasurements(nextMeasurements);
+
+                return {
+                  ...current,
+                  measurements: nextMeasurements,
+                  values: latestValues,
+                  status: current.status === 'draft' ? 'in_progress' : current.status,
+                  started_at: current.started_at || nowIso,
+                  evaluation_result: aggregate.evaluation_result,
+                  failed_params: aggregate.failed_params,
+                };
+              });
+              invalidateRunQueriesDebounced(runData.id);
+            } catch (e: any) {
+              toast.error('فشل حفظ النتيجة', e?.message);
+            }
+          };
+
+          const deleteMeasurementRow = async (measurement: LabV2RunMeasurement) => {
+            if (!isEditable) return;
+            const confirmed = window.confirm(`حذف الصف رقم ${measurement.measurement_no}؟`);
+            if (!confirmed) return;
+
+            setDeletingMeasurementId(measurement.id);
+            try {
+              await labV2TestRunService.deleteMeasurement(measurement.id);
+              patchRunCache(runData.id, (current) => {
+                const nextMeasurements = (current.measurements || []).filter((row) => row.id !== measurement.id);
+                const sortedMeasurements = [...nextMeasurements].sort((a, b) => (a.measurement_no || 0) - (b.measurement_no || 0));
+                const latestValues = (sortedMeasurements[sortedMeasurements.length - 1]?.values || []).slice();
+                const aggregate = recomputeRunEvaluationFromMeasurements(nextMeasurements);
+
+                return {
+                  ...current,
+                  measurements: nextMeasurements,
+                  values: latestValues,
+                  evaluation_result: aggregate.evaluation_result,
+                  failed_params: aggregate.failed_params,
+                };
+              });
+              invalidateRunQueriesDebounced(runData.id);
+
+              if (activeMeasurementId === measurement.id) {
+                const sortedRemaining = measurements
+                  .filter((row) => row.id !== measurement.id)
+                  .slice()
+                  .sort((a, b) => (a.measurement_no || 0) - (b.measurement_no || 0));
+                const next = sortedRemaining.length ? sortedRemaining[sortedRemaining.length - 1] : null;
+                setActiveMeasurementId(next?.id || null);
+                setActiveMeasurementTimeHHMM(isoToHHMM(next?.measured_at || runData.started_at || runData.created_at));
+              }
+
+              toast.success('تم حذف الصف');
+            } catch (e: any) {
+              toast.error('فشل حذف الصف', e?.message);
+            } finally {
+              setDeletingMeasurementId(null);
+            }
           };
 
           return (
@@ -1036,37 +1257,10 @@ const TestRunPage: React.FC = () => {
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                 <div className="space-y-1">
                   <div className="text-sm font-semibold text-slate-900 dark:text-white">نتائج الفحص</div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">يمكن إضافة أكثر من نتيجة (مع توقيت) لنفس الفحص</div>
+                  <div className="text-xs text-slate-500 dark:text-slate-400">المواصفة بالأعلى، والتسجيل في جدول مختصر.</div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  {active ? (
-                    <div className="flex items-center gap-2">
-                      <div className="text-xs text-slate-600 dark:text-slate-300">وقت النتيجة #{active.measurement_no}</div>
-                      <input
-                        type="time"
-                        value={activeMeasurementTimeHHMM}
-                        onChange={(e) => setActiveMeasurementTimeHHMM(e.target.value)}
-                        onBlur={async () => {
-                          if (!active) return;
-                          const nextIso = hhmmToIsoOnBase(active.measured_at || runData.started_at || runData.created_at, activeMeasurementTimeHHMM);
-                          if (!nextIso) return;
-                          if (active.measured_at && new Date(active.measured_at).toISOString() === nextIso) return;
-
-                          try {
-                            const updated = await labV2TestRunService.updateMeasurement(active.id, { measured_at: nextIso });
-                            setActiveMeasurementTimeHHMM(isoToHHMM(updated.measured_at));
-                            toast.success('تم تحديث وقت النتيجة');
-                          } catch (e: any) {
-                            toast.error('فشل تحديث الوقت', e?.message);
-                          }
-                        }}
-                        disabled={!isEditable}
-                        className="rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2 text-sm dark:bg-slate-900/30 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                      />
-                    </div>
-                  ) : null}
-
+                <div className="flex flex-wrap items-center gap-2">
                   <Button
                     variant="outline"
                     onClick={async () => {
@@ -1075,9 +1269,16 @@ const TestRunPage: React.FC = () => {
                           run_id: runData.id,
                           measured_at: runData.started_at || new Date().toISOString(),
                         });
+                        patchRunCache(runData.id, (current) => {
+                          const existing = (current.measurements || []).some((m) => m.id === created.id);
+                          if (existing) return current;
+                          const nextMeasurements = [...(current.measurements || []), { ...created, values: [] as LabV2RunValue[] }]
+                            .sort((a, b) => (a.measurement_no || 0) - (b.measurement_no || 0));
+                          return { ...current, measurements: nextMeasurements };
+                        });
+                        invalidateRunQueriesDebounced(runData.id);
                         setActiveMeasurementId(created.id);
                         setActiveMeasurementTimeHHMM(isoToHHMM(created.measured_at));
-                        setValuesByKey(buildValuesByKeyFromDb([], paramsSnapshot));
                         toast.success('تمت إضافة نتيجة');
                       } catch (e: any) {
                         toast.error('فشل إضافة نتيجة', e?.message);
@@ -1090,44 +1291,163 @@ const TestRunPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="overflow-x-auto">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2">
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 mb-1">المعامل</div>
+                  {orderedParameters.length > 1 ? (
+                    <select
+                      value={selectedParameter?.param_key || ''}
+                      onChange={(e) => setSelectedParameterKey(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2 text-sm dark:bg-slate-900/30 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                    >
+                      {orderedParameters.map((p) => (
+                        <option key={p.param_key} value={p.param_key}>
+                          {p.label_ar || p.label || p.param_key}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="text-sm font-medium text-slate-900 dark:text-white">
+                      {selectedParameter ? (selectedParameter.label_ar || selectedParameter.label || selectedParameter.param_key) : '—'}
+                    </div>
+                  )}
+                </div>
+                <div className="rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2">
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 mb-1">المواصفة</div>
+                  <div className="text-sm font-medium text-slate-900 dark:text-white">{specText}</div>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto -mx-2 px-2">
                 <table className="min-w-full text-sm">
                   <thead className="bg-slate-50 dark:bg-slate-850/40">
                     <tr className="text-slate-600 dark:text-slate-300">
-                      <th className="text-right px-4 py-3 font-semibold">#</th>
+                      <th className="text-right px-4 py-3 font-semibold">م</th>
                       <th className="text-right px-4 py-3 font-semibold">الوقت</th>
-                      <th className="text-right px-4 py-3 font-semibold">النتيجة</th>
-                      <th className="text-right px-4 py-3 font-semibold">عدد القيم</th>
+                      <th className="text-center px-4 py-3 font-semibold">النتيجة</th>
+                      <th className="text-right px-4 py-3 font-semibold">ملاحظات</th>
                       <th className="text-right px-4 py-3 font-semibold">إجراءات</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
                     {measurements.map((m) => {
-                      const isActive = m.id === activeMeasurementId;
-                      const res = measurementResult(m);
-                      const time = isoToHHMM(m.measured_at);
-                      const count = (m.values || []).length;
+                      const rowRawValue = getRowRawValue(m);
+                      const evaluation = selectedParameter
+                        ? evaluateLabV2ParameterValue(selectedParameter, rowRawValue, rulesSnapshot)
+                        : null;
+                      const defaultTime = isoToHHMM(m.measured_at);
+                      const inputClass =
+                        'w-full rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2 text-sm dark:bg-slate-900/30 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
 
                       return (
-                        <tr key={m.id} className={isActive ? 'bg-primary-50/60 dark:bg-primary-900/20' : 'hover:bg-slate-50/70 dark:hover:bg-slate-850/40'}>
+                        <tr key={m.id} className="align-top hover:bg-slate-50/70 dark:hover:bg-slate-850/40">
                           <td className="px-4 py-3 text-slate-700 dark:text-slate-200 font-medium">{m.measurement_no}</td>
-                          <td className="px-4 py-3 text-slate-700 dark:text-slate-200">{time || '—'}</td>
-                          <td className="px-4 py-3">{res ? <ValidationMessage result={res} /> : <span className="text-slate-500">—</span>}</td>
-                          <td className="px-4 py-3 text-slate-700 dark:text-slate-200">{count}</td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <Button
-                                size="sm"
-                                variant={isActive ? 'outline' : 'ghost'}
-                                onClick={() => {
-                                  setActiveMeasurementId(m.id);
-                                  setActiveMeasurementTimeHHMM(isoToHHMM(m.measured_at));
-                                  setValuesByKey(buildValuesByKeyFromDb(m.values || [], paramsSnapshot));
-                                }}
-                              >
-                                فتح
-                              </Button>
+                          <td className="px-4 py-3 min-w-[130px]">
+                            <input
+                              type="time"
+                              lang="en"
+                              dir="ltr"
+                              defaultValue={defaultTime}
+                              disabled={!isEditable}
+                              className={inputClass}
+                              onBlur={async (e) => {
+                                if (!isEditable) return;
+                                const nextIso = hhmmToIsoOnBase(m.measured_at || runData.started_at || runData.created_at, e.target.value);
+                                if (!nextIso) return;
+                                if (m.measured_at && new Date(m.measured_at).toISOString() === nextIso) return;
+                                try {
+                                  await labV2TestRunService.updateMeasurement(m.id, { measured_at: nextIso });
+                                  patchRunCache(runData.id, (current) => ({
+                                    ...current,
+                                    measurements: (current.measurements || []).map((measurement) =>
+                                      measurement.id === m.id ? { ...measurement, measured_at: nextIso } : measurement
+                                    ),
+                                  }));
+                                  invalidateRunQueriesDebounced(runData.id);
+                                } catch (err: any) {
+                                  toast.error('فشل تحديث الوقت', err?.message);
+                                }
+                              }}
+                            />
+                          </td>
+                          <td className="px-4 py-3 min-w-[300px]">
+                            <div className="flex items-center justify-center gap-2">
+                              {selectedParameter?.data_type === 'dropdown' ? (
+                                <select
+                                  defaultValue={rowRawValue}
+                                  disabled={valuesDisabled || !selectedParameter}
+                                  className={inputClass}
+                                  onChange={(e) => {
+                                    if ((e.target.value || '') === (rowRawValue || '')) return;
+                                    void saveMeasurementValue(m.id, e.target.value);
+                                  }}
+                                >
+                                  <option value="">—</option>
+                                  {(Array.isArray(selectedParameter?.allowed_values) ? selectedParameter.allowed_values : []).map((option: any) => (
+                                    <option key={String(option)} value={String(option)}>
+                                      {String(option)}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <input
+                                  type={selectedParameter?.data_type === 'number' ? 'number' : selectedParameter?.data_type === 'date' ? 'date' : selectedParameter?.data_type === 'time' ? 'time' : 'text'}
+                                  defaultValue={rowRawValue}
+                                  disabled={valuesDisabled || !selectedParameter}
+                                  className={inputClass}
+                                  step={selectedParameter?.data_type === 'number' ? 'any' : undefined}
+                                  min={selectedParameter?.data_type === 'number' ? (selectedParameter.min_value ?? undefined) : undefined}
+                                  max={selectedParameter?.data_type === 'number' ? (selectedParameter.max_value ?? undefined) : undefined}
+                                  onBlur={(e) => {
+                                    if ((e.target.value || '') === (rowRawValue || '')) return;
+                                    void saveMeasurementValue(m.id, e.target.value);
+                                  }}
+                                />
+                              )}
+                              {unitText ? <span className="text-xs text-slate-600 dark:text-slate-300 whitespace-nowrap">{unitText}</span> : null}
+                              {evaluation ? <ValidationMessage result={evaluation.evaluation_result} message_ar={evaluation.message_ar} /> : null}
                             </div>
+                          </td>
+                          <td className="px-4 py-3 min-w-[280px]">
+                            <input
+                              type="text"
+                              defaultValue={m.notes || ''}
+                              disabled={!isEditable}
+                              className={inputClass}
+                              placeholder="ملاحظات"
+                              onBlur={async (e) => {
+                                if (!isEditable) return;
+                                const nextNote = e.target.value.trim();
+                                if ((m.notes || '') === nextNote) return;
+                                try {
+                                  await labV2TestRunService.updateMeasurement(m.id, { notes: nextNote || null });
+                                  patchRunCache(runData.id, (current) => ({
+                                    ...current,
+                                    measurements: (current.measurements || []).map((measurement) =>
+                                      measurement.id === m.id ? { ...measurement, notes: nextNote || null } : measurement
+                                    ),
+                                  }));
+                                  invalidateRunQueriesDebounced(runData.id);
+                                } catch (err: any) {
+                                  toast.error('فشل حفظ الملاحظة', err?.message);
+                                }
+                              }}
+                            />
+                          </td>
+                          <td className="px-4 py-3 w-[90px]">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              leftIcon={<TrashIcon className="w-4 h-4" />}
+                              onClick={() => {
+                                void deleteMeasurementRow(m);
+                              }}
+                              isLoading={deletingMeasurementId === m.id}
+                              disabled={!isEditable || deletingMeasurementId !== null || measurements.length <= 1}
+                              title={measurements.length <= 1 ? 'يجب بقاء صف واحد على الأقل' : 'حذف الصف'}
+                            >
+                              حذف
+                            </Button>
                           </td>
                         </tr>
                       );
@@ -1153,154 +1473,20 @@ const TestRunPage: React.FC = () => {
           <div className="text-xs text-slate-500 dark:text-slate-400">Standard: {testSnapshot.method_standard || '—'}</div>
         </div>
 
-        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-6">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-4">
-            <div>
-              <div className="text-sm font-semibold text-slate-900 dark:text-white">نتائج المعاملات</div>
-              {activeMeasurementId ? (
-                <div className="text-xs text-slate-500 dark:text-slate-400">
-                  نتيجة #{activeMeasurementNo ?? '—'} - الوقت: {activeMeasurementTimeHHMM || '—'}
-                </div>
-              ) : (
-                <div className="text-xs text-rose-600">اختر/أضف نتيجة أولاً لتسجيل القيم</div>
-              )}
-            </div>
-          </div>
-          <div className="overflow-x-auto -mx-2 px-2">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-50 dark:bg-slate-850/40">
-                <tr className="text-slate-600 dark:text-slate-300">
-                  <th className="text-right px-4 py-3 font-semibold">المعامل</th>
-                  <th className="text-right px-4 py-3 font-semibold">القيمة</th>
-                  <th className="text-right px-4 py-3 font-semibold">الوحدة</th>
-                  <th className="text-right px-4 py-3 font-semibold">المواصفة</th>
-                  <th className="text-right px-4 py-3 font-semibold">التقييم</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                {paramsSnapshot
-                  .slice()
-                  .sort((a, b) => (a.display_order || 0) - (b.display_order || 0))
-                  .map((p) => {
-                    const label = p.label_ar || p.label || p.param_key;
-                    const value = valuesByKey[p.param_key];
-                    const rule = bestRuleForParam(rulesSnapshot, p);
-                    const evaluation = evaluateLabV2ParameterValue(p, value, rulesSnapshot);
-
-                    const commonInputClass =
-                      'w-full rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2 text-sm dark:bg-slate-900/30 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
-
-                    return (
-                      <tr key={p.param_key} className="align-top hover:bg-slate-50/70 dark:hover:bg-slate-850/40">
-                        <td className="px-4 py-3">
-                          <div className="font-medium text-slate-900 dark:text-white">
-                            {label}
-                            {p.is_required ? <span className="text-rose-500 mr-1">*</span> : null}
-                          </div>
-                          {p.help_text ? <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">{p.help_text}</div> : null}
-                        </td>
-                        <td className="px-4 py-3 min-w-[260px]">
-                          {p.data_type === 'dropdown' ? (
-                            <select
-                              value={value ?? ''}
-                              onChange={(e) => setValuesByKey((prev) => ({ ...prev, [p.param_key]: e.target.value }))}
-                              disabled={valuesDisabled}
-                              className={commonInputClass}
-                            >
-                              <option value="">—</option>
-                              {(Array.isArray(p.allowed_values) ? p.allowed_values : []).map((v: any) => (
-                                <option key={String(v)} value={String(v)}>
-                                  {String(v)}
-                                </option>
-                              ))}
-                            </select>
-                          ) : p.data_type === 'multi_select' ? (
-                            <select
-                              multiple
-                              value={Array.isArray(value) ? value : []}
-                              onChange={(e) =>
-                                setValuesByKey((prev) => ({
-                                  ...prev,
-                                  [p.param_key]: Array.from(e.target.selectedOptions).map((o) => o.value),
-                                }))
-                              }
-                              disabled={valuesDisabled}
-                              className={commonInputClass}
-                            >
-                              {(Array.isArray(p.allowed_values) ? p.allowed_values : []).map((v: any) => (
-                                <option key={String(v)} value={String(v)}>
-                                  {String(v)}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type={p.data_type === 'number' ? 'number' : p.data_type === 'date' ? 'date' : p.data_type === 'time' ? 'time' : 'text'}
-                              value={value ?? ''}
-                              onChange={(e) => setValuesByKey((prev) => ({ ...prev, [p.param_key]: e.target.value }))}
-                              disabled={valuesDisabled}
-                              className={commonInputClass}
-                              step={p.data_type === 'number' ? 'any' : undefined}
-                              min={p.data_type === 'number' ? (p.min_value ?? undefined) : undefined}
-                              max={p.data_type === 'number' ? (p.max_value ?? undefined) : undefined}
-                            />
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-slate-700 dark:text-slate-200">{p.unit || '—'}</td>
-                        <td className="px-4 py-3 text-slate-700 dark:text-slate-200">{formatParamSpec(rule, p)}</td>
-                        <td className="px-4 py-3">
-                          {evaluation ? <ValidationMessage result={evaluation.evaluation_result} message_ar={evaluation.message_ar} /> : <span className="text-slate-500">—</span>}
-                        </td>
-                      </tr>
-                    );
-                  })}
-
-                {paramsSnapshot.length === 0 ? (
-                  <tr>
-                    <td className="px-4 py-10 text-center text-slate-600 dark:text-slate-400" colSpan={5}>
-                      لا توجد معاملات في Snapshot لهذا الفحص.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
         <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-6 space-y-3">
           <div className="text-sm font-semibold text-slate-900 dark:text-white">ملاحظات</div>
           <textarea
             className="w-full min-h-[100px] rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2 text-sm dark:bg-slate-900/30 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
             value={localNotes}
             onChange={(e) => setLocalNotes(e.target.value)}
+            onBlur={async () => {
+              if (!isEditable) return;
+              await saveRunNotes(false);
+            }}
             disabled={!isEditable}
           />
         </div>
 
-        {runData.status === 'completed' ? (
-          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-6 space-y-4">
-            <div className="text-sm font-semibold text-slate-900 dark:text-white">اعتماد QA</div>
-            <div className="flex items-center gap-2">
-              <Button
-                onClick={() => approveRun.mutate({ run_id: runData.id, notes: 'تم الاعتماد' })}
-                isLoading={approveRun.isPending}
-              >
-                اعتماد
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => {
-                  const reason = window.prompt('سبب الرفض؟') || '';
-                  if (!reason.trim()) return;
-                  rejectRun.mutate({ run_id: runData.id, reason });
-                }}
-                isLoading={rejectRun.isPending}
-              >
-                رفض
-              </Button>
-            </div>
-          </div>
-        ) : null}
       </div>
     </div>
   );

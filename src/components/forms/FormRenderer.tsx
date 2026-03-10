@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
 
@@ -38,14 +38,39 @@ const isDateValueInvalid = (val: string, format: string, min?: string | number, 
 
     return null;
 };
+
+const toFiniteNumber = (value: unknown): number | undefined => {
+    if (value === null || value === undefined || value === '') return undefined;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+};
+
 import type { FormSection, FormTemplate, Table, TableParameter } from '../../types';
 import { cn, calculateStats, isInRange } from '../../utils';
+import {
+    buildSideHeaderRenderModel,
+    expandSideHeaderRowsToMatrix,
+    getCustomColumnsForRendering,
+    getCustomGridSettingsForRendering,
+    getCustomHeaderRowsForRendering,
+    getCustomBoldColumnSeparatorsForRendering,
+    getCustomBoldRowSeparatorsForRendering,
+    getCustomSideHeaderLabelsForRendering,
+    getCustomSideHeaderTargetsForRendering,
+    getCustomSideHeaderRowsForRendering,
+    getCustomLayoutForRendering,
+    resolveCustomCellDisplayValue,
+    resolveCustomCellValidation,
+    resolveCustomCellType,
+} from '../../utils/customTableV2';
 import { evaluateExpression } from '../../utils/FormulaEngine';
 import { calculateTare1, calculateTare2, validateColumn, getAQLLimits } from '../../utils/tareCalculations';
 import { useToastStore } from '../../store/toastStore';
 import RecipeTraceabilityTable from '../tables/RecipeTraceabilityTable';
 import { variableService } from '../../services/variableService';
 import { supabase } from '../../config/supabase';
+import type { DocumentVariableSnapshot } from '../../utils/documentVariableBindings';
+import { resolveDocumentVariableDisplayValue } from '../../utils/documentVariableBindings';
 
 export interface FormTableCellChange {
     rowIndex: number;
@@ -70,6 +95,7 @@ interface FormRendererProps {
     tableNotes?: Record<string, string>;
     onStoppedTimesChange?: (groupId: string, stoppedTimes: string[]) => void;
     stoppedTimesByGroup?: Record<string, string[]>;
+    boundGlobalVariables?: Record<string, string | number>;
     template: FormTemplate;
     inspectionStartTime?: string;
     shiftDuration?: number;
@@ -100,6 +126,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
     tableNotes = {},
     onStoppedTimesChange,
     stoppedTimesByGroup = {},
+    boundGlobalVariables = undefined,
     template: _template,
     inspectionStartTime = '08:00',
     shiftDuration = 8,
@@ -115,6 +142,14 @@ const FormRenderer: React.FC<FormRendererProps> = ({
     const [isMobileViewport, setIsMobileViewport] = useState(false);
     const [mobileColumnStartByTable, setMobileColumnStartByTable] = useState<Record<string, number>>({});
     const [userDirectoryEmployees, setUserDirectoryEmployees] = useState<UserDirectoryEmployee[]>([]);
+    const [activeFormulaCell, setActiveFormulaCell] = useState<{
+        tableId: string;
+        row: number;
+        col: number;
+        selectionStart: number;
+        selectionEnd: number;
+    } | null>(null);
+    const formulaInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
     useEffect(() => {
         if (!externalChangeSignal) {
@@ -135,8 +170,23 @@ const FormRenderer: React.FC<FormRendererProps> = ({
         return () => clearTimeout(timer);
     }, [externalChangeSignal, section.id]);
 
-    // Fetch global variables on mount
     useEffect(() => {
+        setActiveFormulaCell(null);
+    }, [section.id]);
+
+    // Prefer frozen variables snapshot (from report creation); otherwise fetch live globals.
+    useEffect(() => {
+        if (boundGlobalVariables !== undefined) {
+            const varsMap = Object.entries(boundGlobalVariables).reduce((acc, [name, value]) => {
+                const numVal = Number(value);
+                acc[name] = Number.isFinite(numVal) ? numVal : value;
+                return acc;
+            }, {} as Record<string, any>);
+
+            setGlobalVariables(varsMap);
+            return;
+        }
+
         const fetchVariables = async () => {
             try {
                 const vars = await variableService.getVariables();
@@ -152,7 +202,31 @@ const FormRenderer: React.FC<FormRendererProps> = ({
             }
         };
         fetchVariables();
-    }, []);
+    }, [boundGlobalVariables]);
+
+    const globalVariableSnapshot = useMemo<DocumentVariableSnapshot>(() => {
+        return Object.entries(globalVariables || {}).reduce((acc, [name, value]) => {
+            const normalizedName = String(name || '').trim();
+            if (!normalizedName) return acc;
+            if (typeof value === 'number' && Number.isFinite(value)) {
+                acc[normalizedName] = value;
+                return acc;
+            }
+
+            const asText = String(value ?? '').trim();
+            if (!asText) return acc;
+            const parsed = toFiniteNumber(asText);
+            acc[normalizedName] = parsed !== undefined ? parsed : asText;
+            return acc;
+        }, {} as DocumentVariableSnapshot);
+    }, [globalVariables]);
+
+    const resolveBoundValueForDisplay = useCallback((rawValue: unknown): unknown => {
+        if (!globalVariableSnapshot || Object.keys(globalVariableSnapshot).length === 0) {
+            return rawValue;
+        }
+        return resolveDocumentVariableDisplayValue(rawValue, globalVariableSnapshot);
+    }, [globalVariableSnapshot]);
 
     useEffect(() => {
         let cancelled = false;
@@ -344,6 +418,17 @@ const FormRenderer: React.FC<FormRendererProps> = ({
         return headers;
     };
 
+    const toExcelColumnLabel = (index: number): string => {
+        let value = Math.max(0, Math.floor(Number(index) || 0)) + 1;
+        let result = '';
+        while (value > 0) {
+            const remainder = (value - 1) % 26;
+            result = String.fromCharCode(65 + remainder) + result;
+            value = Math.floor((value - 1) / 26);
+        }
+        return result || 'A';
+    };
+
     const getVisibleColumnIndexes = (tableId: string, totalColumns: number, windowSize: number) => {
         if (totalColumns <= 0) return [];
         const safeWindowSize = Math.max(1, windowSize);
@@ -468,9 +553,36 @@ const FormRenderer: React.FC<FormRendererProps> = ({
         tableId: string,
         rowIndex: number,
         colIndex: number,
-        options?: { min?: number | string; max?: number | string; step?: number; options?: string[]; disabled?: boolean; className?: string; onBlur?: () => void; format?: string }
+        options?: {
+            min?: number | string;
+            max?: number | string;
+            step?: number;
+            options?: string[];
+            disabled?: boolean;
+            className?: string;
+            onBlur?: () => void;
+            format?: string;
+            inputRef?: (el: HTMLInputElement | null) => void;
+            onInputFocus?: (event: React.FocusEvent<HTMLInputElement>) => void;
+            onInputBlur?: (event: React.FocusEvent<HTMLInputElement>) => void;
+            onInputSelect?: (event: React.SyntheticEvent<HTMLInputElement>) => void;
+            onInputKeyUp?: (event: React.KeyboardEvent<HTMLInputElement>) => void;
+        }
     ) => {
-        const { min, max, step, options: dropdownOptions, disabled, className = '', onBlur } = options || {};
+        const {
+            min,
+            max,
+            step,
+            options: dropdownOptions,
+            disabled,
+            className = '',
+            onBlur,
+            inputRef,
+            onInputFocus,
+            onInputBlur,
+            onInputSelect,
+            onInputKeyUp,
+        } = options || {};
 
         const isSelected = selectedTableId === tableId;
         const cellKey = `${tableId}-${rowIndex}-${colIndex}`;
@@ -501,23 +613,54 @@ const FormRenderer: React.FC<FormRendererProps> = ({
             },
             onClick: () => {
                 if (selectedTableId) setSelectedTableId(null);
-            }
+            },
+        };
+
+        const inputInteractionProps = {
+            onKeyUp: (e: React.KeyboardEvent<HTMLInputElement>) => {
+                onInputKeyUp?.(e);
+            },
+            onSelect: (e: React.SyntheticEvent<HTMLInputElement>) => {
+                onInputSelect?.(e);
+            },
+            onFocusCapture: (e: React.FocusEvent<HTMLInputElement>) => {
+                onInputFocus?.(e);
+            },
+            onBlurCapture: (e: React.FocusEvent<HTMLInputElement>) => {
+                onInputBlur?.(e);
+            },
         };
 
         switch (cellType) {
             case 'text':
                 return (
                     <input
+                        ref={inputRef}
                         type="text"
                         value={value ?? ''}
                         onChange={(e) => onChange(e.target.value || undefined)}
+                        {...inputInteractionProps}
                         {...commonProps}
                     />
                 );
 
             case 'integer':
+                if (typeof value === 'string' && value.trim().startsWith('=')) {
+                    return (
+                        <input
+                            ref={inputRef}
+                            type="text"
+                            value={value ?? ''}
+                            onChange={(e) => onChange(e.target.value || undefined)}
+                            dir="ltr"
+                            {...inputInteractionProps}
+                            {...commonProps}
+                        />
+                    );
+                }
                 return (
                     <input
+                        ref={inputRef}
                         type="number"
                         value={value ?? ''}
                         onChange={(e) => onChange(e.target.value ? parseInt(e.target.value) : undefined)}
@@ -525,13 +668,28 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                         min={min}
                         max={max}
                         step={step ?? "1"}
+                        {...inputInteractionProps}
                         {...commonProps}
                     />
                 );
 
             case 'decimal':
+                if (typeof value === 'string' && value.trim().startsWith('=')) {
+                    return (
+                        <input
+                            ref={inputRef}
+                            type="text"
+                            value={value ?? ''}
+                            onChange={(e) => onChange(e.target.value || undefined)}
+                            dir="ltr"
+                            {...inputInteractionProps}
+                            {...commonProps}
+                        />
+                    );
+                }
                 return (
                     <input
+                        ref={inputRef}
                         type="number"
                         value={value ?? ''}
                         onChange={(e) => onChange(e.target.value ? parseFloat(e.target.value) : undefined)}
@@ -539,6 +697,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                         min={min}
                         max={max}
                         step={step ?? "0.01"}
+                        {...inputInteractionProps}
                         {...commonProps}
                     />
                 );
@@ -603,6 +762,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                             onBlur={handleBlur}
                             placeholder={formatString}
                             dir="ltr"
+                            {...inputInteractionProps}
                             {...commonProps}
                         />
                     );
@@ -614,6 +774,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                         min={options?.min?.toString()}
                         max={options?.max?.toString()}
                         onChange={(e) => onChange(e.target.value || undefined)}
+                        {...inputInteractionProps}
                         {...commonProps}
                     />
                 );
@@ -664,6 +825,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                             onBlur={handleBlur}
                             placeholder={formatString}
                             dir="ltr"
+                            {...inputInteractionProps}
                             {...commonProps}
                         />
                     );
@@ -675,6 +837,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                         min={options?.min?.toString()}
                         max={options?.max?.toString()}
                         onChange={(e) => onChange(e.target.value || undefined)}
+                        {...inputInteractionProps}
                         {...commonProps}
                     />
                 );
@@ -741,6 +904,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                             onBlur={handleBlur}
                             placeholder={formatString}
                             dir="ltr"
+                            {...inputInteractionProps}
                             {...commonProps}
                         />
                     );
@@ -752,6 +916,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                         min={options?.min?.toString()}
                         max={options?.max?.toString()}
                         onChange={(e) => onChange(e.target.value || undefined)}
+                        {...inputInteractionProps}
                         {...commonProps}
                     />
                 );
@@ -828,56 +993,56 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                 const images = Array.isArray(value) ? value : (value ? [value] : []);
 
                 return (
-                    <div className="flex flex-wrap items-center gap-4 p-2 w-full min-w-[400px] min-h-[100px]">
+                    <div className="w-full h-full min-h-[40px] p-1 space-y-1">
                         {images.map((img: string, idx: number) => (
-                            <div key={idx} className="relative group w-96 h-12 flex items-center justify-center border border-gray-200 rounded bg-white dark:bg-gray-800 overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                            <div key={idx} className="relative group w-full h-16 border border-gray-200 rounded bg-white dark:bg-gray-800 overflow-hidden">
                                 <img
                                     src={img}
                                     alt={`Uploaded ${idx}`}
-                                    className="w-full h-full object-cover"
+                                    className="w-full h-full object-contain"
                                 />
-                                <button
-                                    type="button"
-                                    className="absolute bg-red-500 text-white rounded-full p-1 -top-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10"
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        const newImages = images.filter((_, i) => i !== idx);
-                                        if (onChange) onChange(newImages.length > 0 ? newImages : undefined);
-                                    }}
-                                    title="حذف الصورة"
-                                >
-                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                                </button>
+                                {!disabled && (
+                                    <button
+                                        type="button"
+                                        className="absolute bg-red-500 text-white rounded-full p-1 -top-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            const newImages = images.filter((_, i) => i !== idx);
+                                            if (onChange) onChange(newImages.length > 0 ? newImages : undefined);
+                                        }}
+                                        title="حذف الصورة"
+                                    >
+                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                    </button>
+                                )}
                             </div>
                         ))}
 
-                        <label className="flex flex-row items-center justify-center gap-2 w-96 h-12 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-                            <span className="text-gray-400 text-xl font-bold">+</span>
-                            <span className="text-gray-400 text-xs text-center">
-                                إضافة صورة
-                                <span className="block text-[8px] text-gray-300">(1:8 Strip)</span>
-                            </span>
-                            <input
-                                type="file"
-                                accept="image/*"
-                                className="hidden"
-                                multiple
-                                onChange={(e) => {
-                                    const files = Array.from(e.target.files || []);
-                                    if (files.length > 0) {
-                                        Promise.all(files.map(file => new Promise<string>((resolve) => {
-                                            const reader = new FileReader();
-                                            reader.onloadend = () => resolve(reader.result as string);
-                                            reader.readAsDataURL(file);
-                                        }))).then(newDataUrls => {
-                                            if (onChange) onChange([...images, ...newDataUrls]);
-                                        });
-                                    }
-                                    // Reset input
-                                    e.target.value = '';
-                                }}
-                            />
-                        </label>
+                        {!disabled && (
+                            <label className="flex items-center justify-center gap-2 w-full h-10 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+                                <span className="text-gray-400 text-lg font-bold">+</span>
+                                <span className="text-gray-500 text-xs text-center">إضافة صورة</span>
+                                <input
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    multiple
+                                    onChange={(e) => {
+                                        const files = Array.from(e.target.files || []);
+                                        if (files.length > 0) {
+                                            Promise.all(files.map(file => new Promise<string>((resolve) => {
+                                                const reader = new FileReader();
+                                                reader.onloadend = () => resolve(reader.result as string);
+                                                reader.readAsDataURL(file);
+                                            }))).then(newDataUrls => {
+                                                if (onChange) onChange([...images, ...newDataUrls]);
+                                            });
+                                        }
+                                        e.target.value = '';
+                                    }}
+                                />
+                            </label>
+                        )}
                     </div>
                 );
 
@@ -895,9 +1060,11 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                 // Fallback to text for unknown types
                 return (
                     <input
+                        ref={inputRef}
                         type="text"
                         value={value ?? ''}
                         onChange={(e) => onChange(e.target.value || undefined)}
+                        {...inputInteractionProps}
                         {...commonProps}
                     />
                 );
@@ -1235,6 +1402,18 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                             }
 
                             const stats = calculateStats(numericValues);
+                            const resolvedParamMin = resolveBoundValueForDisplay(param.min);
+                            const resolvedParamMax = resolveBoundValueForDisplay(param.max);
+                            const resolvedParamStep = resolveBoundValueForDisplay(param.step);
+                            const resolvedParamLimits = resolveBoundValueForDisplay(param.limits);
+                            const hasResolvedRangeLimits =
+                                resolvedParamMin !== undefined &&
+                                resolvedParamMin !== '' &&
+                                resolvedParamMax !== undefined &&
+                                resolvedParamMax !== '';
+                            const resolvedParamMinNumber = toFiniteNumber(resolvedParamMin);
+                            const resolvedParamMaxNumber = toFiniteNumber(resolvedParamMax);
+                            const resolvedParamStepNumber = toFiniteNumber(resolvedParamStep);
 
                             return (
                                 <tr key={paramIndex} className="hover:bg-gray-50 dark:hover:bg-gray-750">
@@ -1268,9 +1447,11 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                         'border border-gray-300 dark:border-gray-600 text-center text-gray-600 dark:text-gray-400',
                                         isMobileViewport ? 'px-2 py-2 text-[11px] whitespace-normal break-words leading-tight' : 'px-3 py-3 text-xs whitespace-nowrap'
                                     )}>
-                                        {param.min !== undefined && param.max !== undefined
-                                            ? `${param.min} - ${param.max}`
-                                            : param.limits || '-'}
+                                        {hasResolvedRangeLimits
+                                            ? `${resolvedParamMin} - ${resolvedParamMax}`
+                                            : (resolvedParamLimits !== undefined && resolvedParamLimits !== ''
+                                                ? String(resolvedParamLimits)
+                                                : '-')}
                                         {param.unit && (
                                             <span className="text-gray-500 text-xs mr-1"> ({param.unit})</span>
                                         )}
@@ -1291,11 +1472,20 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                         }
 
                                         let isValid = true;
-                                        if (param.min !== undefined && param.max !== undefined && displayValue !== undefined) {
-                                            if (typeof displayValue === 'number') {
-                                                isValid = isInRange(displayValue, Number(param.min), Number(param.max));
+                                        if (hasResolvedRangeLimits && displayValue !== undefined) {
+                                            if (
+                                                typeof displayValue === 'number' &&
+                                                resolvedParamMinNumber !== undefined &&
+                                                resolvedParamMaxNumber !== undefined
+                                            ) {
+                                                isValid = isInRange(displayValue, resolvedParamMinNumber, resolvedParamMaxNumber);
                                             } else if (typeof displayValue === 'string' && (param.type === 'date' || param.type === 'time' || param.type === 'datetime') && param.format) {
-                                                isValid = !isDateValueInvalid(displayValue, param.format, param.min, param.max);
+                                                isValid = !isDateValueInvalid(
+                                                    displayValue,
+                                                    param.format,
+                                                    resolvedParamMin as string | number | undefined,
+                                                    resolvedParamMax as string | number | undefined
+                                                );
                                             }
                                         }
 
@@ -1365,13 +1555,13 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                                         paramIndex,
                                                         colIndex,
                                                         {
-                                                            min: param.min,
-                                                            max: param.max,
+                                                            min: resolvedParamMin as number | string | undefined,
+                                                            max: resolvedParamMax as number | string | undefined,
                                                             options: param.type === 'user-directory'
                                                                 ? getUserDirectoryOptions(param.user_directory_department_id, param.user_directory_role_id)
                                                                 : param.options,
                                                             format: param.format,
-                                                            step: typeof param.step === 'string' ? parseFloat(param.step) : param.step,
+                                                            step: resolvedParamStepNumber,
                                                             className: (!isValid || isAbcViolation) ? 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300' : ''
                                                         }
                                                     )
@@ -1471,19 +1661,28 @@ const FormRenderer: React.FC<FormRendererProps> = ({
         const shouldShowMobileTimePager = isMobileViewport && columns > visibleTimeIndexes.length;
 
         // Get Tare calculation settings from template basic_info
-        const standardWeight = template.basic_info?.standard_weight;
-        const aqlLevel = template.basic_info?.aql_level || '1.0';
-        const showTare1 = table.features?.calculate_tare1 && standardWeight;
-        const showTare2 = table.features?.calculate_tare2 && standardWeight;
+        const resolvedStandardWeight = resolveBoundValueForDisplay(template.basic_info?.standard_weight);
+        const standardWeight = toFiniteNumber(resolvedStandardWeight);
+        const aqlLevel = String(resolveBoundValueForDisplay(template.basic_info?.aql_level) || '1.0');
+        const resolvedNumberConstraintMinRaw = resolveBoundValueForDisplay(table.number_constraints?.min);
+        const resolvedNumberConstraintMaxRaw = resolveBoundValueForDisplay(table.number_constraints?.max);
+        const resolvedNumberConstraintStepRaw = resolveBoundValueForDisplay(table.number_constraints?.step);
+        const resolvedNumberConstraintMin = toFiniteNumber(resolvedNumberConstraintMinRaw);
+        const resolvedNumberConstraintMax = toFiniteNumber(resolvedNumberConstraintMaxRaw);
+        const resolvedNumberConstraintStep = toFiniteNumber(resolvedNumberConstraintStepRaw);
+        const resolvedMaxStdRaw = resolveBoundValueForDisplay(table.max_std);
+        const resolvedMaxStd = toFiniteNumber(resolvedMaxStdRaw);
+        const showTare1 = Boolean(table.features?.calculate_tare1) && standardWeight !== undefined;
+        const showTare2 = Boolean(table.features?.calculate_tare2) && standardWeight !== undefined;
         const showAverage = table.features?.calculate_average;
         const showStd = table.features?.calculate_std;
 
         // Calculate Tare values
-        const tare1Value = standardWeight ? calculateTare1(standardWeight) : 0;
-        const tare2Value = standardWeight ? calculateTare2(standardWeight) : 0;
+        const tare1Value = standardWeight !== undefined ? calculateTare1(standardWeight) : 0;
+        const tare2Value = standardWeight !== undefined ? calculateTare2(standardWeight) : 0;
 
         // Get AQL limits to show acceptance number
-        const aqlLimits = standardWeight ? getAQLLimits(aqlLevel, sampleSize) : { acceptance: 0, rejection: 1 };
+        const aqlLimits = standardWeight !== undefined ? getAQLLimits(aqlLevel, sampleSize) : { acceptance: 0, rejection: 1 };
 
         // Get stopped times for this table's group
         const linkedGroup = table.linked_stop_group;
@@ -1531,7 +1730,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                 columnWeights.push(val !== undefined && val !== '' ? parseFloat(val) : undefined);
             }
 
-            if (!standardWeight) {
+            if (standardWeight === undefined) {
                 return { status: 'مقبول' as const, reason: 'لا يوجد وزن قياسي', isEmpty: false };
             }
 
@@ -1706,21 +1905,21 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                                         {
                                                             min: (() => {
                                                                 const constraints = table.number_constraints;
-                                                                let minVal = constraints?.min;
+                                                                let minVal = resolvedNumberConstraintMin;
                                                                 if (constraints?.allow_negative === false) {
                                                                     minVal = minVal !== undefined ? Math.max(0, minVal) : 0;
                                                                 }
                                                                 return minVal;
                                                             })(),
-                                                            max: table.number_constraints?.max,
-                                                            step: table.number_constraints?.step,
+                                                            max: resolvedNumberConstraintMax,
+                                                            step: resolvedNumberConstraintStep,
                                                             onBlur: () => {
                                                                 const constraints = table.number_constraints;
-                                                                let min = constraints?.min;
+                                                                let min = resolvedNumberConstraintMin;
                                                                 if (constraints?.allow_negative === false) {
                                                                     min = min !== undefined ? Math.max(0, min) : 0;
                                                                 }
-                                                                const max = constraints?.max;
+                                                                const max = resolvedNumberConstraintMax;
                                                                 const currentValue = tableData?.[rowIndex]?.[colIndex];
                                                                 if (currentValue !== undefined && currentValue !== null && currentValue !== '') {
                                                                     const numValue = typeof currentValue === 'number' ? currentValue : parseFloat(currentValue);
@@ -1765,7 +1964,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                 <td className="border border-gray-300 dark:border-gray-600 px-2 bg-gray-100 dark:bg-gray-800">
                                     <div className="flex items-center justify-center gap-1 h-[32px]">
                                         <span className="text-xs font-bold text-blue-700 dark:text-blue-300">AVG</span>
-                                        {standardWeight && (
+                                        {standardWeight !== undefined && (
                                             <span className="text-xs text-blue-600 dark:text-blue-400">
                                                 (≥{standardWeight})
                                             </span>
@@ -1775,7 +1974,10 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                 {visibleTimeIndexes.map((colIndex) => {
                                     const stopped = isColumnStopped(colIndex);
                                     const average = !stopped ? getColumnAverage(colIndex) : null;
-                                    const isBelowStandard = average !== null && standardWeight && average < standardWeight;
+                                    const isBelowStandard =
+                                        average !== null &&
+                                        standardWeight !== undefined &&
+                                        average < standardWeight;
 
                                     return (
                                         <td
@@ -1814,9 +2016,9 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                 <td className="border border-gray-300 dark:border-gray-600 px-2 bg-gray-100 dark:bg-gray-800">
                                     <div className="flex items-center justify-center gap-1 h-[32px]">
                                         <span className="text-xs font-bold text-blue-700 dark:text-blue-300">STD</span>
-                                        {table.max_std && (
+                                        {resolvedMaxStd !== undefined && (
                                             <span className="text-xs text-blue-600 dark:text-blue-400">
-                                                (≤{table.max_std})
+                                                (≤{resolvedMaxStdRaw as string | number})
                                             </span>
                                         )}
                                     </div>
@@ -1824,7 +2026,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                 {visibleTimeIndexes.map((colIndex) => {
                                     const stopped = isColumnStopped(colIndex);
                                     const std = !stopped ? getColumnSTD(colIndex) : null;
-                                    const maxStd = table.max_std;
+                                    const maxStd = resolvedMaxStd;
 
                                     return (
                                         <td
@@ -1832,9 +2034,9 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                             className={cn(
                                                 'border border-gray-300 dark:border-gray-600 px-2',
                                                 stopped && 'bg-orange-100 dark:bg-orange-900',
-                                                !stopped && std !== null && maxStd && std > maxStd && 'bg-red-100 dark:bg-red-900',
-                                                !stopped && std !== null && maxStd && std <= maxStd && 'bg-green-100 dark:bg-green-900',
-                                                !stopped && std !== null && !maxStd && 'bg-blue-50 dark:bg-blue-900/30'
+                                                !stopped && std !== null && maxStd !== undefined && std > maxStd && 'bg-red-100 dark:bg-red-900',
+                                                !stopped && std !== null && maxStd !== undefined && std <= maxStd && 'bg-green-100 dark:bg-green-900',
+                                                !stopped && std !== null && maxStd === undefined && 'bg-blue-50 dark:bg-blue-900/30'
                                             )}
                                         >
                                             <div className="flex items-center justify-center h-[32px]">
@@ -2009,7 +2211,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
     };
 
     const normalizeCustomHeaderRows = (table: Table) => {
-        const rawRows = Array.isArray(table.header_rows) ? table.header_rows : [];
+        const rawRows = getCustomHeaderRowsForRendering(table);
         const normalizedRows = rawRows
             .filter((row) => Array.isArray(row) && row.length > 0)
             .map((row) =>
@@ -2028,13 +2230,25 @@ const FormRenderer: React.FC<FormRendererProps> = ({
     };
 
     const renderCustomTable = (table: Table, tableData: any[][]) => {
-        const columns = table.columns || [];
-        const baseRows = table.rows || 10;
-        const allowDynamicRows = table.allowDynamicRows || false;
-        const showRowNumbers = table.show_row_numbers !== false;
-        const rowHeaderLabel = table.row_header_label || '#';
+        const columns = getCustomColumnsForRendering(table);
+        const gridSettings = getCustomGridSettingsForRendering(table);
+        const layoutSettings = getCustomLayoutForRendering(table);
+        const customMeta = (table.schema_v2?.meta as Record<string, unknown>) || {};
+        const useTimeHeader = Boolean(customMeta.time_header_enabled);
+        const intervalMinutes = Math.max(1, Number(table.inspection_period || 30));
+        const generatedTimeHeaders = useTimeHeader
+            ? generateTimeHeaders(inspectionStartTime, shiftDuration, intervalMinutes)
+            : [];
+        const getCustomColumnLabel = (colIndex: number) =>
+            generatedTimeHeaders[colIndex] || columns[colIndex]?.label || `#${colIndex + 1}`;
+        const baseRows = gridSettings.rows || 10;
+        const allowDynamicRows = gridSettings.allowDynamicRows || false;
+        const showRowNumbers = gridSettings.showRowNumbers !== false;
+        const rowHeaderLabel = gridSettings.rowHeaderLabel || '#';
         const headerRows = normalizeCustomHeaderRows(table);
-        const hasMultiHeader = headerRows.length > 0;
+        const rawSideHeaderRows = getCustomSideHeaderRowsForRendering(table);
+        const showTopHeader = layoutSettings.topHeader !== false;
+        const hasMultiHeader = showTopHeader && headerRows.length > 0 && !useTimeHeader;
         const visibleCustomColumnIndexes = getVisibleColumnIndexes(
             table.id,
             columns.length,
@@ -2046,11 +2260,278 @@ const FormRenderer: React.FC<FormRendererProps> = ({
 
         // Ensure tableData is always an array
         const safeTableData = Array.isArray(tableData) ? tableData : [];
+        const buildFormulaCellKey = (rowIndex: number, colIndex: number) => `${table.id}:${rowIndex}:${colIndex}`;
+        const isInlineExcelFormula = (cellValue: unknown): cellValue is string =>
+            typeof cellValue === 'string' && cellValue.trim().startsWith('=');
+
+        const updateActiveFormulaSelectionFromInput = (
+            rowIndex: number,
+            colIndex: number,
+            input: HTMLInputElement | null
+        ) => {
+            if (!input) return;
+            const selectionStart = input.selectionStart ?? input.value.length;
+            const selectionEnd = input.selectionEnd ?? selectionStart;
+            setActiveFormulaCell((previous) => {
+                if (!previous) return previous;
+                if (previous.tableId !== table.id || previous.row !== rowIndex || previous.col !== colIndex) {
+                    return previous;
+                }
+                return {
+                    ...previous,
+                    selectionStart,
+                    selectionEnd,
+                };
+            });
+        };
+
+        const handleCustomCellValueChange = (
+            rowIndex: number,
+            colIndex: number,
+            newValue: any,
+            cursorPosition?: number | null
+        ) => {
+            emitCellChange(
+                table.id,
+                safeTableData,
+                rowIndex,
+                colIndex,
+                newValue,
+                columns.length
+            );
+
+            if (readOnly) return;
+
+            const textValue = newValue === undefined || newValue === null ? '' : String(newValue);
+            if (isInlineExcelFormula(textValue)) {
+                const safeCaret = Math.max(
+                    0,
+                    Math.min(
+                        Number.isFinite(Number(cursorPosition)) ? Number(cursorPosition) : textValue.length,
+                        textValue.length
+                    )
+                );
+                setActiveFormulaCell({
+                    tableId: table.id,
+                    row: rowIndex,
+                    col: colIndex,
+                    selectionStart: safeCaret,
+                    selectionEnd: safeCaret,
+                });
+            } else {
+                setActiveFormulaCell((previous) =>
+                    previous &&
+                    previous.tableId === table.id &&
+                    previous.row === rowIndex &&
+                    previous.col === colIndex
+                        ? null
+                        : previous
+                );
+            }
+        };
+
+        const insertReferenceIntoActiveFormula = (clickedRow: number, clickedCol: number) => {
+            if (readOnly || !activeFormulaCell) return false;
+            if (activeFormulaCell.tableId !== table.id) return false;
+            if (activeFormulaCell.row === clickedRow && activeFormulaCell.col === clickedCol) return false;
+
+            const sourceRawValue = safeTableData?.[activeFormulaCell.row]?.[activeFormulaCell.col];
+            const sourceText = sourceRawValue === undefined || sourceRawValue === null ? '' : String(sourceRawValue);
+            if (!isInlineExcelFormula(sourceText)) {
+                setActiveFormulaCell(null);
+                return false;
+            }
+
+            const reference = `${toExcelColumnLabel(clickedCol)}${clickedRow + 1}`;
+            const safeStart = Math.max(0, Math.min(activeFormulaCell.selectionStart, sourceText.length));
+            const safeEnd = Math.max(safeStart, Math.min(activeFormulaCell.selectionEnd, sourceText.length));
+            const nextValue = `${sourceText.slice(0, safeStart)}${reference}${sourceText.slice(safeEnd)}`;
+            const nextCaret = safeStart + reference.length;
+
+            emitCellChange(
+                table.id,
+                safeTableData,
+                activeFormulaCell.row,
+                activeFormulaCell.col,
+                nextValue,
+                columns.length
+            );
+
+            setActiveFormulaCell({
+                ...activeFormulaCell,
+                selectionStart: nextCaret,
+                selectionEnd: nextCaret,
+            });
+
+            const activeKey = buildFormulaCellKey(activeFormulaCell.row, activeFormulaCell.col);
+            requestAnimationFrame(() => {
+                const input = formulaInputRefs.current[activeKey];
+                if (!input) return;
+                input.focus();
+                input.setSelectionRange(nextCaret, nextCaret);
+            });
+
+            return true;
+        };
+
+        const handleCustomCellMouseDown = (
+            event: React.MouseEvent,
+            rowIndex: number,
+            colIndex: number
+        ) => {
+            const inserted = insertReferenceIntoActiveFormula(rowIndex, colIndex);
+            if (inserted) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+        };
+
+        const isActiveFormulaEditorCell = (rowIndex: number, colIndex: number) =>
+            !!activeFormulaCell &&
+            activeFormulaCell.tableId === table.id &&
+            activeFormulaCell.row === rowIndex &&
+            activeFormulaCell.col === colIndex;
+
+        const getFormulaInputBindings = (rowIndex: number, colIndex: number, baseClassName = '') => ({
+            inputRef: (el: HTMLInputElement | null) => {
+                const key = buildFormulaCellKey(rowIndex, colIndex);
+                formulaInputRefs.current[key] = el;
+            },
+            onInputFocus: (event: React.FocusEvent<HTMLInputElement>) => {
+                if (readOnly) return;
+                const rawText = event.currentTarget.value || '';
+                if (!isInlineExcelFormula(rawText)) return;
+                const selectionStart = event.currentTarget.selectionStart ?? rawText.length;
+                const selectionEnd = event.currentTarget.selectionEnd ?? selectionStart;
+                setActiveFormulaCell({
+                    tableId: table.id,
+                    row: rowIndex,
+                    col: colIndex,
+                    selectionStart,
+                    selectionEnd,
+                });
+            },
+            onInputBlur: () => {
+                setActiveFormulaCell((previous) =>
+                    previous &&
+                    previous.tableId === table.id &&
+                    previous.row === rowIndex &&
+                    previous.col === colIndex
+                        ? null
+                        : previous
+                );
+            },
+            onInputSelect: (event: React.SyntheticEvent<HTMLInputElement>) => {
+                updateActiveFormulaSelectionFromInput(rowIndex, colIndex, event.currentTarget);
+            },
+            onInputKeyUp: (event: React.KeyboardEvent<HTMLInputElement>) => {
+                updateActiveFormulaSelectionFromInput(rowIndex, colIndex, event.currentTarget);
+            },
+            className: cn(
+                baseClassName,
+                isActiveFormulaEditorCell(rowIndex, colIndex) && 'ring-2 ring-blue-400 dark:ring-blue-500'
+            ),
+        });
+
+        const getCustomCellRenderState = (rowIndex: number, colIndex: number, column: any) => {
+            const effectiveCellType = resolveCustomCellType(
+                table,
+                rowIndex,
+                colIndex,
+                column.type || 'text'
+            );
+            const resolvedValidation = resolveCustomCellValidation(
+                table,
+                rowIndex,
+                colIndex,
+                {
+                    min: column.min,
+                    max: column.max,
+                    options: column.options,
+                }
+            );
+            const resolvedValidationMin = resolveBoundValueForDisplay(resolvedValidation.min) as number | string | undefined;
+            const resolvedValidationMax = resolveBoundValueForDisplay(resolvedValidation.max) as number | string | undefined;
+            const resolvedValidationOptions = Array.isArray(resolvedValidation.options)
+                ? resolvedValidation.options.map((option) => String(resolveBoundValueForDisplay(option) ?? option))
+                : resolvedValidation.options;
+            const resolvedDisplay = resolveCustomCellDisplayValue(
+                table,
+                safeTableData,
+                rowIndex,
+                colIndex,
+                column.type || 'text',
+                column
+            );
+            const isFormulaCell = resolvedDisplay.isFormula;
+
+            return {
+                value: resolveBoundValueForDisplay(resolvedDisplay.value),
+                isFormula: isFormulaCell,
+                formula: isFormulaCell ? resolvedDisplay.formula : undefined,
+                effectiveCellType,
+                resolvedValidation: {
+                    ...resolvedValidation,
+                    min: resolvedValidationMin,
+                    max: resolvedValidationMax,
+                    options: resolvedValidationOptions,
+                },
+            };
+        };
 
         // Calculate actual rows based on mode
-        const actualRows = allowDynamicRows
+        const baseActualRows = allowDynamicRows
             ? Math.max(safeTableData.length, 1) // At least 1 row when dynamic
             : baseRows;
+        const sideHeaderModel = buildSideHeaderRenderModel(rawSideHeaderRows, baseActualRows);
+        const hasSideHeaders = layoutSettings.sideHeader && sideHeaderModel.columnCount > 0;
+        const sideHeaderColumnCount = hasSideHeaders ? sideHeaderModel.columnCount : 0;
+        const sideHeaderColumnLabels = hasSideHeaders
+            ? getCustomSideHeaderLabelsForRendering(table, sideHeaderColumnCount)
+            : [];
+        const sideHeaderRows = sideHeaderModel.rows;
+        const sideHeaderMatrix = hasSideHeaders
+            ? expandSideHeaderRowsToMatrix(sideHeaderRows, sideHeaderColumnCount)
+            : [];
+        const useDistributedSideHeaders = hasSideHeaders && !hasMultiHeader;
+        const sideHeaderTargets = useDistributedSideHeaders
+            ? getCustomSideHeaderTargetsForRendering(table, sideHeaderColumnCount, columns.length)
+            : [];
+        const sideHeaderIndexesByTarget = sideHeaderTargets.reduce<Record<number, number[]>>((acc, target, sideIndex) => {
+            const normalizedTarget = Math.max(0, Math.min(columns.length, Number(target) || 0));
+            if (!acc[normalizedTarget]) acc[normalizedTarget] = [];
+            acc[normalizedTarget].push(sideIndex);
+            return acc;
+        }, {});
+        const actualRows = Math.max(baseActualRows, sideHeaderRows.length);
+        const boldRowSeparators = getCustomBoldRowSeparatorsForRendering(table, actualRows);
+        const boldColumnSeparators = getCustomBoldColumnSeparatorsForRendering(table, columns.length);
+        const boldRowSeparatorSet = new Set(boldRowSeparators);
+        const boldColumnSeparatorSet = new Set(boldColumnSeparators);
+        const getColumnSeparatorStyle = (colIndex: number): React.CSSProperties | undefined => {
+            if (!boldColumnSeparatorSet.has(colIndex + 1)) return undefined;
+            if (layoutSettings.direction === 'rtl') {
+                return { borderLeftWidth: '3px', borderLeftStyle: 'double' };
+            }
+            return { borderRightWidth: '3px', borderRightStyle: 'double' };
+        };
+        const visibleColumnByIndex = new Map(
+            visibleCustomColumnIndexes.map((index) => [index, columns[index]] as const).filter((entry) => !!entry[1])
+        );
+        const getDataSeparatorStyle = (rowIndex: number, colIndex: number) => {
+            const style: React.CSSProperties = {};
+            const columnStyle = getColumnSeparatorStyle(colIndex);
+            if (columnStyle) Object.assign(style, columnStyle);
+            if (boldRowSeparatorSet.has(rowIndex + 1)) {
+                style.borderBottomWidth = '3px';
+                style.borderBottomStyle = 'double';
+            }
+            return Object.keys(style).length > 0 ? style : undefined;
+        };
+        const getRowSeparatorStyle = (rowIndex: number) =>
+            boldRowSeparatorSet.has(rowIndex + 1)
+                ? ({ borderBottomWidth: '3px', borderBottomStyle: 'double' } as const)
+                : undefined;
 
         // Fixed column widths for custom table
         const rowNumWidth = 50; // Row number column width
@@ -2076,11 +2557,18 @@ const FormRenderer: React.FC<FormRendererProps> = ({
             onChange(table.id, newData);
         };
 
+        const getSideHeaderValuesForRow = (rowIndex: number) => {
+            if (!hasSideHeaders) return [];
+            return Array.from({ length: sideHeaderColumnCount })
+                .map((_, sideIndex) => sideHeaderMatrix[rowIndex]?.[sideIndex]?.label || '')
+                .filter((label) => label.length > 0);
+        };
+
         const useMobileCardLayout = isMobileViewport;
 
         if (useMobileCardLayout) {
             return (
-                <div className="space-y-3" data-table-id={table.id}>
+                <div className="space-y-3" data-table-id={table.id} dir={layoutSettings.direction}>
                     {Array.from({ length: actualRows }).map((_, rowIndex) => (
                         <div
                             key={rowIndex}
@@ -2107,39 +2595,61 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                 )}
                             </div>
 
+                            {hasSideHeaders && (
+                                <div className="flex flex-wrap gap-1">
+                                    {getSideHeaderValuesForRow(rowIndex).map((label, sideIndex) => (
+                                        <span
+                                            key={`mobile-side-${rowIndex}-${sideIndex}`}
+                                            className="inline-flex items-center rounded-full border border-gray-200 dark:border-gray-700 px-2 py-0.5 text-[10px] text-gray-600 dark:text-gray-300"
+                                        >
+                                            {label}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+
                             <div className="space-y-2">
                                 {columns.map((column, colIndex) => {
-                                    const value = safeTableData?.[rowIndex]?.[colIndex];
+                                    const {
+                                        value,
+                                        isFormula,
+                                        formula,
+                                        effectiveCellType,
+                                        resolvedValidation,
+                                    } = getCustomCellRenderState(rowIndex, colIndex, column);
                                     return (
                                         <div key={column.key} className="space-y-1.5">
                                             <label className="text-[11px] font-medium text-gray-600 dark:text-gray-300">
-                                                {column.label}
+                                                {getCustomColumnLabel(colIndex)}
                                             </label>
-                                            <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden min-h-[40px]">
+                                            <div
+                                                className={cn(
+                                                    "rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden min-h-[40px]",
+                                                    isFormula && "bg-blue-50 dark:bg-blue-900/30"
+                                                )}
+                                                onMouseDown={(event) => handleCustomCellMouseDown(event, rowIndex, colIndex)}
+                                            >
                                                 {renderCellInput(
-                                                    column.type,
+                                                    effectiveCellType,
                                                     value,
                                                     (newValue) => {
-                                                        emitCellChange(
-                                                            table.id,
-                                                            safeTableData,
-                                                            rowIndex,
-                                                            colIndex,
-                                                            newValue,
-                                                            columns.length
-                                                        );
+                                                        handleCustomCellValueChange(rowIndex, colIndex, newValue);
                                                     },
                                                     table.id,
                                                     rowIndex,
                                                     colIndex,
                                                     {
-                                                        min: column.min,
-                                                        max: column.max,
-                                                        options: column.type === 'user-directory'
+                                                        min: resolvedValidation.min,
+                                                        max: resolvedValidation.max,
+                                                        options: effectiveCellType === 'user-directory'
                                                             ? getUserDirectoryOptions(column.user_directory_department_id, column.user_directory_role_id)
-                                                            : column.options,
+                                                            : resolvedValidation.options,
                                                         format: column.format,
-                                                        className: getColumnAlignClass(column.align)
+                                                        disabled: isFormula,
+                                                        ...getFormulaInputBindings(rowIndex, colIndex, cn(
+                                                            getColumnAlignClass(column.align),
+                                                            isFormula && 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-200 disabled:opacity-100 disabled:text-blue-700 dark:disabled:text-blue-200 disabled:bg-blue-50 dark:disabled:bg-blue-900/30 disabled:cursor-not-allowed'
+                                                        )),
                                                     }
                                                 )}
                                             </div>
@@ -2167,7 +2677,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
         }
 
         return (
-            <div className="space-y-2" data-table-id={table.id}>
+            <div className="space-y-2" data-table-id={table.id} dir={layoutSettings.direction}>
                 {shouldShowMobileCustomPager && (
                     <div className="print:hidden flex items-center justify-between gap-2 rounded-lg border border-gray-200 dark:border-gray-700 px-2 py-1.5 bg-gray-50 dark:bg-gray-800">
                         <button
@@ -2188,7 +2698,7 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                                 الأعمدة {firstVisibleCustomIndex + 1}-{lastVisibleCustomIndex + 1} من {columns.length}
                             </div>
                             <div className="text-[11px] text-gray-500 dark:text-gray-400">
-                                {(columns[firstVisibleCustomIndex]?.label ?? `#${firstVisibleCustomIndex + 1}`)} - {(columns[lastVisibleCustomIndex]?.label ?? `#${lastVisibleCustomIndex + 1}`)}
+                                {(getCustomColumnLabel(firstVisibleCustomIndex) ?? `#${firstVisibleCustomIndex + 1}`)} - {(getCustomColumnLabel(lastVisibleCustomIndex) ?? `#${lastVisibleCustomIndex + 1}`)}
                             </div>
                         </div>
                         <button
@@ -2212,133 +2722,322 @@ const FormRenderer: React.FC<FormRendererProps> = ({
                             {showRowNumbers && (
                                 <col style={{ width: `${rowNumWidth}px`, minWidth: `${rowNumWidth}px`, maxWidth: `${rowNumWidth}px` }} />
                             )}
-                            {visibleCustomColumnIndexes.map((colIndex) => {
-                                const colWidth = columns[colIndex]?.width || customColWidth;
-                                return (
-                                    <col
-                                        key={`colgroup-${colIndex}`}
-                                        style={{ width: `${colWidth}px`, minWidth: `${colWidth}px`, maxWidth: `${colWidth}px` }}
-                                    />
-                                );
-                            })}
+                            {useDistributedSideHeaders
+                                ? Array.from({ length: columns.length + 1 }).map((_, positionIndex) => (
+                                    <React.Fragment key={`custom-colgroup-pos-${positionIndex}`}>
+                                        {(sideHeaderIndexesByTarget[positionIndex] || []).map((sideIndex) => (
+                                            <col
+                                                key={`custom-side-col-${positionIndex}-${sideIndex}`}
+                                                style={{ width: '96px', minWidth: '96px', maxWidth: '96px' }}
+                                            />
+                                        ))}
+                                        {visibleColumnByIndex.has(positionIndex) && (
+                                            <col
+                                                key={`custom-col-${positionIndex}`}
+                                                style={{
+                                                    width: `${visibleColumnByIndex.get(positionIndex)?.width || customColWidth}px`,
+                                                    minWidth: `${visibleColumnByIndex.get(positionIndex)?.width || customColWidth}px`,
+                                                    maxWidth: `${visibleColumnByIndex.get(positionIndex)?.width || customColWidth}px`,
+                                                }}
+                                            />
+                                        )}
+                                    </React.Fragment>
+                                ))
+                                : (
+                                    <>
+                                        {hasSideHeaders &&
+                                            Array.from({ length: sideHeaderColumnCount }).map((_, sideIndex) => (
+                                                <col
+                                                    key={`side-col-${sideIndex}`}
+                                                    style={{ width: '96px', minWidth: '96px', maxWidth: '96px' }}
+                                                />
+                                            ))}
+                                        {visibleCustomColumnIndexes.map((colIndex) => {
+                                            const colWidth = columns[colIndex]?.width || customColWidth;
+                                            return (
+                                                <col
+                                                    key={`colgroup-${colIndex}`}
+                                                    style={{ width: `${colWidth}px`, minWidth: `${colWidth}px`, maxWidth: `${colWidth}px` }}
+                                                />
+                                            );
+                                        })}
+                                    </>
+                                )}
                             {allowDynamicRows && (
                                 <col style={{ width: `${actionColWidth}px`, minWidth: `${actionColWidth}px`, maxWidth: `${actionColWidth}px` }} />
                             )}
                         </colgroup>
-                        <thead>
-                            {hasMultiHeader ? (
-                                headerRows.map((headerRow, headerRowIndex) => (
-                                    <tr key={`header-row-${headerRowIndex}`} className="bg-gray-100 dark:bg-gray-700">
-                                        {showRowNumbers && headerRowIndex === 0 && (
-                                            <th
-                                                rowSpan={headerRows.length}
-                                                className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs font-medium"
-                                            >
+                        {showTopHeader && (
+                            <thead>
+                                {hasMultiHeader ? (
+                                    headerRows.map((headerRow, headerRowIndex) => (
+                                        <tr key={`header-row-${headerRowIndex}`} className="bg-gray-100 dark:bg-gray-700">
+                                            {showRowNumbers && headerRowIndex === 0 && (
+                                                <th
+                                                    rowSpan={headerRows.length}
+                                                    className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs font-medium"
+                                                >
+                                                    {rowHeaderLabel}
+                                                </th>
+                                            )}
+                                            {hasSideHeaders && headerRowIndex === 0 && (
+                                                <th
+                                                    rowSpan={headerRows.length}
+                                                    colSpan={sideHeaderColumnCount}
+                                                    className="border border-gray-300 dark:border-gray-600 px-2 py-2 text-xs font-medium text-center"
+                                                >
+                                                    الرأس الجانبي
+                                                </th>
+                                            )}
+                                            {headerRow.map((cell, cellIndex) => (
+                                                <th
+                                                    key={`header-cell-${headerRowIndex}-${cellIndex}`}
+                                                    colSpan={cell.col_span || 1}
+                                                    rowSpan={cell.row_span || 1}
+                                                    className={cn(
+                                                        'border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm font-medium',
+                                                        getColumnAlignClass(cell.align),
+                                                        cell.class_name
+                                                    )}
+                                                    style={{
+                                                        backgroundColor: cell.background_color || undefined,
+                                                        color: cell.text_color || undefined,
+                                                    }}
+                                                >
+                                                    <div className="whitespace-nowrap overflow-hidden text-ellipsis">{cell.label}</div>
+                                                </th>
+                                            ))}
+                                            {allowDynamicRows && headerRowIndex === 0 && (
+                                                <th
+                                                    rowSpan={headerRows.length}
+                                                    className="border border-gray-300 dark:border-gray-600 px-1 py-3 text-center text-xs font-medium"
+                                                />
+                                            )}
+                                        </tr>
+                                    ))
+                                ) : (
+                                    <tr className="bg-gray-100 dark:bg-gray-700">
+                                        {showRowNumbers && (
+                                            <th className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs font-medium">
                                                 {rowHeaderLabel}
                                             </th>
                                         )}
-                                        {headerRow.map((cell, cellIndex) => (
-                                            <th
-                                                key={`header-cell-${headerRowIndex}-${cellIndex}`}
-                                                colSpan={cell.col_span || 1}
-                                                rowSpan={cell.row_span || 1}
-                                                className={cn(
-                                                    'border border-gray-300 dark:border-gray-600 px-3 py-2 text-sm font-medium',
-                                                    getColumnAlignClass(cell.align),
-                                                    cell.class_name
-                                                )}
-                                                style={{
-                                                    backgroundColor: cell.background_color || undefined,
-                                                    color: cell.text_color || undefined,
-                                                }}
-                                            >
-                                                <div className="whitespace-nowrap overflow-hidden text-ellipsis">{cell.label}</div>
-                                            </th>
-                                        ))}
-                                        {allowDynamicRows && headerRowIndex === 0 && (
-                                            <th
-                                                rowSpan={headerRows.length}
-                                                className="border border-gray-300 dark:border-gray-600 px-1 py-3 text-center text-xs font-medium"
-                                            />
+                                        {useDistributedSideHeaders
+                                            ? Array.from({ length: columns.length + 1 }).map((_, positionIndex) => (
+                                                <React.Fragment key={`custom-head-pos-${positionIndex}`}>
+                                                    {(sideHeaderIndexesByTarget[positionIndex] || []).map((sideIndex) => (
+                                                        <th
+                                                            key={`side-header-title-${positionIndex}-${sideIndex}`}
+                                                            className="border border-gray-300 dark:border-gray-600 px-2 py-3 text-xs font-medium text-center"
+                                                        >
+                                                            {sideHeaderColumnLabels[sideIndex] || `رأس ${sideIndex + 1}`}
+                                                        </th>
+                                                    ))}
+                                                    {visibleColumnByIndex.has(positionIndex) && (() => {
+                                                        const column = visibleColumnByIndex.get(positionIndex)!;
+                                                        return (
+                                                            <th
+                                                                key={column.key || `column-${positionIndex}`}
+                                                                className={cn(
+                                                                    'border border-gray-300 dark:border-gray-600 px-3 py-3 text-sm font-medium',
+                                                                    getColumnAlignClass(column.align)
+                                                                )}
+                                                                style={getColumnSeparatorStyle(positionIndex)}
+                                                            >
+                                                                <div className="whitespace-nowrap overflow-hidden text-ellipsis">{getCustomColumnLabel(positionIndex)}</div>
+                                                            </th>
+                                                        );
+                                                    })()}
+                                                </React.Fragment>
+                                            ))
+                                            : (
+                                                <>
+                                                    {hasSideHeaders &&
+                                                        Array.from({ length: sideHeaderColumnCount }).map((_, sideIndex) => (
+                                                            <th
+                                                                key={`side-header-title-${sideIndex}`}
+                                                                className="border border-gray-300 dark:border-gray-600 px-2 py-3 text-xs font-medium text-center"
+                                                            >
+                                                                {sideHeaderColumnLabels[sideIndex] || `رأس ${sideIndex + 1}`}
+                                                            </th>
+                                                        ))}
+                                                    {visibleCustomColumnIndexes.map((colIndex) => {
+                                                        const column = columns[colIndex];
+                                                        if (!column) return null;
+
+                                                    return (
+                                                        <th
+                                                            key={column.key}
+                                                            className={cn(
+                                                                'border border-gray-300 dark:border-gray-600 px-3 py-3 text-sm font-medium',
+                                                                getColumnAlignClass(column.align)
+                                                            )}
+                                                            style={getColumnSeparatorStyle(colIndex)}
+                                                        >
+                                                            <div className="whitespace-nowrap overflow-hidden text-ellipsis">{getCustomColumnLabel(colIndex)}</div>
+                                                        </th>
+                                                    );
+                                                })}
+                                            </>
+                                            )}
+                                        {allowDynamicRows && (
+                                            <th className="border border-gray-300 dark:border-gray-600 px-1 py-3 text-center text-xs font-medium" />
                                         )}
                                     </tr>
-                                ))
-                            ) : (
-                                <tr className="bg-gray-100 dark:bg-gray-700">
-                                    {showRowNumbers && (
-                                        <th className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs font-medium">
-                                            {rowHeaderLabel}
-                                        </th>
-                                    )}
-                                    {visibleCustomColumnIndexes.map((colIndex) => {
-                                        const column = columns[colIndex];
-                                        if (!column) return null;
-
-                                        return (
-                                            <th
-                                                key={column.key}
-                                                className={cn(
-                                                    'border border-gray-300 dark:border-gray-600 px-3 py-3 text-sm font-medium',
-                                                    getColumnAlignClass(column.align)
-                                                )}
-                                            >
-                                                <div className="whitespace-nowrap overflow-hidden text-ellipsis">{column.label}</div>
-                                            </th>
-                                        );
-                                    })}
-                                    {allowDynamicRows && (
-                                        <th className="border border-gray-300 dark:border-gray-600 px-1 py-3 text-center text-xs font-medium" />
-                                    )}
-                                </tr>
-                            )}
-                        </thead>
+                                )}
+                            </thead>
+                        )}
                         <tbody>
                             {Array.from({ length: actualRows }).map((_, rowIndex) => (
                                 <tr key={rowIndex} className="hover:bg-gray-50 dark:hover:bg-gray-750 group">
                                     {showRowNumbers && (
-                                        <td className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs text-gray-500 font-medium">
+                                        <td
+                                            className="border border-gray-300 dark:border-gray-600 px-3 py-3 text-center text-xs text-gray-500 font-medium"
+                                            style={getRowSeparatorStyle(rowIndex)}
+                                        >
                                             {rowIndex + 1}
                                         </td>
                                     )}
-                                    {visibleCustomColumnIndexes.map((colIndex) => {
-                                        const column = columns[colIndex];
-                                        if (!column) return null;
-                                        const value = safeTableData?.[rowIndex]?.[colIndex];
-
-                                        return (
-                                            <td
-                                                key={column.key}
-                                                className="border border-gray-300 dark:border-gray-600 p-0"
-                                            >
-                                                {renderCellInput(
-                                                    column.type,
-                                                    value,
-                                                    (newValue) => {
-                                                        emitCellChange(
-                                                            table.id,
-                                                            safeTableData,
-                                                            rowIndex,
-                                                            colIndex,
-                                                            newValue,
-                                                            columns.length
+                                    {useDistributedSideHeaders
+                                        ? Array.from({ length: columns.length + 1 }).map((_, positionIndex) => (
+                                            <React.Fragment key={`custom-body-pos-${rowIndex}-${positionIndex}`}>
+                                                {(sideHeaderIndexesByTarget[positionIndex] || []).map((sideIndex) => {
+                                                    const cell = sideHeaderMatrix[rowIndex]?.[sideIndex];
+                                                    if (!cell) return null;
+                                                    return (
+                                                        <th
+                                                            key={`side-row-${rowIndex}-${positionIndex}-${sideIndex}`}
+                                                            rowSpan={cell.row_span || 1}
+                                                            className={cn(
+                                                                'border border-gray-300 dark:border-gray-600 px-2 py-3 text-xs font-medium bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-200',
+                                                                getColumnAlignClass(cell.align),
+                                                                cell.class_name
+                                                            )}
+                                                            style={getRowSeparatorStyle(rowIndex)}
+                                                        >
+                                                            {cell.label || '-'}
+                                                        </th>
+                                                    );
+                                                })}
+                                                {visibleColumnByIndex.has(positionIndex) && (() => {
+                                                    const column = visibleColumnByIndex.get(positionIndex)!;
+                                                    const {
+                                                        value,
+                                                        isFormula,
+                                                        formula,
+                                                        effectiveCellType,
+                                                        resolvedValidation,
+                                                    } = getCustomCellRenderState(rowIndex, positionIndex, column);
+                                                    return (
+                                                        <td
+                                                            key={column.key || `col-${positionIndex}`}
+                                                            className={cn(
+                                                                "border border-gray-300 dark:border-gray-600 p-0",
+                                                                isFormula && "bg-blue-50 dark:bg-blue-900/30"
+                                                            )}
+                                                            style={getDataSeparatorStyle(rowIndex, positionIndex)}
+                                                            title={isFormula && formula ? `معادلة: ${formula}` : undefined}
+                                                            onMouseDown={(event) => handleCustomCellMouseDown(event, rowIndex, positionIndex)}
+                                                        >
+                                                            {renderCellInput(
+                                                                effectiveCellType,
+                                                                value,
+                                                                (newValue) => {
+                                                                    handleCustomCellValueChange(rowIndex, positionIndex, newValue);
+                                                                },
+                                                                table.id,
+                                                                rowIndex,
+                                                                positionIndex,
+                                                                {
+                                                                    min: resolvedValidation.min,
+                                                                    max: resolvedValidation.max,
+                                                                    options: effectiveCellType === 'user-directory'
+                                                                        ? getUserDirectoryOptions(column.user_directory_department_id, column.user_directory_role_id)
+                                                                        : resolvedValidation.options,
+                                                                    format: column.format,
+                                                                    disabled: isFormula,
+                                                                    ...getFormulaInputBindings(rowIndex, positionIndex, cn(
+                                                                        getColumnAlignClass(column.align),
+                                                                        isFormula && 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-200 disabled:opacity-100 disabled:text-blue-700 dark:disabled:text-blue-200 disabled:bg-blue-50 dark:disabled:bg-blue-900/30 disabled:cursor-not-allowed'
+                                                                    )),
+                                                                }
+                                                            )}
+                                                        </td>
+                                                    );
+                                                })()}
+                                            </React.Fragment>
+                                        ))
+                                        : (
+                                            <>
+                                                {hasSideHeaders &&
+                                                    Array.from({ length: sideHeaderColumnCount }).map((_, sideIndex) => {
+                                                        const cell = sideHeaderMatrix[rowIndex]?.[sideIndex];
+                                                        if (!cell) return null;
+                                                        return (
+                                                            <th
+                                                                key={`side-row-${rowIndex}-${sideIndex}`}
+                                                                rowSpan={cell.row_span || 1}
+                                                                className={cn(
+                                                                    'border border-gray-300 dark:border-gray-600 px-2 py-3 text-xs font-medium bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-200',
+                                                                    getColumnAlignClass(cell.align),
+                                                                    cell.class_name
+                                                                )}
+                                                                style={getRowSeparatorStyle(rowIndex)}
+                                                            >
+                                                                {cell.label || '-'}
+                                                            </th>
                                                         );
-                                                    },
-                                                    table.id,
-                                                    rowIndex,
-                                                    colIndex,
-                                                    {
-                                                        min: column.min,
-                                                        max: column.max,
-                                                        options: column.type === 'user-directory'
-                                                            ? getUserDirectoryOptions(column.user_directory_department_id, column.user_directory_role_id)
-                                                            : column.options,
-                                                        format: column.format,
-                                                        className: getColumnAlignClass(column.align)
-                                                    }
-                                                )}
-                                            </td>
-                                        );
-                                    })}
+                                                    })}
+                                                {visibleCustomColumnIndexes.map((colIndex) => {
+                                                    const column = columns[colIndex];
+                                                    if (!column) return null;
+                                                    const {
+                                                        value,
+                                                        isFormula,
+                                                        formula,
+                                                        effectiveCellType,
+                                                        resolvedValidation,
+                                                    } = getCustomCellRenderState(rowIndex, colIndex, column);
+
+                                                    return (
+                                                        <td
+                                                            key={column.key}
+                                                            className={cn(
+                                                                "border border-gray-300 dark:border-gray-600 p-0",
+                                                                isFormula && "bg-blue-50 dark:bg-blue-900/30"
+                                                            )}
+                                                            style={getDataSeparatorStyle(rowIndex, colIndex)}
+                                                            title={isFormula && formula ? `معادلة: ${formula}` : undefined}
+                                                            onMouseDown={(event) => handleCustomCellMouseDown(event, rowIndex, colIndex)}
+                                                        >
+                                                            {renderCellInput(
+                                                                effectiveCellType,
+                                                                value,
+                                                                (newValue) => {
+                                                                    handleCustomCellValueChange(rowIndex, colIndex, newValue);
+                                                                },
+                                                                table.id,
+                                                                rowIndex,
+                                                                colIndex,
+                                                                {
+                                                                    min: resolvedValidation.min,
+                                                                    max: resolvedValidation.max,
+                                                                    options: effectiveCellType === 'user-directory'
+                                                                        ? getUserDirectoryOptions(column.user_directory_department_id, column.user_directory_role_id)
+                                                                        : resolvedValidation.options,
+                                                                    format: column.format,
+                                                                    disabled: isFormula,
+                                                                    ...getFormulaInputBindings(rowIndex, colIndex, cn(
+                                                                        getColumnAlignClass(column.align),
+                                                                        isFormula && 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-200 disabled:opacity-100 disabled:text-blue-700 dark:disabled:text-blue-200 disabled:bg-blue-50 dark:disabled:bg-blue-900/30 disabled:cursor-not-allowed'
+                                                                    )),
+                                                                }
+                                                            )}
+                                                        </td>
+                                                    );
+                                                })}
+                                            </>
+                                        )}
                                     {allowDynamicRows && (
                                         <td className="border border-gray-300 dark:border-gray-600 p-1 text-center">
                                             <button

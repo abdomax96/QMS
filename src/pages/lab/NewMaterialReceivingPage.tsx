@@ -5,6 +5,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { addDays, addMonths, addYears } from 'date-fns';
 import {
     ArrowRightIcon,
     TruckIcon,
@@ -23,13 +24,20 @@ import {
 import { FormSkeleton } from '../../components/common/LoadingStates';
 import * as labService from '../../services/labService';
 import * as fileStorage from '../../services/fileStorageService';
+import * as packagingSettingsService from '../../services/labPackagingSettingsService';
 import { getAllCompanies } from '../../services/companyService';
 import { useMasterData } from '../../hooks/useMasterData';
 import { useCompanyStore } from '../../store/companyStore';
 import { useSupabaseAuth } from '../../hooks/useSupabaseAuth';
-import type { CreateMaterialReceivingInput, MaterialType } from '../../domain/lab/types';
+import type { CreateMaterialReceivingInput, MaterialDateFormat, MaterialType } from '../../domain/lab/types';
 import { useMaterialRelationsAutoLoad } from '../../hooks/useMaterialRelations';
-import { useDateFormat } from '../../hooks/useDateFormat';
+import {
+    coerceStoredMaterialDateToFormat,
+    materialDateInputToStored,
+    materialDateToInputValue,
+    normalizeStoredMaterialDate,
+} from '../../utils/materialReceivingDate';
+import type { LabPackagingType } from '../../services/labPackagingSettingsService';
 
 // Reusable Section Component
 const FormSection = ({ title, icon: Icon, children, color = 'blue' }: { title: string; icon: any; children: React.ReactNode; color?: string }) => {
@@ -72,12 +80,35 @@ const FormField = ({ label, required, children }: { label: string; required?: bo
     );
 };
 
+const parseShelfLifeValue = (value: unknown): number => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    if (typeof value === 'string') {
+        const parsed = Number(value.trim());
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+};
+
+const formatLocalIsoDate = (date: Date): string => {
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+};
+
+const mapCategoryToMaterialType = (category: string): MaterialType => {
+    if (category === 'packaging') return 'packaging';
+    if (category === 'ingredient') return 'ingredient';
+    if (category === 'chemical') return 'chemical';
+    if (category === 'additive') return 'additive';
+    return 'other';
+};
+
 const NewMaterialReceivingPage: React.FC = () => {
     const navigate = useNavigate();
     const { id: editId } = useParams<{ id: string }>();
     const isEditMode = !!editId;
     const { profile } = useSupabaseAuth();
-    const { formatDate } = useDateFormat();
     const { selectedCompany, companies, setCompanies } = useCompanyStore();
     const [targetCompanyId, setTargetCompanyId] = useState<string>(selectedCompany?.id || '');
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -85,6 +116,10 @@ const NewMaterialReceivingPage: React.FC = () => {
     const [coaFile, setCoaFile] = useState<File | null>(null);
     const [isUploadingCoa, setIsUploadingCoa] = useState(false);
     const [coaUploaded, setCoaUploaded] = useState(false);
+    const [packagingTypes, setPackagingTypes] = useState<LabPackagingType[]>([]);
+    const [packagingSettingsError, setPackagingSettingsError] = useState<string | null>(null);
+    const [selectedPackagingTypeId, setSelectedPackagingTypeId] = useState('');
+    const [selectedPackagingSubtypeId, setSelectedPackagingSubtypeId] = useState('');
 
     // Auto-load companies if empty
     React.useEffect(() => {
@@ -96,6 +131,22 @@ const NewMaterialReceivingPage: React.FC = () => {
     // Load raw materials and suppliers
     const { materials: rawMaterials, suppliers: allSuppliers, isLoading: masterDataLoading } = useMasterData(targetCompanyId);
 
+    useEffect(() => {
+        const loadPackagingSettings = async () => {
+            try {
+                const tree = await packagingSettingsService.getLabPackagingSettingsTree({ includeInactive: true });
+                setPackagingTypes(tree);
+                setPackagingSettingsError(null);
+            } catch (error) {
+                console.error('Error loading packaging settings:', error);
+                setPackagingTypes([]);
+                setPackagingSettingsError('تعذر تحميل إعدادات مواد التعبئة');
+            }
+        };
+
+        loadPackagingSettings();
+    }, []);
+
     const [selectedRawMaterialId, setSelectedRawMaterialId] = useState<string | null>(null);
 
     const { approvedSuppliers, requiredTests } = useMaterialRelationsAutoLoad(selectedRawMaterialId, targetCompanyId);
@@ -105,8 +156,6 @@ const NewMaterialReceivingPage: React.FC = () => {
 
     // Vehicle Inspection State
     const [vehicleInspection, setVehicleInspection] = useState({
-        vehiclePlate: '',
-        driverName: '',
         vehicleType: '',
         cleanliness: 'pass' as 'pass' | 'fail' | '',
         noOdors: 'pass' as 'pass' | 'fail' | '',
@@ -119,6 +168,7 @@ const NewMaterialReceivingPage: React.FC = () => {
 
     // Overall result
     const [overallResult, setOverallResult] = useState<'pending' | 'accepted' | 'rejected'>('pending');
+    const [hasRejectedQuantity, setHasRejectedQuantity] = useState(false);
 
     // Track if initial load is complete (for edit mode)
     const [initialLoadComplete, setInitialLoadComplete] = useState(!isEditMode);
@@ -144,13 +194,19 @@ const NewMaterialReceivingPage: React.FC = () => {
         packagingType: '',
         productionDate: '',
         expiryDate: '',
+        receivedAt: formatLocalIsoDate(new Date()),
+        productionDateFormat: 'dmy',
+        expiryDateFormat: 'dmy',
         deliveryNoteNumber: '',
         invoiceNumber: '',
         certificateOfAnalysis: '',
         inspectionRequired: true,
         storageLocation: '',
         storageCondition: '',
-        notes: ''
+        notes: '',
+        acceptedQuantity: 0,
+        rejectedQuantity: 0,
+        rejectionReason: ''
     });
 
     // Load existing data in edit mode
@@ -162,6 +218,24 @@ const NewMaterialReceivingPage: React.FC = () => {
             try {
                 const receiving = await labService.getMaterialReceivingById(editId);
                 if (receiving) {
+                    const loadedDateFormat = (receiving.productionDateFormat || receiving.expiryDateFormat || 'dmy') as MaterialDateFormat;
+                    const normalizedProductionDate = normalizeStoredMaterialDate(receiving.productionDate);
+                    const normalizedExpiryDate = normalizeStoredMaterialDate(receiving.expiryDate);
+                    const savedCategory = String(receiving.materialType || '');
+
+                    if ([
+                        'ingredient',
+                        'packaging',
+                        'chemical',
+                        'additive',
+                        'flavors',
+                        'colorants',
+                        'preservatives',
+                        'other'
+                    ].includes(savedCategory)) {
+                        setSelectedCategory(savedCategory);
+                    }
+
                     if (receiving.companyId) setTargetCompanyId(receiving.companyId);
                     if (receiving.rawMaterialId) setSelectedRawMaterialId(receiving.rawMaterialId);
 
@@ -177,16 +251,30 @@ const NewMaterialReceivingPage: React.FC = () => {
                         quantity: receiving.quantity || 0,
                         unit: receiving.unit || 'كجم',
                         packagingType: receiving.packagingType || '',
-                        productionDate: receiving.productionDate ? receiving.productionDate.split('T')[0] : '',
-                        expiryDate: receiving.expiryDate ? receiving.expiryDate.split('T')[0] : '',
+                        productionDate: normalizedProductionDate
+                            ? coerceStoredMaterialDateToFormat(normalizedProductionDate, loadedDateFormat)
+                            : '',
+                        expiryDate: normalizedExpiryDate
+                            ? coerceStoredMaterialDateToFormat(normalizedExpiryDate, loadedDateFormat)
+                            : '',
+                        receivedAt: receiving.receivedAt
+                            ? formatLocalIsoDate(new Date(receiving.receivedAt))
+                            : formatLocalIsoDate(new Date()),
+                        productionDateFormat: loadedDateFormat,
+                        expiryDateFormat: loadedDateFormat,
                         deliveryNoteNumber: receiving.deliveryNoteNumber || '',
                         invoiceNumber: receiving.invoiceNumber || '',
                         certificateOfAnalysis: receiving.certificateOfAnalysis || '',
                         inspectionRequired: receiving.inspectionRequired ?? true,
                         storageLocation: receiving.storageLocation || '',
                         storageCondition: receiving.storageCondition || '',
-                        notes: receiving.notes || ''
+                        notes: receiving.notes || '',
+                        acceptedQuantity: receiving.acceptedQuantity ?? receiving.quantity ?? 0,
+                        rejectedQuantity: receiving.rejectedQuantity ?? 0,
+                        rejectionReason: receiving.rejectionReason || ''
                     });
+
+                    setHasRejectedQuantity((receiving.rejectedQuantity ?? 0) > 0);
 
                     if (receiving.status === 'accepted') setOverallResult('accepted');
                     else if (receiving.status === 'rejected') setOverallResult('rejected');
@@ -216,8 +304,6 @@ const NewMaterialReceivingPage: React.FC = () => {
                     // Load vehicle inspection data
                     if (receiving.vehicleInspection) {
                         setVehicleInspection({
-                            vehiclePlate: receiving.vehicleInspection.vehiclePlate || '',
-                            driverName: receiving.vehicleInspection.driverName || '',
                             vehicleType: receiving.vehicleInspection.vehicleType || '',
                             cleanliness: receiving.vehicleInspection.cleanliness || 'pass',
                             noOdors: receiving.vehicleInspection.noOdors || 'pass',
@@ -259,10 +345,49 @@ const NewMaterialReceivingPage: React.FC = () => {
 
     const [selectedCategory, setSelectedCategory] = useState<string>('');
 
+    const selectedPackagingType = useMemo(
+        () => packagingTypes.find((type) => type.id === selectedPackagingTypeId),
+        [packagingTypes, selectedPackagingTypeId]
+    );
+
+    const filteredPackagingSubtypes = useMemo(() => {
+        if (!selectedPackagingType) return [];
+        return selectedPackagingType.subtypes.filter(
+            (subtype) => subtype.isActive || subtype.id === selectedPackagingSubtypeId
+        );
+    }, [selectedPackagingSubtypeId, selectedPackagingType]);
+
+    const selectedPackagingSubtype = useMemo(
+        () => filteredPackagingSubtypes.find((subtype) => subtype.id === selectedPackagingSubtypeId),
+        [filteredPackagingSubtypes, selectedPackagingSubtypeId]
+    );
+    const hasFilteredPackagingSubtypes = filteredPackagingSubtypes.length > 0;
+
+    React.useEffect(() => {
+        if (!hasFilteredPackagingSubtypes && selectedPackagingSubtypeId) {
+            setSelectedPackagingSubtypeId('');
+        }
+    }, [hasFilteredPackagingSubtypes, selectedPackagingSubtypeId]);
+
     const filteredRawMaterials = useMemo(() => {
-        if (!selectedCategory) return rawMaterials.filter(m => m.active);
-        return rawMaterials.filter(m => m.active && m.category === selectedCategory);
-    }, [rawMaterials, selectedCategory]);
+        const baseFiltered = !selectedCategory
+            ? rawMaterials.filter((material) => material.active)
+            : rawMaterials.filter((material) => material.active && material.category === selectedCategory);
+
+        if (selectedCategory !== 'packaging') {
+            return baseFiltered;
+        }
+
+        if (!selectedPackagingTypeId) {
+            return [];
+        }
+
+        return baseFiltered.filter(
+            (material) =>
+                material.packagingTypeId === selectedPackagingTypeId &&
+                (!selectedPackagingSubtypeId || material.packagingSubtypeId === selectedPackagingSubtypeId)
+        );
+    }, [rawMaterials, selectedCategory, selectedPackagingTypeId, selectedPackagingSubtypeId]);
 
     const availableSuppliers = useMemo(() => {
         if (!selectedRawMaterialId) return [];
@@ -279,12 +404,54 @@ const NewMaterialReceivingPage: React.FC = () => {
         }
     }, [availableSuppliers]);
 
+    // Keep category in sync with selected raw material (especially in edit mode after async load)
+    React.useEffect(() => {
+        if (!selectedRawMaterialId) return;
+        const selectedMaterial = rawMaterials.find((m) => m.id === selectedRawMaterialId);
+        const materialCategory = String(selectedMaterial?.category || '');
+        if (!materialCategory) return;
+        if (selectedCategory !== materialCategory) {
+            setSelectedCategory(materialCategory);
+        }
+
+        if (materialCategory === 'packaging') {
+            setSelectedPackagingTypeId(selectedMaterial?.packagingTypeId || '');
+            setSelectedPackagingSubtypeId(selectedMaterial?.packagingSubtypeId || '');
+        }
+    }, [selectedRawMaterialId, rawMaterials, selectedCategory]);
+
+    React.useEffect(() => {
+        if (selectedCategory !== 'packaging') return;
+        const subtypeName = selectedPackagingSubtype?.name || selectedPackagingType?.name || '';
+        setFormData((prev) => (
+            prev.packagingType === subtypeName
+                ? prev
+                : { ...prev, packagingType: subtypeName }
+        ));
+    }, [selectedCategory, selectedPackagingSubtype, selectedPackagingType]);
+
     const handleMaterialSelect = (materialId: string) => {
         const material = rawMaterials.find(m => m.id === materialId);
         if (material) {
             setSelectedRawMaterialId(materialId);
+            if (material.category) {
+                setSelectedCategory(material.category);
+            }
+
+            const matchedPackagingType = packagingTypes.find((type) => type.id === material.packagingTypeId);
+            const matchedPackagingSubtypeName = matchedPackagingType
+                ?.subtypes.find((subtype) => subtype.id === material.packagingSubtypeId)
+                ?.name;
+            const resolvedPackagingLabel = matchedPackagingSubtypeName || matchedPackagingType?.name || '';
+
+            if (material.category === 'packaging') {
+                setSelectedPackagingTypeId(material.packagingTypeId || '');
+                setSelectedPackagingSubtypeId(material.packagingSubtypeId || '');
+            }
+
             setFormData(prev => ({
                 ...prev,
+                materialType: mapCategoryToMaterialType(String(material.category || 'ingredient')),
                 rawMaterialId: materialId,
                 materialName: material.name,
                 materialCode: material.code,
@@ -293,21 +460,200 @@ const NewMaterialReceivingPage: React.FC = () => {
                 inspectionRequired: material.requiresLabTest,
                 supplierId: '',
                 supplierName: '',
-                packagingType: ''
+                packagingType: material.category === 'packaging'
+                    ? (resolvedPackagingLabel || prev.packagingType)
+                    : '',
+                expiryDate: '',
+                acceptedQuantity: prev.quantity,
+                rejectedQuantity: 0,
+                rejectionReason: ''
             }));
         }
     };
 
+    const handlePackagingTypeSelect = (typeId: string) => {
+        const typeName = packagingTypes.find((type) => type.id === typeId)?.name || '';
+        setSelectedPackagingTypeId(typeId);
+        setSelectedPackagingSubtypeId('');
+        setSelectedRawMaterialId(null);
+        setFormData((prev) => ({
+            ...prev,
+            rawMaterialId: '',
+            materialName: '',
+            materialCode: '',
+            supplierId: '',
+            supplierName: '',
+            packagingType: typeName,
+            expiryDate: '',
+        }));
+    };
+
+    const handlePackagingSubtypeSelect = (subtypeId: string) => {
+        setSelectedPackagingSubtypeId(subtypeId);
+        const subtypeName = selectedPackagingType?.subtypes.find((subtype) => subtype.id === subtypeId)?.name || '';
+        const fallbackTypeName = selectedPackagingType?.name || '';
+        setSelectedRawMaterialId(null);
+        setFormData((prev) => ({
+            ...prev,
+            rawMaterialId: '',
+            materialName: '',
+            materialCode: '',
+            supplierId: '',
+            supplierName: '',
+            packagingType: subtypeName || fallbackTypeName,
+            expiryDate: '',
+        }));
+    };
+
+    const handleQuantityChange = (rawValue: string) => {
+        const nextQuantity = Math.max(0, Number.parseFloat(rawValue) || 0);
+        setFormData((prev) => {
+            const currentRejected = hasRejectedQuantity ? Number(prev.rejectedQuantity) || 0 : 0;
+            const clampedRejected = Math.min(Math.max(currentRejected, 0), nextQuantity);
+            return {
+                ...prev,
+                quantity: nextQuantity,
+                rejectedQuantity: clampedRejected,
+                acceptedQuantity: Math.max(nextQuantity - clampedRejected, 0),
+            };
+        });
+    };
+
+    const handleRejectedQuantityChange = (rawValue: string) => {
+        const requestedRejected = Math.max(0, Number.parseFloat(rawValue) || 0);
+        setFormData((prev) => {
+            const totalQuantity = Math.max(0, Number(prev.quantity) || 0);
+            const clampedRejected = Math.min(requestedRejected, totalQuantity);
+            return {
+                ...prev,
+                rejectedQuantity: clampedRejected,
+                acceptedQuantity: Math.max(totalQuantity - clampedRejected, 0),
+            };
+        });
+    };
+
+    const handleRejectedQuantityToggle = (checked: boolean) => {
+        setHasRejectedQuantity(checked);
+        setFormData((prev) => {
+            const totalQuantity = Math.max(0, Number(prev.quantity) || 0);
+            if (!checked) {
+                return {
+                    ...prev,
+                    rejectedQuantity: 0,
+                    acceptedQuantity: totalQuantity,
+                    rejectionReason: ''
+                };
+            }
+
+            const currentRejected = Math.max(0, Number(prev.rejectedQuantity) || 0);
+            const clampedRejected = Math.min(currentRejected, totalQuantity);
+            return {
+                ...prev,
+                rejectedQuantity: clampedRejected,
+                acceptedQuantity: Math.max(totalQuantity - clampedRejected, 0),
+            };
+        });
+    };
+
+    const getUnifiedDateFormat = (): MaterialDateFormat => {
+        return (formData.productionDateFormat || formData.expiryDateFormat || 'dmy') as MaterialDateFormat;
+    };
+
+    const handleUnifiedDateFormatChange = (dateFormat: MaterialDateFormat) => {
+        setFormData(prev => {
+            const currentProductionDate = typeof prev.productionDate === 'string' ? prev.productionDate : '';
+            const currentExpiryDate = typeof prev.expiryDate === 'string' ? prev.expiryDate : '';
+
+            return {
+                ...prev,
+                productionDateFormat: dateFormat,
+                expiryDateFormat: dateFormat,
+                productionDate: currentProductionDate
+                    ? coerceStoredMaterialDateToFormat(currentProductionDate, dateFormat)
+                    : '',
+                expiryDate: currentExpiryDate
+                    ? coerceStoredMaterialDateToFormat(currentExpiryDate, dateFormat)
+                    : '',
+            };
+        });
+    };
+
+    const handleDateValueChange = (
+        dateField: 'productionDate' | 'expiryDate',
+        rawValue: string
+    ) => {
+        const activeFormat = getUnifiedDateFormat();
+        const storedDate = materialDateInputToStored(rawValue, activeFormat);
+        setFormData(prev => ({ ...prev, [dateField]: storedDate }));
+    };
+
     React.useEffect(() => {
-        if (!selectedRawMaterialId || !formData.productionDate) return;
+        if (!selectedRawMaterialId) return;
+
         const material = rawMaterials.find(m => m.id === selectedRawMaterialId);
-        if (material && material.shelfLife) {
-            const prodDate = new Date(formData.productionDate);
-            const expiryDate = new Date(prodDate);
-            expiryDate.setDate(prodDate.getDate() + material.shelfLife);
-            setFormData(prev => ({ ...prev, expiryDate: expiryDate.toISOString().split('T')[0] }));
+        if (!material) return;
+
+        const activeDateFormat = getUnifiedDateFormat();
+        const shelfLifeValue = parseShelfLifeValue(material.shelfLife);
+        const normalizedProductionDate = normalizeStoredMaterialDate(formData.productionDate);
+
+        if (!normalizedProductionDate || shelfLifeValue <= 0) {
+            setFormData(prev => {
+                if (!prev.expiryDate) return prev;
+                return { ...prev, expiryDate: '' };
+            });
+            return;
         }
-    }, [formData.productionDate, selectedRawMaterialId, rawMaterials]);
+
+        const prodDate = new Date(`${normalizedProductionDate}T12:00:00`);
+        if (Number.isNaN(prodDate.getTime())) return;
+
+        const shelfLifeUnit = material.shelfLifeUnit || 'days';
+        const expirySubtractDays = Math.max(0, Math.trunc(parseShelfLifeValue(material.expirySubtractDays)));
+        let expiryDate = new Date(prodDate);
+
+        if (shelfLifeUnit === 'months') {
+            expiryDate = addMonths(prodDate, shelfLifeValue);
+            if (expirySubtractDays > 0) {
+                expiryDate = addDays(expiryDate, -expirySubtractDays);
+            }
+        } else if (shelfLifeUnit === 'years') {
+            expiryDate = addYears(prodDate, shelfLifeValue);
+            if (expirySubtractDays > 0) {
+                expiryDate = addDays(expiryDate, -expirySubtractDays);
+            }
+        } else {
+            expiryDate = addDays(prodDate, shelfLifeValue);
+        }
+
+        const calculatedDate = formatLocalIsoDate(expiryDate);
+        const storedExpiryDate = activeDateFormat === 'my'
+            ? coerceStoredMaterialDateToFormat(calculatedDate, 'my')
+            : calculatedDate;
+
+        setFormData(prev => {
+            if (
+                prev.expiryDate === storedExpiryDate &&
+                prev.productionDateFormat === activeDateFormat &&
+                prev.expiryDateFormat === activeDateFormat
+            ) {
+                return prev;
+            }
+
+            return {
+                ...prev,
+                expiryDate: storedExpiryDate,
+                productionDateFormat: activeDateFormat,
+                expiryDateFormat: activeDateFormat,
+            };
+        });
+    }, [
+        formData.productionDate,
+        formData.productionDateFormat,
+        formData.expiryDateFormat,
+        selectedRawMaterialId,
+        rawMaterials
+    ]);
 
     const buildTestResultsForSubmission = () => {
         return requiredTests.map((test, testIndex) => ({
@@ -328,9 +674,29 @@ const NewMaterialReceivingPage: React.FC = () => {
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!formData.materialName || !formData.batchNumber || isSubmitting) return;
+
+        if (selectedCategory === 'packaging') {
+            if (!selectedPackagingTypeId) {
+                window.alert('يجب اختيار النوع الرئيسي لمواد التعبئة قبل اختيار المادة والحفظ');
+                return;
+            }
+        }
+
+        const resolvedPackagingType = selectedCategory === 'packaging'
+            ? (selectedPackagingSubtype?.name || selectedPackagingType?.name || formData.packagingType || '')
+            : formData.packagingType;
+
         setIsSubmitting(true);
         try {
             const initialTestResults = buildTestResultsForSubmission();
+            const totalQty = Math.max(0, Number(formData.quantity) || 0);
+            const rejectedQty = hasRejectedQuantity
+                ? Math.min(Math.max(Number(formData.rejectedQuantity) || 0, 0), totalQty)
+                : 0;
+            const acceptedQty = Math.max(totalQty - rejectedQty, 0);
+            const rejectionReason = hasRejectedQuantity && rejectedQty > 0
+                ? (formData.rejectionReason?.trim() || undefined)
+                : undefined;
 
             if (isEditMode && editId) {
                 const success = await labService.updateMaterialReceiving(editId, {
@@ -340,15 +706,22 @@ const NewMaterialReceivingPage: React.FC = () => {
                     unit: formData.unit,
                     productionDate: formData.productionDate || undefined,
                     expiryDate: formData.expiryDate || undefined,
+                    receivedAt: formData.receivedAt || undefined,
+                    productionDateFormat: formData.productionDateFormat || 'dmy',
+                    expiryDateFormat: formData.expiryDateFormat || 'dmy',
                     supplierName: formData.supplierName,
                     supplierId: formData.supplierId,
                     invoiceNumber: formData.invoiceNumber,
                     deliveryNoteNumber: formData.deliveryNoteNumber,
-                    packagingType: formData.packagingType,
+                    packagingType: resolvedPackagingType,
                     storageLocation: formData.storageLocation,
                     storageCondition: formData.storageCondition,
+                    acceptedQuantity: acceptedQty,
+                    rejectedQuantity: rejectedQty,
+                    rejectionReason,
                     notes: formData.notes,
-                    testResults: initialTestResults
+                    testResults: initialTestResults,
+                    vehicleInspection
                 });
 
                 if (overallResult !== 'pending') {
@@ -358,7 +731,16 @@ const NewMaterialReceivingPage: React.FC = () => {
                 if (success) navigate(`/lab/receiving/${editId}`);
             } else {
                 const material = await labService.createMaterialReceiving(
-                    { ...formData, initialTestResults, vehicleInspection, overallResult },
+                    {
+                        ...formData,
+                        packagingType: resolvedPackagingType,
+                        acceptedQuantity: acceptedQty,
+                        rejectedQuantity: rejectedQty,
+                        rejectionReason,
+                        initialTestResults,
+                        vehicleInspection,
+                        overallResult
+                    },
                     profile?.uid || '',
                     profile?.name || profile?.email || '',
                     targetCompanyId
@@ -377,6 +759,11 @@ const NewMaterialReceivingPage: React.FC = () => {
     };
 
     const selectedMaterial = rawMaterials.find(m => m.id === selectedRawMaterialId);
+    const totalQuantity = Math.max(0, Number(formData.quantity) || 0);
+    const normalizedRejectedQuantity = hasRejectedQuantity
+        ? Math.min(Math.max(Number(formData.rejectedQuantity) || 0, 0), totalQuantity)
+        : 0;
+    const normalizedAcceptedQuantity = Math.max(totalQuantity - normalizedRejectedQuantity, 0);
 
     const inputClass = "w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
     const selectClass = inputClass;
@@ -433,16 +820,95 @@ const NewMaterialReceivingPage: React.FC = () => {
                 <FormSection title="معلومات المادة والمورد" icon={CubeIcon} color="blue">
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <FormField label="تصنيف المادة" required>
-                            <select value={selectedCategory} onChange={(e) => { setSelectedCategory(e.target.value); setSelectedRawMaterialId(null); setFormData({ ...formData, rawMaterialId: '', materialName: '' }); }} className={selectClass} required>
+                            <select
+                                value={selectedCategory}
+                                onChange={(e) => {
+                                    const nextCategory = e.target.value;
+                                    setSelectedCategory(nextCategory);
+                                    setSelectedRawMaterialId(null);
+
+                                    if (nextCategory !== 'packaging') {
+                                        setSelectedPackagingTypeId('');
+                                        setSelectedPackagingSubtypeId('');
+                                    }
+
+                                    setFormData((prev) => ({
+                                        ...prev,
+                                        materialType: mapCategoryToMaterialType(nextCategory),
+                                        rawMaterialId: '',
+                                        materialName: '',
+                                        materialCode: '',
+                                        supplierId: '',
+                                        supplierName: '',
+                                        packagingType: '',
+                                    }));
+                                }}
+                                className={selectClass}
+                                required
+                            >
                                 <option value="">اختر التصنيف</option>
                                 {standardCategories.map(cat => <option key={cat.value} value={cat.value}>{cat.label}</option>)}
                             </select>
                         </FormField>
+
+                        {selectedCategory === 'packaging' && (
+                            <FormField label="النوع الرئيسي" required>
+                                <select
+                                    value={selectedPackagingTypeId}
+                                    onChange={(e) => handlePackagingTypeSelect(e.target.value)}
+                                    className={selectClass}
+                                    required
+                                >
+                                    <option value="">اختر النوع الرئيسي</option>
+                                    {packagingTypes
+                                        .filter((type) => type.isActive || type.id === selectedPackagingTypeId)
+                                        .map((type) => (
+                                            <option key={type.id} value={type.id}>
+                                                {type.name}{type.isActive ? '' : ' (غير نشط)'}
+                                            </option>
+                                        ))}
+                                </select>
+                                {packagingSettingsError && (
+                                    <p className="mt-1 text-xs text-red-600 dark:text-red-400">{packagingSettingsError}</p>
+                                )}
+                            </FormField>
+                        )}
+
+                        {selectedCategory === 'packaging' && hasFilteredPackagingSubtypes && (
+                            <FormField label="النوع الفرعي (اختياري)">
+                                <select
+                                    value={selectedPackagingSubtypeId}
+                                    onChange={(e) => handlePackagingSubtypeSelect(e.target.value)}
+                                    className={selectClass}
+                                    disabled={!selectedPackagingTypeId}
+                                >
+                                    <option value="">بدون نوع فرعي</option>
+                                    {filteredPackagingSubtypes.map((subtype) => (
+                                        <option key={subtype.id} value={subtype.id}>
+                                            {subtype.name}{subtype.isActive ? '' : ' (غير نشط)'}
+                                        </option>
+                                    ))}
+                                </select>
+                            </FormField>
+                        )}
+
                         <FormField label="المادة الخام" required>
-                            <select value={selectedRawMaterialId || ''} onChange={(e) => handleMaterialSelect(e.target.value)} className={selectClass} required disabled={!selectedCategory}>
+                            <select
+                                value={selectedRawMaterialId || ''}
+                                onChange={(e) => handleMaterialSelect(e.target.value)}
+                                className={selectClass}
+                                required
+                                disabled={
+                                    !selectedCategory ||
+                                    (selectedCategory === 'packaging' && !selectedPackagingTypeId)
+                                }
+                            >
                                 <option value="">اختر المادة</option>
                                 {filteredRawMaterials.map(m => <option key={m.id} value={m.id}>{m.name} ({m.code})</option>)}
                             </select>
+                            {selectedCategory === 'packaging' && !selectedPackagingTypeId && (
+                                <p className="mt-1 text-xs text-gray-500">اختر النوع الرئيسي أولاً</p>
+                            )}
                         </FormField>
                         <FormField label="المورد" required>
                             <select value={formData.supplierId} onChange={(e) => { const s = availableSuppliers.find(x => x.id === e.target.value); setFormData({ ...formData, supplierId: e.target.value, supplierName: s?.name || '' }); }} className={selectClass} required disabled={!selectedRawMaterialId}>
@@ -458,27 +924,101 @@ const NewMaterialReceivingPage: React.FC = () => {
 
                 {/* Section 2: Quantity & Dates */}
                 <FormSection title="الكمية والتواريخ" icon={CalendarDaysIcon} color="green">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                         <FormField label="الكمية" required>
                             <div className="flex gap-1">
-                                <input type="number" value={formData.quantity || ''} onChange={(e) => setFormData({ ...formData, quantity: parseFloat(e.target.value) || 0 })} className="w-20 px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700" required min="0" />
+                                <input type="number" value={formData.quantity || ''} onChange={(e) => handleQuantityChange(e.target.value)} className="w-20 px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700" required min="0" />
                                 <select value={formData.unit} onChange={(e) => setFormData({ ...formData, unit: e.target.value })} className="w-16 px-1 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700">
                                     <option value="كجم">كجم</option><option value="جم">جم</option><option value="لتر">لتر</option><option value="قطعة">قطعة</option>
                                 </select>
                             </div>
                         </FormField>
-                        <FormField label="تاريخ الإنتاج">
-                            <input type="date" value={formData.productionDate} onChange={(e) => setFormData({ ...formData, productionDate: e.target.value })} className={inputClass} />
-                        </FormField>
-                        <FormField label="تاريخ الانتهاء">
-                            <input type="date" value={formData.expiryDate} onChange={(e) => setFormData({ ...formData, expiryDate: e.target.value })} className={inputClass} />
-                        </FormField>
-                        <FormField label="نوع التعبئة">
-                            <select value={formData.packagingType} onChange={(e) => setFormData({ ...formData, packagingType: e.target.value })} className={selectClass} disabled={!selectedMaterial?.packagingOptions?.length}>
-                                <option value="">اختر</option>
-                                {selectedMaterial?.packagingOptions?.map(o => <option key={o} value={o}>{o}</option>)}
+                        <FormField label="صيغة التاريخ (الإنتاج/الانتهاء)">
+                            <select
+                                value={getUnifiedDateFormat()}
+                                onChange={(e) => handleUnifiedDateFormatChange(e.target.value as MaterialDateFormat)}
+                                className={selectClass}
+                            >
+                                <option value="dmy">يوم / شهر / سنة</option>
+                                <option value="my">شهر / سنة</option>
                             </select>
                         </FormField>
+                        <FormField label="تاريخ الإنتاج">
+                            <input
+                                type={getUnifiedDateFormat() === 'my' ? 'month' : 'date'}
+                                value={materialDateToInputValue(formData.productionDate, getUnifiedDateFormat())}
+                                onChange={(e) => handleDateValueChange('productionDate', e.target.value)}
+                                className={inputClass}
+                            />
+                        </FormField>
+                        <FormField label="تاريخ الانتهاء">
+                            <input
+                                type={getUnifiedDateFormat() === 'my' ? 'month' : 'date'}
+                                value={materialDateToInputValue(formData.expiryDate, getUnifiedDateFormat())}
+                                readOnly
+                                className={`${inputClass} bg-gray-100 dark:bg-gray-600 cursor-not-allowed`}
+                            />
+                        </FormField>
+                        <FormField label="نوع التعبئة">
+                            {selectedCategory === 'packaging' ? (
+                                <input
+                                    type="text"
+                                    value={selectedPackagingSubtype?.name || selectedPackagingType?.name || formData.packagingType || ''}
+                                    readOnly
+                                    className={`${inputClass} bg-gray-100 dark:bg-gray-600 cursor-not-allowed`}
+                                    placeholder="يتم تحديده من النوع الرئيسي أو الفرعي"
+                                />
+                            ) : (
+                                <select value={formData.packagingType} onChange={(e) => setFormData({ ...formData, packagingType: e.target.value })} className={selectClass} disabled={!selectedMaterial?.packagingOptions?.length}>
+                                    <option value="">اختر</option>
+                                    {selectedMaterial?.packagingOptions?.map(o => <option key={o} value={o}>{o}</option>)}
+                                </select>
+                            )}
+                        </FormField>
+                    </div>
+                    <div className="mt-4 rounded-lg border border-amber-200 dark:border-amber-700 bg-amber-50/40 dark:bg-amber-900/10 p-3">
+                        <label className="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-gray-200">
+                            <input
+                                type="checkbox"
+                                checked={hasRejectedQuantity}
+                                onChange={(e) => handleRejectedQuantityToggle(e.target.checked)}
+                                className="h-4 w-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                            />
+                            يوجد كمية تم رفضها
+                        </label>
+
+                        {hasRejectedQuantity && (
+                            <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+                                <FormField label="الكمية المرفوضة">
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max={totalQuantity}
+                                        step="0.001"
+                                        value={normalizedRejectedQuantity || ''}
+                                        onChange={(e) => handleRejectedQuantityChange(e.target.value)}
+                                        className={inputClass}
+                                    />
+                                </FormField>
+                                <FormField label="الكمية المقبولة (تلقائي)">
+                                    <input
+                                        type="number"
+                                        readOnly
+                                        value={normalizedAcceptedQuantity}
+                                        className={`${inputClass} bg-gray-100 dark:bg-gray-600 cursor-not-allowed`}
+                                    />
+                                </FormField>
+                                <FormField label="سبب الرفض (اختياري)">
+                                    <input
+                                        type="text"
+                                        value={formData.rejectionReason || ''}
+                                        onChange={(e) => setFormData({ ...formData, rejectionReason: e.target.value })}
+                                        placeholder="سبب رفض جزء من الكمية"
+                                        className={inputClass}
+                                    />
+                                </FormField>
+                            </div>
+                        )}
                     </div>
                 </FormSection>
 
@@ -548,15 +1088,20 @@ const NewMaterialReceivingPage: React.FC = () => {
 
                 {/* Section 5: Vehicle Inspection */}
                 <FormSection title="فحص سيارة النقل" icon={TruckIcon} color="orange">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                        <FormField label="رقم اللوحة">
-                            <input type="text" value={vehicleInspection.vehiclePlate} onChange={(e) => setVehicleInspection({ ...vehicleInspection, vehiclePlate: e.target.value })} placeholder="أ ب ج 1234" className={inputClass} />
-                        </FormField>
-                        <FormField label="اسم السائق">
-                            <input type="text" value={vehicleInspection.driverName} onChange={(e) => setVehicleInspection({ ...vehicleInspection, driverName: e.target.value })} className={inputClass} />
-                        </FormField>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
                         <FormField label="نوع السيارة">
-                            <select value={vehicleInspection.vehicleType} onChange={(e) => setVehicleInspection({ ...vehicleInspection, vehicleType: e.target.value })} className={selectClass}>
+                            <select
+                                value={vehicleInspection.vehicleType}
+                                onChange={(e) => {
+                                    const nextVehicleType = e.target.value;
+                                    setVehicleInspection(prev => ({
+                                        ...prev,
+                                        vehicleType: nextVehicleType,
+                                        temperature: nextVehicleType === 'سيارة مبردة' ? prev.temperature : ''
+                                    }));
+                                }}
+                                className={selectClass}
+                            >
                                 <option value="">اختر</option>
                                 <option value="شاحنة">شاحنة</option>
                                 <option value="سيارة مبردة">سيارة مبردة</option>
@@ -564,9 +1109,11 @@ const NewMaterialReceivingPage: React.FC = () => {
                                 <option value="صهريج">صهريج</option>
                             </select>
                         </FormField>
-                        <FormField label="درجة الحرارة °C">
-                            <input type="number" value={vehicleInspection.temperature} onChange={(e) => setVehicleInspection({ ...vehicleInspection, temperature: e.target.value })} placeholder="4" className={inputClass} />
-                        </FormField>
+                        {vehicleInspection.vehicleType === 'سيارة مبردة' && (
+                            <FormField label="درجة الحرارة °C">
+                                <input type="number" value={vehicleInspection.temperature} onChange={(e) => setVehicleInspection({ ...vehicleInspection, temperature: e.target.value })} placeholder="4" className={inputClass} />
+                            </FormField>
+                        )}
                     </div>
                     {/* Visual Checks - Compact */}
                     <div className="grid grid-cols-5 gap-2">
@@ -659,9 +1206,14 @@ const NewMaterialReceivingPage: React.FC = () => {
                                 <span className="text-gray-500">المستلم: </span>
                                 <span className="font-medium text-gray-900 dark:text-white">{profile?.name || profile?.email?.split('@')[0] || 'غير محدد'}</span>
                             </div>
-                            <div className="text-sm">
-                                <span className="text-gray-500">التاريخ: </span>
-                                <span className="font-medium text-gray-900 dark:text-white">{formatDate(new Date())}</span>
+                            <div className="flex items-center gap-2 text-sm">
+                                <span className="text-gray-500">تاريخ الاستلام: </span>
+                                <input
+                                    type="date"
+                                    value={formData.receivedAt || ''}
+                                    onChange={(e) => setFormData({ ...formData, receivedAt: e.target.value })}
+                                    className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 text-gray-900 dark:text-white"
+                                />
                             </div>
                         </div>
                         <div className="flex items-center gap-2">

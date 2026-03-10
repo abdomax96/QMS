@@ -146,6 +146,10 @@ export const useMasterDataStore = create<MasterDataState & MasterDataActions>()(
                     unit: input.unit,
                     specifications: input.specifications,
                     shelfLife: input.shelfLife,
+                    shelfLifeUnit: input.shelfLifeUnit || 'days',
+                    expirySubtractDays: input.shelfLifeUnit === 'days'
+                        ? 0
+                        : Math.max(0, Math.trunc(Number(input.expirySubtractDays) || 0)),
                     storageCondition: input.storageCondition,
                     storageTemperature: input.storageTemperature,
                     requiresLabTest: input.requiresLabTest ?? true,

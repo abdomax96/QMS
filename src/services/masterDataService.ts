@@ -9,7 +9,8 @@ import type {
     RawMaterial,
     RawMaterialSupplier,
     RawMaterialTest,
-    ApprovalStatus
+    ApprovalStatus,
+    ShelfLifeUnit
 } from '../domain/masterData/types';
 
 // ============ Multi-Tenant Enforcement ============
@@ -19,6 +20,13 @@ import type {
  * In production, companyId should always be provided
  */
 const MULTI_TENANT_MODE = import.meta.env.VITE_MULTI_TENANT === 'true';
+const RAW_MATERIAL_SELECT_BASE = 'id, code, name, category, unit, specifications, storage_condition, shelf_life, requires_lab_test, allergens, is_active, company_id, packaging_options, created_at, updated_at';
+const RAW_MATERIAL_SELECT_WITH_UNIT = 'id, code, name, category, unit, specifications, storage_condition, shelf_life, shelf_life_unit, requires_lab_test, allergens, is_active, company_id, packaging_options, created_at, updated_at';
+const RAW_MATERIAL_SELECT_WITH_UNIT_AND_OFFSET = 'id, code, name, category, unit, specifications, storage_condition, shelf_life, shelf_life_unit, expiry_subtract_days, requires_lab_test, allergens, is_active, company_id, packaging_options, created_at, updated_at';
+const RAW_MATERIAL_SELECT_WITH_PACKAGING_LINKS = 'id, code, name, category, unit, specifications, storage_condition, shelf_life, shelf_life_unit, expiry_subtract_days, requires_lab_test, allergens, is_active, company_id, packaging_options, packaging_type_id, packaging_subtype_id, created_at, updated_at';
+
+type RawMaterialsFeatureMode = 'with_packaging_links' | 'with_unit_and_offset' | 'with_unit' | 'legacy';
+let rawMaterialsFeatureMode: RawMaterialsFeatureMode | null = null;
 
 /**
  * Validate companyId for multi-tenant operations
@@ -33,38 +41,87 @@ function validateCompanyId(companyId: string | undefined, operationName: string)
     }
 }
 
-// ============ Raw Materials CRUD ============
+function isMissingRawMaterialsFeatureColumnError(error: any): boolean {
+    const code = String(error?.code || '');
+    const message = String(error?.message || '').toLowerCase();
+    const details = String(error?.details || '').toLowerCase();
+    const hint = String(error?.hint || '').toLowerCase();
+    const includesTrackedColumn =
+        message.includes('shelf_life_unit') ||
+        details.includes('shelf_life_unit') ||
+        hint.includes('shelf_life_unit') ||
+        message.includes('expiry_subtract_days') ||
+        details.includes('expiry_subtract_days') ||
+        hint.includes('expiry_subtract_days') ||
+        message.includes('packaging_type_id') ||
+        details.includes('packaging_type_id') ||
+        hint.includes('packaging_type_id') ||
+        message.includes('packaging_subtype_id') ||
+        details.includes('packaging_subtype_id') ||
+        hint.includes('packaging_subtype_id');
 
-/**
- * Get all active raw materials
- * جلب جميع المواد الخام النشطة
- */
-export async function getAllRawMaterials(companyId?: string): Promise<RawMaterial[]> {
-    validateCompanyId(companyId, 'getAllRawMaterials');
-
-    // Updated: include storage_condition, shelf_life, requires_lab_test, allergens
-    let query = supabase
-        .from('raw_materials')
-        .select('id, code, name, category, unit, specifications, storage_condition, shelf_life, requires_lab_test, allergens, is_active, company_id, packaging_options, created_at, updated_at')
-        .eq('is_active', true)
-        .order('name');
-
-    if (companyId) {
-        // Get materials for this company OR materials without company (shared)
-        query = query.or(`company_id.eq.${companyId},company_id.is.null`);
+    // Postgres error (undefined column): 42703
+    if (code === '42703' && includesTrackedColumn) {
+        return true;
     }
 
-    const { data, error } = await query;
-
-    // Debug logging
-    console.log('getAllRawMaterials - companyId:', companyId, 'results:', data?.length || 0);
-
-    if (error) {
-        console.error('Error fetching raw materials:', error);
-        return [];
+    // PostgREST schema-cache / select-column errors can come as PGRST* with 400.
+    if (code.startsWith('PGRST')) {
+        const combined = `${message} ${details} ${hint}`;
+        if (includesTrackedColumn && (combined.includes('column') || combined.includes('schema cache') || combined.includes('select'))) {
+            return true;
+        }
     }
 
-    return (data || []).map(item => ({
+    return false;
+}
+
+function getRawMaterialsSelectForMode(mode: RawMaterialsFeatureMode): string {
+    if (mode === 'with_packaging_links') return RAW_MATERIAL_SELECT_WITH_PACKAGING_LINKS;
+    if (mode === 'with_unit_and_offset') return RAW_MATERIAL_SELECT_WITH_UNIT_AND_OFFSET;
+    if (mode === 'with_unit') return RAW_MATERIAL_SELECT_WITH_UNIT;
+    return RAW_MATERIAL_SELECT_BASE;
+}
+
+function getFallbackRawMaterialsMode(mode: RawMaterialsFeatureMode): RawMaterialsFeatureMode | null {
+    if (mode === 'with_packaging_links') return 'with_unit_and_offset';
+    if (mode === 'with_unit_and_offset') return 'with_unit';
+    if (mode === 'with_unit') return 'legacy';
+    return null;
+}
+
+function stripUnsupportedRawMaterialFields(payload: Record<string, any>, mode: RawMaterialsFeatureMode): Record<string, any> {
+    if (mode === 'with_packaging_links') return payload;
+    if (mode === 'with_unit_and_offset') {
+        const { packaging_type_id, packaging_subtype_id, ...rest } = payload;
+        return rest;
+    }
+    if (mode === 'with_unit') {
+        const { expiry_subtract_days, packaging_type_id, packaging_subtype_id, ...rest } = payload;
+        return rest;
+    }
+    const { shelf_life_unit, expiry_subtract_days, packaging_type_id, packaging_subtype_id, ...legacy } = payload;
+    return legacy;
+}
+
+function normalizeNonNegativeInteger(value: unknown): number {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        return 0;
+    }
+    return Math.max(0, Math.trunc(numeric));
+}
+
+function normalizeExpirySubtractDays(value: unknown, shelfLifeUnit: ShelfLifeUnit): number {
+    if (shelfLifeUnit === 'days') {
+        return 0;
+    }
+    return normalizeNonNegativeInteger(value);
+}
+
+function mapRawMaterialRow(item: any) {
+    const shelfLifeUnit = (item.shelf_life_unit || 'days') as ShelfLifeUnit;
+    return {
         id: item.id,
         code: item.code,
         name: item.name,
@@ -75,14 +132,79 @@ export async function getAllRawMaterials(companyId?: string): Promise<RawMateria
             : item.specifications,
         storageCondition: item.storage_condition,
         shelfLife: item.shelf_life,
+        shelfLifeUnit,
+        expirySubtractDays: normalizeExpirySubtractDays(item.expiry_subtract_days, shelfLifeUnit),
         requiresLabTest: item.requires_lab_test ?? true,
         allergens: item.allergens || [],
         active: item.is_active,
         companyId: item.company_id,
         packagingOptions: item.packaging_options || [],
+        packagingTypeId: item.packaging_type_id || undefined,
+        packagingSubtypeId: item.packaging_subtype_id || undefined,
         createdAt: item.created_at,
         updatedAt: item.updated_at
-    }));
+    };
+}
+
+// ============ Raw Materials CRUD ============
+
+/**
+ * Get all active raw materials
+ * جلب جميع المواد الخام النشطة
+ */
+export async function getAllRawMaterials(companyId?: string): Promise<RawMaterial[]> {
+    validateCompanyId(companyId, 'getAllRawMaterials');
+
+    const applyCompanyFilter = (query: any) => {
+        if (companyId) {
+            return query.or(`company_id.eq.${companyId},company_id.is.null`);
+        }
+        return query;
+    };
+
+    let mode: RawMaterialsFeatureMode = rawMaterialsFeatureMode || 'with_packaging_links';
+    let data: any[] | null = null;
+    let error: any = null;
+
+    while (true) {
+        const response = await applyCompanyFilter(
+            supabase
+                .from('raw_materials')
+                .select(getRawMaterialsSelectForMode(mode))
+                .eq('is_active', true)
+                .order('name')
+        );
+
+        data = response.data;
+        error = response.error;
+
+        if (!error) {
+            rawMaterialsFeatureMode = mode;
+            break;
+        }
+
+        if (!isMissingRawMaterialsFeatureColumnError(error)) {
+            break;
+        }
+
+        const fallbackMode = getFallbackRawMaterialsMode(mode);
+        if (!fallbackMode) {
+            break;
+        }
+
+        console.warn(`raw_materials schema missing newer columns; fallback mode: ${mode} -> ${fallbackMode}`);
+        mode = fallbackMode;
+    }
+
+    // Debug logging
+    console.log('getAllRawMaterials - companyId:', companyId, 'results:', data?.length || 0);
+
+    if (error) {
+        console.error('Error fetching raw materials:', error);
+        return [];
+    }
+
+    return (data || []).map(mapRawMaterialRow);
 }
 
 /**
@@ -240,61 +362,86 @@ export async function createRawMaterial(
         specifications?: string;
         storageCondition?: string;
         shelfLife?: number;
+        shelfLifeUnit?: ShelfLifeUnit;
+        expirySubtractDays?: number;
         requiresLabTest?: boolean;
         packagingOptions?: string[];
         allergens?: string[];
+        packagingTypeId?: string | null;
+        packagingSubtypeId?: string | null;
     },
     companyId?: string
 ): Promise<RawMaterial | null> {
     const now = new Date().toISOString();
+    const shelfLifeUnit: ShelfLifeUnit = data.shelfLifeUnit || 'days';
+    const expirySubtractDays = normalizeExpirySubtractDays(data.expirySubtractDays, shelfLifeUnit);
+    const category = data.category || 'ingredient';
+    const isPackagingCategory = category === 'packaging';
+
+    if (isPackagingCategory && !data.packagingTypeId) {
+        throw new Error('مواد التعبئة تتطلب تحديد النوع الرئيسي');
+    }
 
     // Updated: include storage_condition, shelf_life, requires_lab_test, allergens
     const insertPayload: any = {
         code: data.code,
         name: data.name,
-        category: data.category || 'ingredient',
+        category,
         unit: data.unit || 'كجم',
         specifications: data.specifications,
         storage_condition: data.storageCondition,
         shelf_life: data.shelfLife,
+        shelf_life_unit: shelfLifeUnit,
+        expiry_subtract_days: expirySubtractDays,
         requires_lab_test: data.requiresLabTest ?? true,
         packaging_options: data.packagingOptions,
-        allergens: data.allergens || [],
+        allergens: isPackagingCategory ? [] : (data.allergens || []),
+        packaging_type_id: isPackagingCategory ? data.packagingTypeId : null,
+        packaging_subtype_id: isPackagingCategory ? data.packagingSubtypeId : null,
         is_active: true,
         company_id: companyId || null,
         created_at: now,
         updated_at: now
     };
 
-    const { data: result, error } = await supabase
-        .from('raw_materials')
-        .insert(insertPayload)
-        .select()
-        .single();
+    let mode: RawMaterialsFeatureMode = rawMaterialsFeatureMode || 'with_packaging_links';
+    let result: any = null;
+    let error: any = null;
+
+    while (true) {
+        const payloadForInsert = stripUnsupportedRawMaterialFields(insertPayload, mode);
+        const response = await supabase
+            .from('raw_materials')
+            .insert(payloadForInsert)
+            .select()
+            .single();
+
+        result = response.data;
+        error = response.error;
+
+        if (!error) {
+            rawMaterialsFeatureMode = mode;
+            break;
+        }
+
+        if (!isMissingRawMaterialsFeatureColumnError(error)) {
+            break;
+        }
+
+        const fallbackMode = getFallbackRawMaterialsMode(mode);
+        if (!fallbackMode) {
+            break;
+        }
+
+        mode = fallbackMode;
+    }
 
     if (error) {
         console.error('Error creating raw material:', error);
         return null;
     }
 
-    return {
-        id: result.id,
-        code: result.code,
-        name: result.name,
-        category: result.category || 'ingredient',
-        unit: result.unit || 'كجم',
-        specifications: typeof result.specifications === 'object'
-            ? (result.specifications as any)?.description || JSON.stringify(result.specifications)
-            : result.specifications,
-        storageCondition: result.storage_condition,
-        shelfLife: result.shelf_life,
-        requiresLabTest: result.requires_lab_test ?? true,
-        packagingOptions: result.packaging_options || [],
-        active: result.is_active,
-        companyId: result.company_id,
-        createdAt: result.created_at,
-        updatedAt: result.updated_at
-    };
+    return mapRawMaterialRow(result);
 }
 
 /**
@@ -311,9 +458,13 @@ export async function updateRawMaterial(
         specifications?: string;
         storageCondition?: string;
         shelfLife?: number;
+        shelfLifeUnit?: ShelfLifeUnit;
+        expirySubtractDays?: number;
         requiresLabTest?: boolean;
         packagingOptions?: string[];
         allergens?: string[];
+        packagingTypeId?: string | null;
+        packagingSubtypeId?: string | null;
         active?: boolean;
     }
 ): Promise<boolean> {
@@ -329,15 +480,61 @@ export async function updateRawMaterial(
     if (data.specifications !== undefined) updateData.specifications = data.specifications;
     if (data.storageCondition !== undefined) updateData.storage_condition = data.storageCondition;
     if (data.shelfLife !== undefined) updateData.shelf_life = data.shelfLife;
+    if (data.shelfLifeUnit !== undefined) updateData.shelf_life_unit = data.shelfLifeUnit;
+    if (data.expirySubtractDays !== undefined) {
+        const shelfLifeUnitForSubtract: ShelfLifeUnit = data.shelfLifeUnit || 'months';
+        updateData.expiry_subtract_days = normalizeExpirySubtractDays(data.expirySubtractDays, shelfLifeUnitForSubtract);
+    } else if (data.shelfLifeUnit === 'days') {
+        updateData.expiry_subtract_days = 0;
+    }
     if (data.requiresLabTest !== undefined) updateData.requires_lab_test = data.requiresLabTest;
     if (data.packagingOptions !== undefined) updateData.packaging_options = data.packagingOptions;
-    if (data.allergens !== undefined) updateData.allergens = data.allergens;
+
+    if (data.category === 'packaging') {
+        // Packaging materials never keep allergen flags.
+        updateData.allergens = [];
+    } else if (data.allergens !== undefined) {
+        updateData.allergens = data.allergens;
+    }
+
+    if (data.category !== undefined && data.category !== 'packaging') {
+        updateData.packaging_type_id = null;
+        updateData.packaging_subtype_id = null;
+    } else {
+        if (data.packagingTypeId !== undefined) updateData.packaging_type_id = data.packagingTypeId;
+        if (data.packagingSubtypeId !== undefined) updateData.packaging_subtype_id = data.packagingSubtypeId;
+    }
+
     if (data.active !== undefined) updateData.is_active = data.active;
 
-    const { error } = await supabase
-        .from('raw_materials')
-        .update(updateData)
-        .eq('id', id);
+    let mode: RawMaterialsFeatureMode = rawMaterialsFeatureMode || 'with_packaging_links';
+    let error: any = null;
+
+    while (true) {
+        const payloadForUpdate = stripUnsupportedRawMaterialFields(updateData, mode);
+        const response = await supabase
+            .from('raw_materials')
+            .update(payloadForUpdate)
+            .eq('id', id);
+
+        error = response.error;
+
+        if (!error) {
+            rawMaterialsFeatureMode = mode;
+            break;
+        }
+
+        if (!isMissingRawMaterialsFeatureColumnError(error)) {
+            break;
+        }
+
+        const fallbackMode = getFallbackRawMaterialsMode(mode);
+        if (!fallbackMode) {
+            break;
+        }
+
+        mode = fallbackMode;
+    }
 
     if (error) {
         console.error('Error updating raw material:', error.message, error.details, error.hint);

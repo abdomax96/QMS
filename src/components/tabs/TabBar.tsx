@@ -36,6 +36,11 @@ const TabBar: React.FC<TabBarProps> = ({ className }) => {
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     const hasSkippedInitialSyncRef = useRef(false);
+    const currentPathRef = useRef(location.pathname);
+
+    React.useEffect(() => {
+        currentPathRef.current = location.pathname;
+    }, [location.pathname]);
 
     // Get icon for tab type
     const getTabIcon = (type: string) => {
@@ -89,7 +94,8 @@ const TabBar: React.FC<TabBarProps> = ({ className }) => {
             // Switch to the tab first (makes it active)
             switchTab(tabId);
             // Close it without auto-switch (we'll navigate manually)
-            closeTab(tabId, false, false);
+            const closed = closeTab(tabId, true, false);
+            if (!closed) return;
             // Navigate to return path (this removes report from view)
             navigate(closeReturnPath);
             return;
@@ -98,14 +104,15 @@ const TabBar: React.FC<TabBarProps> = ({ className }) => {
         // Active tab with returnPath (existing logic - already works correctly)
         if (activeTabId === tabId && closeReturnPath) {
             // Disable auto-switch in store logic
-            closeTab(tabId, false, false);
+            const closed = closeTab(tabId, true, false);
+            if (!closed) return;
             // Manually navigate to return path
             navigate(closeReturnPath);
             return;
         }
 
         // Default behavior for tabs without returnPath (templates, folders, settings)
-        closeTab(tabId);
+        closeTab(tabId, true);
     };
 
     const handleContextMenu = (e: React.MouseEvent, tabId: string) => {
@@ -148,13 +155,13 @@ const TabBar: React.FC<TabBarProps> = ({ className }) => {
             const tab = getTab(activeTabId);
             if (tab?.path) {
                 // Only navigate if we're not already at the target path.
-                if (location.pathname !== tab.path) {
+                if (currentPathRef.current !== tab.path) {
                     console.log('[TabBar] Navigating to active tab:', tab.path);
                     navigate(tab.path);
                 }
             }
         }
-    }, [activeTabId, hasHydrated, getTab, navigate, location.pathname]);
+    }, [activeTabId, hasHydrated, getTab, navigate, tabs]);
 
     // if (tabs.length === 0) return null;
 

@@ -3,9 +3,10 @@
  * Main component for registering pallets during production
  */
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { usePalletStore } from '../../store/palletStore';
 import { useCompanyStore } from '../../store/companyStore';
+import { useTabsStore } from '../../store/tabsStore';
 import { palletBatchService } from '../../services/palletBatchService';
 import { supabase } from '../../config/supabase';
 import { useNavigate } from 'react-router-dom';
@@ -87,6 +88,7 @@ const getLocalDateTimeValue = (date: Date = new Date()) => {
 
 export default function ProductionRegistration() {
     const navigate = useNavigate();
+    const { openTab } = useTabsStore();
     const { selectedCompanyId } = useCompanyStore();
     const {
         currentSession,
@@ -113,7 +115,7 @@ export default function ProductionRegistration() {
     const [continuePalletId, setContinuePalletId] = useState<string | null>(null);
 
     // Session setup state
-    const [setupMode, setSetupMode] = useState(true);
+    const [setupMode, setSetupMode] = useState(() => !currentSession);
     const [productId, setProductId] = useState('');
     const [batchNumber, setBatchNumber] = useState('');
     const [shift, setShift] = useState<'A' | 'B' | 'C'>('A');
@@ -140,6 +142,10 @@ export default function ProductionRegistration() {
             setCartons(currentSession.standard_cartons_per_pallet);
         }
     }, [currentSession?.standard_cartons_per_pallet]);
+
+    useEffect(() => {
+        setSetupMode(!currentSession);
+    }, [currentSession]);
 
     const fetchPartialPallets = async () => {
         if (!currentSession?.product_id) return;
@@ -343,6 +349,17 @@ export default function ProductionRegistration() {
     };
 
     const [startingSession, setStartingSession] = useState(false);
+    const openPalletTrackingTab = useCallback((session?: { batch_number?: string; shift?: string }) => {
+        const batchLabel = session?.batch_number ? ` • ${session.batch_number}` : '';
+        const shiftLabel = session?.shift ? ` • ${session.shift}` : '';
+        openTab(
+            'settings',
+            `pallet-tracking-${selectedCompanyId || 'global'}`,
+            `نظام تتبع البالتات${batchLabel}${shiftLabel}`,
+            '/pallet/production',
+            '/pallet'
+        );
+    }, [openTab, selectedCompanyId]);
 
     const handleStartSession = async () => {
         const finalBatchNumber = batchNumber.trim();
@@ -395,6 +412,12 @@ export default function ProductionRegistration() {
             setStartingSession(false);
         }
     };
+
+    useEffect(() => {
+        if (!setupMode && currentSession) {
+            openPalletTrackingTab(currentSession);
+        }
+    }, [setupMode, currentSession, openPalletTrackingTab]);
 
     const handleRegisterPallet = async (shouldPrint = false) => {
         // Validate cartons

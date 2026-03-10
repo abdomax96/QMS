@@ -1,14 +1,42 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import useStore from '../store';
 import { useCompanyStore } from '../store/companyStore';
 import { useAppSettingsStore } from '../store/appSettingsStore';
 import { useDateFormat, cn } from '../utils';
 import { useTabsStore } from '../store/tabsStore';
+import { usePermissions } from '../hooks/usePermissions';
+import { useReportWorkflow } from '../hooks/useReportWorkflow';
+import { useToastStore } from '../store/toastStore';
 import { calculateTare1, calculateTare2, getAQLLimits, validateColumn } from '../utils/tareCalculations';
+import { getRecipesByProduct } from '../services/recipeService';
+import { variableService } from '../services/variableService';
+import { formatMaterialDateForDisplay } from '../utils/materialReceivingDate';
+import {
+  buildSideHeaderRenderModel,
+  expandSideHeaderRowsToMatrix,
+  getCustomBoldColumnSeparatorsForRendering,
+  getCustomBoldRowSeparatorsForRendering,
+  getCustomColumnsForRendering,
+  getCustomGridSettingsForRendering,
+  getCustomHeaderRowsForRendering,
+  getCustomLayoutForRendering,
+  getCustomSideHeaderLabelsForRendering,
+  getCustomSideHeaderRowsForRendering,
+  getCustomSideHeaderTargetsForRendering,
+  resolveCustomCellDisplayValue,
+  resolveCustomCellType,
+} from '../utils/customTableV2';
+import {
+  applyDocumentVariableBindingsToTemplate,
+  buildDocumentVariableSnapshot,
+  isVariableToken,
+  resolveDocumentVariableDisplayValue,
+} from '../utils/documentVariableBindings';
 import type { FormSection, QualityCriteria, Table, TableColumn, TableParameter } from '../types';
 
 type AnyRecord = Record<string, any>;
+type VariableSnapshot = Record<string, string | number>;
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
@@ -17,9 +45,29 @@ const toText = (value: unknown): string => {
   return String(value);
 };
 
+const getUnitDisplayLabel = (unit: unknown): string => {
+  const normalized = String(unit ?? '').trim();
+  if (!normalized || normalized === '-') return '-';
+
+  const unitMap: Record<string, string> = {
+    kg: 'كجم',
+    g: 'جم',
+    mg: 'مجم',
+    l: 'لتر',
+    ml: 'مل',
+  };
+
+  return unitMap[normalized.toLowerCase()] || normalized;
+};
+
 const toFiniteNumber = (value: unknown): number | null => {
   const parsed = typeof value === 'number' ? value : Number(String(value).replace(',', '.'));
   return Number.isFinite(parsed) ? parsed : null;
+};
+
+const resolveSnapshotDisplayValue = (value: unknown, snapshot?: VariableSnapshot): unknown => {
+  if (!snapshot || Object.keys(snapshot).length === 0) return value;
+  return resolveDocumentVariableDisplayValue(value, snapshot);
 };
 
 const toPositiveInt = (value: unknown): number | null => {
@@ -127,6 +175,41 @@ const getStatusStamp = (status?: string) => {
 };
 
 const resolveCellValue = (value: unknown, columnOrParameter: TableColumn | TableParameter) => {
+  if (columnOrParameter.type === 'image') {
+    let images: string[] = [];
+    if (Array.isArray(value)) {
+      images = value.filter((item): item is string => typeof item === 'string');
+    } else if (typeof value === 'string') {
+      if (value.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(value);
+          if (Array.isArray(parsed)) {
+            images = parsed.filter((item): item is string => typeof item === 'string');
+          } else {
+            images = [value];
+          }
+        } catch (_error) {
+          images = [value];
+        }
+      } else {
+        images = [value];
+      }
+    }
+
+    const validImages = images.filter((img) => img && img.length > 10);
+    if (validImages.length === 0) return '-';
+
+    return (
+      <div className="w-full flex flex-col gap-1">
+        {validImages.map((img, index) => (
+          <div key={`${img.slice(0, 24)}-${index}`} className="w-full h-12 border border-slate-200 rounded overflow-hidden bg-white">
+            <img src={img} alt={`cell-image-${index + 1}`} className="w-full h-full object-contain" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   if (columnOrParameter.type === 'boolean-check') {
     const normalized = String(value ?? '').toLowerCase();
     const isAccepted =
@@ -196,8 +279,14 @@ const ParametersTable: React.FC<{
   table: Table;
   tableData: any[][];
   formData: AnyRecord;
-}> = ({ table, tableData, formData }) => {
+  variableSnapshot?: VariableSnapshot;
+}> = ({ table, tableData, formData, variableSnapshot }) => {
   const parameters = Array.isArray(table.parameters) ? table.parameters : [];
+  const hasResolvedDisplayValue = (value: unknown): boolean =>
+    value !== undefined &&
+    value !== null &&
+    value !== '' &&
+    !(typeof value === 'string' && isVariableToken(value));
 
   const startTime = formData?.inspection_start_time || '08:00';
   const durationHours = Number(formData?.shift_duration || 8);
@@ -213,7 +302,9 @@ const ParametersTable: React.FC<{
   const timeValueMaxLen = Math.max(
     ...timeHeaders.map((header) => textLen(header)),
     ...timeIndexes.flatMap((columnIndex) =>
-      tableData.map((row) => textLen(Array.isArray(row) ? row[columnIndex] : ''))
+      tableData.map((row) =>
+        textLen(resolveSnapshotDisplayValue(Array.isArray(row) ? row[columnIndex] : '', variableSnapshot))
+      )
     ),
     1
   );
@@ -221,7 +312,9 @@ const ParametersTable: React.FC<{
   const statsPerRow = parameters.map((_, rowIndex) => {
     const row = Array.isArray(tableData[rowIndex]) ? tableData[rowIndex] : [];
     const numericValues = timeIndexes
-      .map((columnIndex) => toFiniteNumber(row[columnIndex]))
+      .map((columnIndex) =>
+        toFiniteNumber(resolveSnapshotDisplayValue(row[columnIndex], variableSnapshot))
+      )
       .filter((value): value is number => value !== null);
     return calcStats(numericValues);
   });
@@ -239,10 +332,22 @@ const ParametersTable: React.FC<{
   const limitsValueMaxLen = Math.max(
     textLen('الحدود'),
     ...parameters.map((parameter) => {
+      const resolvedParamMin = resolveSnapshotDisplayValue(parameter.min, variableSnapshot);
+      const resolvedParamMax = resolveSnapshotDisplayValue(parameter.max, variableSnapshot);
+      const resolvedParamLimits = resolveSnapshotDisplayValue(parameter.limits, variableSnapshot);
+      const hasMin = hasResolvedDisplayValue(resolvedParamMin);
+      const hasMax = hasResolvedDisplayValue(resolvedParamMax);
+      const hasLimits = hasResolvedDisplayValue(resolvedParamLimits);
       const value =
-        parameter.min !== undefined && parameter.max !== undefined
-          ? `${parameter.min} - ${parameter.max}`
-          : parameter.limits || '-';
+        hasMin && hasMax
+          ? `${resolvedParamMin} - ${resolvedParamMax}`
+          : hasLimits
+            ? String(resolvedParamLimits)
+            : hasMin
+              ? `>= ${resolvedParamMin}`
+              : hasMax
+                ? `<= ${resolvedParamMax}`
+                : '-';
       return textLen(value);
     }),
     1
@@ -303,13 +408,29 @@ const ParametersTable: React.FC<{
           {parameters.map((parameter, rowIndex) => {
             const row = Array.isArray(tableData[rowIndex]) ? tableData[rowIndex] : [];
             const numericValues = timeIndexes
-              .map((columnIndex) => toFiniteNumber(row[columnIndex]))
+              .map((columnIndex) =>
+                toFiniteNumber(resolveSnapshotDisplayValue(row[columnIndex], variableSnapshot))
+              )
               .filter((value): value is number => value !== null);
             const stats = calcStats(numericValues);
+            const resolvedParamMin = resolveSnapshotDisplayValue(parameter.min, variableSnapshot);
+            const resolvedParamMax = resolveSnapshotDisplayValue(parameter.max, variableSnapshot);
+            const resolvedParamLimits = resolveSnapshotDisplayValue(parameter.limits, variableSnapshot);
+            const hasMin = hasResolvedDisplayValue(resolvedParamMin);
+            const hasMax = hasResolvedDisplayValue(resolvedParamMax);
+            const hasLimits = hasResolvedDisplayValue(resolvedParamLimits);
+            const resolvedParamMinNumber = hasMin ? toFiniteNumber(resolvedParamMin) : null;
+            const resolvedParamMaxNumber = hasMax ? toFiniteNumber(resolvedParamMax) : null;
             const limitsText =
-              parameter.min !== undefined && parameter.max !== undefined
-                ? `${parameter.min} - ${parameter.max}`
-                : parameter.limits || '-';
+              hasMin && hasMax
+                ? `${resolvedParamMin} - ${resolvedParamMax}`
+                : hasLimits
+                  ? String(resolvedParamLimits)
+                  : hasMin
+                    ? `>= ${resolvedParamMin}`
+                    : hasMax
+                      ? `<= ${resolvedParamMax}`
+                      : '-';
 
             return (
               <tr key={`parameter-row-${rowIndex}`} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
@@ -324,15 +445,16 @@ const ParametersTable: React.FC<{
                 </td>
                 {timeIndexes.map((columnIndex) => {
                   const rawValue = row[columnIndex];
-                  const normalizedValue = resolveCellValue(rawValue, parameter);
-                  const numericValue = toFiniteNumber(rawValue);
+                  const resolvedValue = resolveSnapshotDisplayValue(rawValue, variableSnapshot);
+                  const normalizedValue = resolveCellValue(resolvedValue, parameter);
+                  const numericValue = toFiniteNumber(resolvedValue);
                   const hasNumericLimit =
-                    parameter.min !== undefined &&
-                    parameter.max !== undefined &&
+                    resolvedParamMinNumber !== null &&
+                    resolvedParamMaxNumber !== null &&
                     numericValue !== null;
                   const outOfRange =
                     hasNumericLimit &&
-                    (numericValue < Number(parameter.min) || numericValue > Number(parameter.max));
+                    (numericValue < resolvedParamMinNumber || numericValue > resolvedParamMaxNumber);
 
                   return (
                     <td
@@ -366,7 +488,8 @@ const SampleTable: React.FC<{
   tableData: any[][];
   formData: AnyRecord;
   template: AnyRecord;
-}> = ({ table, tableData, formData, template }) => {
+  variableSnapshot?: VariableSnapshot;
+}> = ({ table, tableData, formData, template, variableSnapshot }) => {
   const sampleSize = resolveSampleSize(table, 20);
   const rowCount = Math.max(sampleSize, tableData.length);
 
@@ -382,8 +505,11 @@ const SampleTable: React.FC<{
   const showTare1Row = Boolean(table.features?.calculate_tare1);
   const showTare2Row = Boolean(table.features?.calculate_tare2);
 
-  const standardWeight = toFiniteNumber(template?.basic_info?.standard_weight);
-  const maxStd = toFiniteNumber(table.max_std);
+  const standardWeight = toFiniteNumber(resolveSnapshotDisplayValue(template?.basic_info?.standard_weight, variableSnapshot));
+  const maxStdRaw = resolveSnapshotDisplayValue(table.max_std, variableSnapshot);
+  const maxStd = toFiniteNumber(maxStdRaw);
+  const maxStdDisplay =
+    maxStdRaw !== undefined && maxStdRaw !== null && maxStdRaw !== '' ? String(maxStdRaw) : null;
   const aqlLevel = String(template?.basic_info?.aql_level || table.aql_level || '1.0');
   const tare1 = standardWeight !== null ? calculateTare1(standardWeight) : null;
   const tare2 = standardWeight !== null ? calculateTare2(standardWeight) : null;
@@ -396,12 +522,16 @@ const SampleTable: React.FC<{
     : [];
   const stoppedTimesSet = new Set(stoppedTimes);
   const isStoppedColumn = (columnIndex: number) => stoppedTimesSet.has(timeHeaders[columnIndex]);
+  const resolveSampleCellValue = (rowIndex: number, columnIndex: number): unknown => {
+    const rawValue = Array.isArray(tableData[rowIndex]) ? tableData[rowIndex][columnIndex] : undefined;
+    return resolveSnapshotDisplayValue(rawValue, variableSnapshot);
+  };
 
   const getColumnNumericValues = (columnIndex: number): number[] => {
     if (isStoppedColumn(columnIndex)) return [];
     const numeric: number[] = [];
     for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
-      const value = Array.isArray(tableData[rowIndex]) ? tableData[rowIndex][columnIndex] : undefined;
+      const value = resolveSampleCellValue(rowIndex, columnIndex);
       const parsed = toFiniteNumber(value);
       if (parsed !== null) numeric.push(parsed);
     }
@@ -412,7 +542,7 @@ const SampleTable: React.FC<{
     if (isStoppedColumn(columnIndex) || tare1 === null || tare2 === null) return null;
     const weights: Array<number | undefined> = [];
     for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
-      const value = Array.isArray(tableData[rowIndex]) ? tableData[rowIndex][columnIndex] : undefined;
+      const value = resolveSampleCellValue(rowIndex, columnIndex);
       const parsed = toFiniteNumber(value);
       weights.push(parsed !== null ? parsed : undefined);
     }
@@ -429,7 +559,7 @@ const SampleTable: React.FC<{
   const timeValueMaxLen = Math.max(
     ...timeHeaders.map((header) => textLen(header)),
     ...timeIndexes.flatMap((columnIndex) =>
-      tableData.map((row) => textLen(Array.isArray(row) ? row[columnIndex] : ''))
+      Array.from({ length: rowCount }, (_, rowIndex) => textLen(resolveSampleCellValue(rowIndex, columnIndex)))
     ),
     ...columnStats.map((stats) => textLen(formatMetric(stats.avg))),
     ...columnStats.map((stats) => textLen(formatMetric(stats.std, 3))),
@@ -439,7 +569,7 @@ const SampleTable: React.FC<{
     textLen('العينة #'),
     textLen(String(rowCount)),
     showAverageRow ? textLen(standardWeight !== null ? `AVG (>=${standardWeight})` : 'AVG') : 0,
-    showStdRow ? textLen(maxStd !== null ? `STD (<=${maxStd})` : 'STD') : 0,
+    showStdRow ? textLen(maxStdDisplay ? `STD (<=${maxStdDisplay})` : 'STD') : 0,
     showTare1Row ? textLen(`T1 (<=${aqlLimits.acceptance})`) : 0,
     showTare2Row ? textLen('T2 (<=0)') : 0
   );
@@ -481,7 +611,6 @@ const SampleTable: React.FC<{
         </thead>
         <tbody>
           {Array.from({ length: rowCount }).map((_, rowIndex) => {
-            const row = Array.isArray(tableData[rowIndex]) ? tableData[rowIndex] : [];
             return (
               <tr key={`sample-row-${rowIndex}`} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
                 <td className="border border-slate-300 px-1 py-1 text-center font-semibold text-slate-600">
@@ -489,17 +618,19 @@ const SampleTable: React.FC<{
                 </td>
                 {timeIndexes.map((columnIndex) => {
                   const stopped = isStoppedColumn(columnIndex);
-                  const value = row[columnIndex];
+                  const value = resolveSampleCellValue(rowIndex, columnIndex);
+                  const hasValue = value !== undefined && value !== null && value !== '';
+                  const displayValue = hasValue ? String(value) : '-';
                   return (
                     <td
                       key={`sample-${rowIndex}-col-${columnIndex}`}
                       className={cn(
                         'border border-slate-300 px-1 py-1 text-center font-mono',
                         stopped && 'bg-orange-100 text-orange-700 font-semibold',
-                        (value === undefined || value === null || value === '') && 'text-slate-300'
+                        !hasValue && 'text-slate-300'
                       )}
                     >
-                      {stopped ? 'STOP' : value !== undefined && value !== null && value !== '' ? value : '-'}
+                      {stopped ? 'STOP' : displayValue}
                     </td>
                   );
                 })}
@@ -536,7 +667,7 @@ const SampleTable: React.FC<{
           {showStdRow && (
             <tr className="bg-purple-100 font-semibold">
               <td className="border border-slate-300 px-1 py-1 text-center text-purple-800 whitespace-nowrap">
-                {maxStd !== null ? `STD (<=${maxStd})` : 'STD'}
+                {maxStdDisplay ? `STD (<=${maxStdDisplay})` : 'STD'}
               </td>
               {timeIndexes.map((columnIndex) => {
                 const stopped = isStoppedColumn(columnIndex);
@@ -616,14 +747,384 @@ const SampleTable: React.FC<{
   );
 };
 
+const RecipeTraceabilityPreviewTable: React.FC<{
+  table: Table;
+  tableData: any[][];
+  previewRecipes: AnyRecord[];
+}> = ({ table, tableData, previewRecipes }) => {
+  const rawTableData = Array.isArray(tableData) ? tableData : [];
+  const lastRow = rawTableData[rawTableData.length - 1] as AnyRecord | undefined;
+  const hasRecipeMeta = lastRow?.__recipe_meta__ === true;
+  const recipeMeta = hasRecipeMeta ? lastRow : null;
+  const dataRows = (hasRecipeMeta ? rawTableData.slice(0, -1) : rawTableData).filter((row) => Array.isArray(row));
+  const metaDoughCountByRecipe = (() => {
+    const source = recipeMeta?.dough_count_by_recipe || recipeMeta?.doughCountByRecipe;
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return {} as Record<string, number>;
+
+    return Object.entries(source as Record<string, unknown>).reduce<Record<string, number>>((acc, [key, value]) => {
+      const parsed = toPositiveInt(value);
+      if (key && parsed !== null) {
+        acc[key] = parsed;
+      }
+      return acc;
+    }, {});
+  })();
+  const metaRecipeRowsById = (() => {
+    const source = recipeMeta?.recipe_rows_by_id || recipeMeta?.recipeRowsById || recipeMeta?.rows_by_recipe;
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return {} as Record<string, any[][]>;
+
+    return Object.entries(source as Record<string, unknown>).reduce<Record<string, any[][]>>((acc, [key, value]) => {
+      if (!key || !Array.isArray(value)) return acc;
+      acc[key] = value.filter((row) => Array.isArray(row)) as any[][];
+      return acc;
+    }, {});
+  })();
+
+  const tableDerivedIngredients = dataRows.map((row: any) => ({
+    ingredient_name: row[0],
+    quantity: row[1],
+    unit: row[2],
+    batches: Array.isArray(row[3]) ? row[3] : [],
+  }));
+
+  const metaRecipesCandidates = [
+    recipeMeta?.recipes,
+    recipeMeta?.all_recipes,
+    recipeMeta?.allRecipes,
+    recipeMeta?.recipe_list,
+    recipeMeta?.__recipes__,
+  ];
+  const recipesFromMetaList = metaRecipesCandidates.find((candidate) => Array.isArray(candidate)) as AnyRecord[] | undefined;
+  const recipesFromMeta = Array.isArray(recipesFromMetaList) ? recipesFromMetaList.filter((item) => item && typeof item === 'object') : [];
+  const catalogRecipes = Array.isArray(previewRecipes) ? previewRecipes : [];
+  const shouldPreferCatalogRecipes = catalogRecipes.length > 1;
+
+  const recipesToDisplay =
+    recipesFromMeta.length > 0
+      ? recipesFromMeta
+      : shouldPreferCatalogRecipes
+        ? catalogRecipes
+        : recipeMeta
+          ? [recipeMeta]
+          : catalogRecipes.length > 0
+            ? catalogRecipes
+            : tableDerivedIngredients.length > 0
+              ? [
+                  {
+                    id: `table-${table.id}`,
+                    name: table.name || 'تتبع الخامات',
+                    ingredients: tableDerivedIngredients,
+                  },
+                ]
+              : [];
+
+  if (!recipesToDisplay.length) {
+    return (
+      <div className="border border-slate-300 rounded-md p-3 text-[11px] text-slate-600">
+        لا توجد بيانات تتبع خامات لهذا الجدول.
+      </div>
+    );
+  }
+
+  const getRecipeKey = (recipe: AnyRecord, recipeIndex: number) =>
+    String(recipe?.id || recipe?.recipe_id || recipe?.name || `recipe-${recipeIndex}`);
+
+  const getRecipeDoughCount = (recipe: AnyRecord, recipeIndex: number): number => {
+    const recipeId = String(recipe?.id || recipe?.recipe_id || '').trim();
+    if (recipeId && metaDoughCountByRecipe[recipeId] !== undefined) {
+      return metaDoughCountByRecipe[recipeId];
+    }
+
+    const recipeRows = recipeId ? metaRecipeRowsById[recipeId] : undefined;
+    if (Array.isArray(recipeRows) && Array.isArray(recipeRows[0])) {
+      const parsed = toPositiveInt(recipeRows[0]?.[4]);
+      if (parsed !== null) return parsed;
+    }
+
+    if (recipeIndex === 0 && Array.isArray(dataRows[0])) {
+      const parsed = toPositiveInt(dataRows[0]?.[4]);
+      if (parsed !== null) return parsed;
+    }
+
+    return 1;
+  };
+
+  const normalizeSummaryRecipeName = (name: string): string => {
+    const normalized = String(name || '')
+      .replace(/مكونا\s+ت/gi, 'مكونات')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!normalized) return 'وصفة';
+
+    const withoutRepeatedDoughPrefix = normalized
+      .replace(/^مكونات?\s+العجين\s*/i, '')
+      .trim();
+
+    return withoutRepeatedDoughPrefix || normalized;
+  };
+
+  const doughCountSummary = recipesToDisplay.map((recipe, recipeIndex) => ({
+    key: getRecipeKey(recipe, recipeIndex),
+    name: normalizeSummaryRecipeName(String(recipe?.name || `وصفة ${recipeIndex + 1}`)),
+    doughCount: getRecipeDoughCount(recipe, recipeIndex),
+  }));
+
+  const renderRecipeTable = (recipe: AnyRecord, recipeIndex: number) => {
+    const recipeIngredients = Array.isArray(recipe?.ingredients) ? recipe.ingredients : [];
+    const baseIngredients = recipeIngredients.length > 0 ? recipeIngredients : recipeIndex === 0 ? tableDerivedIngredients : [];
+    const ingredients = baseIngredients.map((ingredient: AnyRecord, ingredientIndex: number) => {
+      const rowFromTable = dataRows[ingredientIndex] as any[] | undefined;
+      const rowBatches =
+        recipeIndex === 0 && Array.isArray(rowFromTable?.[3])
+          ? rowFromTable?.[3]
+          : [];
+      return {
+        ...ingredient,
+        ingredient_name: ingredient?.ingredient_name || ingredient?.name || tableDerivedIngredients[ingredientIndex]?.ingredient_name,
+        quantity: ingredient?.quantity ?? tableDerivedIngredients[ingredientIndex]?.quantity,
+        unit: ingredient?.unit ?? tableDerivedIngredients[ingredientIndex]?.unit,
+        batches: rowBatches.length > 0 ? rowBatches : Array.isArray(ingredient?.batches) ? ingredient.batches : [],
+      };
+    });
+
+    if (!ingredients.length) {
+      return <div className="border border-slate-300 rounded-md p-3 text-[11px] text-slate-600">لا توجد بيانات خامات محفوظة لهذه الوصفة.</div>;
+    }
+
+    return (
+      <div className="space-y-1.5">
+        <div className="text-[11px] font-semibold text-blue-800">
+          وصفة {recipeIndex + 1}: {recipe?.name || `وصفة ${recipeIndex + 1}`}
+          {recipe?.version ? <span className="mr-1 text-[10px] text-slate-500">(v{recipe.version})</span> : null}
+        </div>
+
+        <div className="border border-slate-300 rounded-md print:border-0 print:rounded-none print:overflow-visible">
+          <table className="a4-clean-table w-full border-collapse text-[10px]" style={{ tableLayout: 'fixed' }}>
+            <colgroup>
+              <col style={{ width: '24%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '19%' }} />
+              <col style={{ width: '19%' }} />
+            </colgroup>
+            <thead>
+              <tr className="bg-slate-800 text-white">
+                <th className="border border-slate-300 px-2 py-1 text-right font-semibold">الخامة</th>
+                <th className="border border-slate-300 px-1 py-1 text-center font-semibold">الكمية</th>
+                <th className="border border-slate-300 px-1 py-1 text-center font-semibold">الوحدة</th>
+                <th className="border border-slate-300 px-1 py-1 text-center font-semibold">رقم التشغيلة</th>
+                <th className="border border-slate-300 px-1 py-1 text-center font-semibold">تاريخ الإنتاج</th>
+                <th className="border border-slate-300 px-1 py-1 text-center font-semibold">تاريخ الانتهاء</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ingredients.flatMap((ingredient: AnyRecord, ingredientIndex: number) => {
+                const ingredientName = toText(ingredient?.ingredient_name || ingredient?.name);
+                const quantity = toText(ingredient?.quantity);
+                const unit = getUnitDisplayLabel(ingredient?.unit);
+                const batches = Array.isArray(ingredient?.batches) && ingredient.batches.length > 0
+                  ? ingredient.batches
+                  : [null];
+                const rowClass = ingredientIndex % 2 === 0 ? 'bg-white' : 'bg-slate-50';
+
+                return batches.map((batch: AnyRecord | null, batchIndex: number) => {
+                  const batchNumber = toText(batch?.batchNumber || batch?.lotNumber || batch?.batch_number);
+                  const productionDate = formatMaterialDateForDisplay(
+                    batch?.productionDate || batch?.production_date,
+                    (batch?.productionDateFormat || batch?.production_date_format || 'dmy') as 'dmy' | 'my',
+                    'ar'
+                  );
+                  const expiryDate = formatMaterialDateForDisplay(
+                    batch?.expiryDate || batch?.expiry_date,
+                    (batch?.expiryDateFormat || batch?.expiry_date_format || 'dmy') as 'dmy' | 'my',
+                    'ar'
+                  );
+
+                  return (
+                    <tr key={`recipe-${recipeIndex}-ing-${ingredientIndex}-batch-${batchIndex}`} className={rowClass}>
+                      {batchIndex === 0 ? (
+                        <>
+                          <td className="border border-slate-300 px-2 py-1 align-top" rowSpan={batches.length}>
+                            {ingredientName}
+                          </td>
+                          <td className="border border-slate-300 px-1 py-1 text-center align-top" rowSpan={batches.length}>
+                            {quantity}
+                          </td>
+                          <td className="border border-slate-300 px-1 py-1 text-center align-top" rowSpan={batches.length}>
+                            {unit}
+                          </td>
+                        </>
+                      ) : null}
+                      <td className="border border-slate-300 px-1 py-1 text-center">{batchNumber}</td>
+                      <td className="border border-slate-300 px-1 py-1 text-center">{productionDate}</td>
+                      <td className="border border-slate-300 px-1 py-1 text-center">{expiryDate}</td>
+                    </tr>
+                  );
+                });
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
+  const firstPair = recipesToDisplay.slice(0, 2);
+  const remainingRecipes = recipesToDisplay.slice(2);
+
+  return (
+    <div className="space-y-3">
+      {firstPair.length > 0 ? (
+        firstPair.length === 1 ? (
+          renderRecipeTable(firstPair[0], 0)
+        ) : (
+          <div className="grid grid-cols-2 gap-3" dir="rtl">
+            {firstPair.map((recipe, recipeIndex) => (
+              <div key={getRecipeKey(recipe, recipeIndex)} className="min-w-0">
+                {renderRecipeTable(recipe, recipeIndex)}
+              </div>
+            ))}
+          </div>
+        )
+      ) : null}
+
+      {remainingRecipes.map((recipe, recipeIndex) => (
+        <div key={getRecipeKey(recipe, recipeIndex + 2)} className="w-full">
+          {renderRecipeTable(recipe, recipeIndex + 2)}
+        </div>
+      ))}
+
+      {doughCountSummary.length > 0 ? (
+        <div className="border border-slate-300 rounded-md px-3 py-2 bg-slate-50">
+          <div className="text-[11px] font-semibold text-slate-700 mb-1.5">عدد العجنات</div>
+          <div className="flex flex-wrap gap-1.5">
+            {doughCountSummary.map((item) => (
+              <div
+                key={item.key}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2 py-1"
+              >
+                <span className="text-[10px] text-slate-700">{item.name}</span>
+                <span className="inline-flex min-w-5 h-5 items-center justify-center rounded border border-slate-400 bg-transparent text-black text-[10px] font-bold px-1.5">
+                  {item.doughCount}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
 const GenericTable: React.FC<{
   table: Table;
   tableData: any[][];
-}> = ({ table, tableData }) => {
-  const columns = Array.isArray(table.columns) ? table.columns : [];
-  const showRowNumbers = table.show_row_numbers !== false;
-  const fallbackRows = Number(table.rows || 0);
-  const rowCount = Math.max(tableData.length, fallbackRows, 1);
+  inspectionStartTime?: string;
+  shiftDuration?: number;
+  variableSnapshot?: VariableSnapshot;
+}> = ({ table, tableData, inspectionStartTime = '08:00', shiftDuration = 8, variableSnapshot }) => {
+  const columns = getCustomColumnsForRendering(table);
+  const gridSettings = getCustomGridSettingsForRendering(table);
+  const layoutSettings = getCustomLayoutForRendering(table);
+  const customMeta = (table.schema_v2?.meta as AnyRecord) || {};
+  const useCustomTimeHeader = Boolean(customMeta.time_header_enabled);
+  const customIntervalMinutes = Math.max(1, Number(table.inspection_period || 30));
+  const generatedCustomTimeHeaders = useCustomTimeHeader
+    ? generateTimeHeaders(inspectionStartTime, shiftDuration, customIntervalMinutes)
+    : [];
+  const getCustomColumnLabel = (colIndex: number) =>
+    generatedCustomTimeHeaders[colIndex] ||
+    columns[colIndex]?.label ||
+    columns[colIndex]?.key ||
+    `عمود ${colIndex + 1}`;
+  const showRowNumbers = gridSettings.showRowNumbers !== false;
+  const rowHeaderLabel = gridSettings.rowHeaderLabel || '#';
+  const getResolvedCustomCellValue = (
+    rows: any[][],
+    rowIndex: number,
+    colIndex: number,
+    column: TableColumn
+  ) =>
+    resolveSnapshotDisplayValue(
+      resolveCustomCellDisplayValue(
+        table,
+        rows,
+        rowIndex,
+        colIndex,
+        column.type || 'text',
+        column
+      ).value,
+      variableSnapshot
+    );
+  const fallbackRows = Number(gridSettings.rows || 0);
+  const baseRowCount = Math.max(tableData.length, fallbackRows, 1);
+  const rawHeaderRows = getCustomHeaderRowsForRendering(table);
+  const rawSideHeaderRows = getCustomSideHeaderRowsForRendering(table);
+  const customHeaderRows = rawHeaderRows
+    .filter((row: unknown) => Array.isArray(row) && row.length > 0)
+    .map((row: any[]) =>
+      row.map((cell: AnyRecord) => ({
+        label: cell?.label ?? '',
+        col_span: Math.max(1, Number(cell?.col_span ?? cell?.colSpan ?? 1) || 1),
+        row_span: Math.max(1, Number(cell?.row_span ?? cell?.rowSpan ?? 1) || 1),
+        align: (cell?.align as 'right' | 'center' | 'left') || 'center',
+        background_color: cell?.background_color,
+        text_color: cell?.text_color,
+        class_name: cell?.class_name,
+      }))
+    );
+  const sideHeaderModel = buildSideHeaderRenderModel(rawSideHeaderRows, baseRowCount);
+  const customSideHeaderRows = sideHeaderModel.rows;
+  const showTopHeader = layoutSettings.topHeader !== false;
+  const hasCustomHeaderRows = showTopHeader && customHeaderRows.length > 0 && !useCustomTimeHeader;
+  const hasCustomSideHeaders = layoutSettings.sideHeader && sideHeaderModel.columnCount > 0;
+  const customSideHeaderColumnCount = hasCustomSideHeaders
+    ? sideHeaderModel.columnCount
+    : 0;
+  const sideHeaderColumnLabels = hasCustomSideHeaders
+    ? getCustomSideHeaderLabelsForRendering(table, customSideHeaderColumnCount)
+    : [];
+  const sideHeaderMatrix = hasCustomSideHeaders
+    ? expandSideHeaderRowsToMatrix(customSideHeaderRows, customSideHeaderColumnCount)
+    : [];
+  const useDistributedSideHeaders = hasCustomSideHeaders && !hasCustomHeaderRows;
+  const sideHeaderTargets = useDistributedSideHeaders
+    ? getCustomSideHeaderTargetsForRendering(table, customSideHeaderColumnCount, columns.length)
+    : [];
+  const sideHeaderIndexesByTarget = sideHeaderTargets.reduce<Record<number, number[]>>((acc, target, sideIndex) => {
+    const normalizedTarget = Math.max(0, Math.min(columns.length, Number(target) || 0));
+    if (!acc[normalizedTarget]) acc[normalizedTarget] = [];
+    acc[normalizedTarget].push(sideIndex);
+    return acc;
+  }, {});
+  const visibleColumnByIndex = new Map(columns.map((column, index) => [index, column] as const));
+  const rowCount = Math.max(baseRowCount, customSideHeaderRows.length);
+  const boldRowSeparators = getCustomBoldRowSeparatorsForRendering(table, rowCount);
+  const boldColumnSeparators = getCustomBoldColumnSeparatorsForRendering(table, columns.length);
+  const boldRowSeparatorSet = new Set(boldRowSeparators);
+  const boldColumnSeparatorSet = new Set(boldColumnSeparators);
+  const getColumnSeparatorStyle = (colIndex: number): React.CSSProperties | undefined => {
+    if (!boldColumnSeparatorSet.has(colIndex + 1)) return undefined;
+    if (layoutSettings.direction === 'rtl') {
+      return { borderLeftWidth: '3px', borderLeftStyle: 'double' };
+    }
+    return { borderRightWidth: '3px', borderRightStyle: 'double' };
+  };
+  const getDataSeparatorStyle = (rowIndex: number, colIndex: number) => {
+    const style: React.CSSProperties = {};
+    const columnStyle = getColumnSeparatorStyle(colIndex);
+    if (columnStyle) Object.assign(style, columnStyle);
+    if (boldRowSeparatorSet.has(rowIndex + 1)) {
+      style.borderBottomWidth = '3px';
+      style.borderBottomStyle = 'double';
+    }
+    return Object.keys(style).length > 0 ? style : undefined;
+  };
+  const getRowSeparatorStyle = (rowIndex: number) =>
+    boldRowSeparatorSet.has(rowIndex + 1)
+      ? ({ borderBottomWidth: '3px', borderBottomStyle: 'double' } as const)
+      : undefined;
 
   if (!columns.length) {
     return (
@@ -634,53 +1135,245 @@ const GenericTable: React.FC<{
   }
 
   return (
-    <div className="border border-slate-300 rounded-md print:border-0 print:rounded-none print:overflow-visible">
+    <div
+      className="border border-slate-300 rounded-md print:border-0 print:rounded-none print:overflow-visible"
+      dir={layoutSettings.direction}
+    >
       <table className="a4-clean-table w-full border-collapse text-[10px]" style={{ tableLayout: 'fixed' }}>
         <colgroup>
           {showRowNumbers && <col style={{ width: '6ch' }} />}
-          {columns.map((column, index) => (
-            <col key={`${column.key || column.label}-${index}`} />
-          ))}
+          {useDistributedSideHeaders
+            ? Array.from({ length: columns.length + 1 }).map((_, positionIndex) => (
+                <React.Fragment key={`a4-colgroup-position-${positionIndex}`}>
+                  {(sideHeaderIndexesByTarget[positionIndex] || []).map((sideIndex) => (
+                    <col key={`a4-side-col-${positionIndex}-${sideIndex}`} style={{ width: '12ch' }} />
+                  ))}
+                  {visibleColumnByIndex.has(positionIndex) && (
+                    <col key={`a4-col-${positionIndex}`} />
+                  )}
+                </React.Fragment>
+              ))
+            : (
+                <>
+                  {hasCustomSideHeaders &&
+                    Array.from({ length: customSideHeaderColumnCount }).map((_, sideIndex) => (
+                      <col key={`side-col-${sideIndex}`} style={{ width: '12ch' }} />
+                    ))}
+                  {columns.map((column, index) => (
+                    <col key={`${column.key || column.label}-${index}`} />
+                  ))}
+                </>
+              )}
         </colgroup>
-        <thead>
-          <tr className="bg-slate-800 text-white">
-            {showRowNumbers && (
-              <th className="border border-slate-300 px-1 py-1 text-center font-semibold">
-                {table.row_header_label || '#'}
-              </th>
-            )}
-            {columns.map((column, index) => (
-              <th
-                key={`${column.key || column.label}-${index}`}
-                className={cn(
-                  'border border-slate-300 px-2 py-1 font-semibold',
-                  column.align === 'left' ? 'text-left' : column.align === 'right' ? 'text-right' : 'text-center'
+        {showTopHeader && (
+          <thead>
+            {hasCustomHeaderRows ? (
+              customHeaderRows.map((headerRow, headerRowIndex) => (
+                <tr key={`header-row-${headerRowIndex}`} className="bg-slate-800 text-white">
+                  {showRowNumbers && headerRowIndex === 0 && (
+                    <th
+                      rowSpan={customHeaderRows.length}
+                      className="border border-slate-300 px-1 py-1 text-center font-semibold"
+                    >
+                      {rowHeaderLabel}
+                    </th>
+                  )}
+                  {hasCustomSideHeaders && headerRowIndex === 0 && (
+                    <th
+                      rowSpan={customHeaderRows.length}
+                      colSpan={customSideHeaderColumnCount}
+                      className="border border-slate-300 px-1 py-1 text-center font-semibold"
+                    >
+                      الرأس الجانبي
+                    </th>
+                  )}
+                  {headerRow.map((cell, cellIndex) => (
+                    <th
+                      key={`header-cell-${headerRowIndex}-${cellIndex}`}
+                      colSpan={cell.col_span || 1}
+                      rowSpan={cell.row_span || 1}
+                      className={cn(
+                        'border border-slate-300 px-2 py-1 font-semibold',
+                        cell.align === 'left' ? 'text-left' : cell.align === 'right' ? 'text-right' : 'text-center',
+                        cell.class_name
+                      )}
+                      style={{
+                        backgroundColor: cell.background_color || undefined,
+                        color: cell.text_color || undefined,
+                      }}
+                    >
+                      {cell.label || '-'}
+                    </th>
+                  ))}
+                </tr>
+              ))
+            ) : (
+              <tr className="bg-slate-800 text-white">
+                {showRowNumbers && (
+                  <th className="border border-slate-300 px-1 py-1 text-center font-semibold">
+                    {rowHeaderLabel}
+                  </th>
                 )}
-              >
-                {column.label || column.key || `عمود ${index + 1}`}
-              </th>
-            ))}
-          </tr>
-        </thead>
+                {useDistributedSideHeaders
+                  ? Array.from({ length: columns.length + 1 }).map((_, positionIndex) => (
+                      <React.Fragment key={`a4-head-position-${positionIndex}`}>
+                        {(sideHeaderIndexesByTarget[positionIndex] || []).map((sideIndex) => (
+                          <th
+                            key={`a4-side-header-${positionIndex}-${sideIndex}`}
+                            className="border border-slate-300 px-1 py-1 text-center font-semibold"
+                          >
+                            {sideHeaderColumnLabels[sideIndex] || `رأس ${sideIndex + 1}`}
+                          </th>
+                        ))}
+                        {visibleColumnByIndex.has(positionIndex) && (
+                          <th
+                            key={`a4-header-col-${positionIndex}`}
+                            className={cn(
+                              'border border-slate-300 px-2 py-1 font-semibold',
+                              visibleColumnByIndex.get(positionIndex)?.align === 'left'
+                                ? 'text-left'
+                                : visibleColumnByIndex.get(positionIndex)?.align === 'right'
+                                  ? 'text-right'
+                                  : 'text-center'
+                            )}
+                            style={getColumnSeparatorStyle(positionIndex)}
+                          >
+                            {getCustomColumnLabel(positionIndex)}
+                          </th>
+                        )}
+                      </React.Fragment>
+                    ))
+                  : (
+                      <>
+                        {hasCustomSideHeaders &&
+                          Array.from({ length: customSideHeaderColumnCount }).map((_, sideIndex) => (
+                            <th key={`side-header-${sideIndex}`} className="border border-slate-300 px-1 py-1 text-center font-semibold">
+                              {sideHeaderColumnLabels[sideIndex] || `رأس ${sideIndex + 1}`}
+                            </th>
+                          ))}
+                        {columns.map((column, index) => (
+                          <th
+                            key={`${column.key || column.label}-${index}`}
+                            className={cn(
+                              'border border-slate-300 px-2 py-1 font-semibold',
+                              column.align === 'left' ? 'text-left' : column.align === 'right' ? 'text-right' : 'text-center'
+                            )}
+                            style={getColumnSeparatorStyle(index)}
+                          >
+                            {getCustomColumnLabel(index)}
+                          </th>
+                        ))}
+                      </>
+                    )}
+              </tr>
+            )}
+          </thead>
+        )}
         <tbody>
           {Array.from({ length: rowCount }).map((_, rowIndex) => {
-            const row = Array.isArray(tableData[rowIndex]) ? tableData[rowIndex] : [];
             return (
               <tr key={`row-${rowIndex}`} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
                 {showRowNumbers && (
-                  <td className="border border-slate-300 px-1 py-1 text-center text-slate-500">{rowIndex + 1}</td>
-                )}
-                {columns.map((column, columnIndex) => (
                   <td
-                    key={`${column.key || column.label}-${columnIndex}`}
-                    className={cn(
-                      'border border-slate-300 px-2 py-1',
-                      column.align === 'left' ? 'text-left' : column.align === 'right' ? 'text-right' : 'text-center'
-                    )}
+                    className="border border-slate-300 px-1 py-1 text-center text-slate-500"
+                    style={getRowSeparatorStyle(rowIndex)}
                   >
-                    {resolveCellValue(row[columnIndex], column)}
+                    {rowIndex + 1}
                   </td>
-                ))}
+                )}
+                {useDistributedSideHeaders
+                  ? Array.from({ length: columns.length + 1 }).map((_, positionIndex) => (
+                      <React.Fragment key={`a4-body-position-${rowIndex}-${positionIndex}`}>
+                        {(sideHeaderIndexesByTarget[positionIndex] || []).map((sideIndex) => {
+                          const cell = sideHeaderMatrix[rowIndex]?.[sideIndex];
+                          if (!cell) return null;
+                          return (
+                            <th
+                              key={`a4-side-row-${rowIndex}-${positionIndex}-${sideIndex}`}
+                              rowSpan={cell.row_span || 1}
+                              className={cn(
+                                'border border-slate-300 px-1 py-1 font-semibold text-white bg-slate-800',
+                                cell.align === 'left' ? 'text-left' : cell.align === 'right' ? 'text-right' : 'text-center',
+                                cell.class_name
+                              )}
+                              style={{
+                                ...getRowSeparatorStyle(rowIndex),
+                                backgroundColor: cell.background_color || undefined,
+                                color: cell.text_color || undefined,
+                              }}
+                            >
+                              {cell.label || '-'}
+                            </th>
+                          );
+                        })}
+                        {visibleColumnByIndex.has(positionIndex) && (() => {
+                          const column = visibleColumnByIndex.get(positionIndex)!;
+                          return (
+                            <td
+                              key={`a4-body-col-${positionIndex}`}
+                              className={cn(
+                                'border border-slate-300 px-2 py-1',
+                                column.align === 'left' ? 'text-left' : column.align === 'right' ? 'text-right' : 'text-center'
+                              )}
+                              style={getDataSeparatorStyle(rowIndex, positionIndex)}
+                            >
+                              {resolveCellValue(
+                                getResolvedCustomCellValue(tableData, rowIndex, positionIndex, column),
+                                {
+                                  ...column,
+                                  type: resolveCustomCellType(table, rowIndex, positionIndex, column.type || 'text'),
+                                }
+                              )}
+                            </td>
+                          );
+                        })()}
+                      </React.Fragment>
+                    ))
+                  : (
+                      <>
+                        {hasCustomSideHeaders &&
+                          Array.from({ length: customSideHeaderColumnCount }).map((_, sideIndex) => {
+                            const cell = sideHeaderMatrix[rowIndex]?.[sideIndex];
+                            if (!cell) return null;
+                            return (
+                              <th
+                                key={`side-row-${rowIndex}-${sideIndex}`}
+                                rowSpan={cell.row_span || 1}
+                              className={cn(
+                                  'border border-slate-300 px-1 py-1 font-semibold text-white bg-slate-800',
+                                  cell.align === 'left' ? 'text-left' : cell.align === 'right' ? 'text-right' : 'text-center',
+                                  cell.class_name
+                                )}
+                                style={{
+                                  ...getRowSeparatorStyle(rowIndex),
+                                  backgroundColor: cell.background_color || undefined,
+                                  color: cell.text_color || undefined,
+                                }}
+                              >
+                                {cell.label || '-'}
+                              </th>
+                            );
+                          })}
+                        {columns.map((column, columnIndex) => (
+                          <td
+                            key={`${column.key || column.label}-${columnIndex}`}
+                            className={cn(
+                              'border border-slate-300 px-2 py-1',
+                              column.align === 'left' ? 'text-left' : column.align === 'right' ? 'text-right' : 'text-center'
+                            )}
+                            style={getDataSeparatorStyle(rowIndex, columnIndex)}
+                          >
+                            {resolveCellValue(
+                              getResolvedCustomCellValue(tableData, rowIndex, columnIndex, column),
+                              {
+                                ...column,
+                                type: resolveCustomCellType(table, rowIndex, columnIndex, column.type || 'text'),
+                              }
+                            )}
+                          </td>
+                        ))}
+                      </>
+                    )}
               </tr>
             );
           })}
@@ -699,10 +1392,14 @@ const ReportViewerA4: React.FC = () => {
   const { selectedCompany } = useCompanyStore();
   const { logoUrl, logoScale } = useAppSettingsStore();
   const { formatDate } = useDateFormat();
+  const { can, isAdmin, loading: permissionsLoading } = usePermissions();
+  const { claimReport, approveReport, rejectReport, isLoading: workflowLoading } = useReportWorkflow();
+  const addToast = useToastStore((state) => state.addToast);
 
   const [loadedInstance, setLoadedInstance] = useState<any>(null);
   const [loadedTemplate, setLoadedTemplate] = useState<any>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [previewRecipes, setPreviewRecipes] = useState<AnyRecord[]>([]);
 
   const instance = loadedInstance || (instanceId ? formInstances[instanceId] : null);
   const storeTemplate = templateId
@@ -711,11 +1408,33 @@ const ReportViewerA4: React.FC = () => {
       ? formTemplates[instance.template_id]
       : null;
   const template = loadedTemplate || storeTemplate;
+  const formData = instance?.form_data || {};
+  const documentVariableSnapshot = useMemo(() => {
+    const snapshot = formData?.document_variables_snapshot;
+    if (!snapshot || typeof snapshot !== 'object') return undefined;
+    return snapshot as Record<string, string | number>;
+  }, [formData?.document_variables_snapshot]);
+  const isReportFrozenByApproval = instance?.status === 'approved' || instance?.status === 'archived';
+  const [fallbackVariableSnapshot, setFallbackVariableSnapshot] = useState<VariableSnapshot | undefined>(undefined);
+  const effectiveVariableSnapshot = useMemo(() => {
+    if (documentVariableSnapshot && Object.keys(documentVariableSnapshot).length > 0) {
+      return documentVariableSnapshot;
+    }
+    if (!isReportFrozenByApproval && fallbackVariableSnapshot && Object.keys(fallbackVariableSnapshot).length > 0) {
+      return fallbackVariableSnapshot;
+    }
+    return undefined;
+  }, [documentVariableSnapshot, fallbackVariableSnapshot, isReportFrozenByApproval]);
+  const templateForRendering = useMemo(() => {
+    if (!template) return template;
+    if (!effectiveVariableSnapshot || Object.keys(effectiveVariableSnapshot).length === 0) return template;
+    return applyDocumentVariableBindingsToTemplate(template, effectiveVariableSnapshot);
+  }, [effectiveVariableSnapshot, template]);
   const viewPath = instanceId ? `/reports/view/${instanceId}` : null;
   const viewTabTitle = useMemo(() => {
-    if (template?.name) return `تقرير - ${template.name}`;
+    if (templateForRendering?.name) return `تقرير - ${templateForRendering.name}`;
     return 'عرض تقرير';
-  }, [template?.name]);
+  }, [templateForRendering?.name]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -778,6 +1497,71 @@ const ReportViewerA4: React.FC = () => {
     loadTemplateFromDB();
   }, [templateId, instance?.template_id, storeTemplate]);
 
+  useEffect(() => {
+    const hasReportSnapshot =
+      Boolean(documentVariableSnapshot && Object.keys(documentVariableSnapshot).length > 0);
+    if (hasReportSnapshot || isReportFrozenByApproval) {
+      setFallbackVariableSnapshot(undefined);
+      return;
+    }
+
+    const productId = template?.basic_info?.product_id;
+    if (!productId) {
+      setFallbackVariableSnapshot(undefined);
+      return;
+    }
+
+    let cancelled = false;
+    const loadFallbackSnapshot = async () => {
+      try {
+        const context = await variableService.getDocumentVariablesContextByProduct(productId);
+        if (cancelled) return;
+        const snapshot = buildDocumentVariableSnapshot(
+          (context.variables || []).map((variable) => ({
+            name: variable.name,
+            value: variable.value,
+          }))
+        );
+        setFallbackVariableSnapshot(snapshot);
+      } catch (_error) {
+        if (!cancelled) {
+          setFallbackVariableSnapshot(undefined);
+        }
+      }
+    };
+
+    void loadFallbackSnapshot();
+    return () => {
+      cancelled = true;
+    };
+  }, [documentVariableSnapshot, isReportFrozenByApproval, template?.basic_info?.product_id]);
+
+  useEffect(() => {
+    const productId = templateForRendering?.basic_info?.product_id;
+    let isCancelled = false;
+
+    if (!productId) {
+      setPreviewRecipes([]);
+      return;
+    }
+
+    getRecipesByProduct(productId)
+      .then((recipes) => {
+        if (!isCancelled) {
+          setPreviewRecipes(Array.isArray(recipes) ? (recipes as AnyRecord[]) : []);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setPreviewRecipes([]);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [templateForRendering?.basic_info?.product_id]);
+
   // Ensure report view route always opens a closable tab.
   useEffect(() => {
     if (!instanceId || !viewPath) return;
@@ -807,38 +1591,143 @@ const ReportViewerA4: React.FC = () => {
   ]);
 
   const handleBack = () => {
-    const activeTab = getActiveTab();
-    const tabReturnPath = activeTab?.path === location.pathname ? activeTab.returnPath : undefined;
-
-    if (tabReturnPath) {
-      if (tabReturnPath === '/folders') {
-        navigate('/forms&reports');
-        return;
-      }
-      if (tabReturnPath.startsWith('/folders/')) {
-        navigate(tabReturnPath.replace('/folders/', '/forms&reports/'));
-        return;
-      }
-      navigate(tabReturnPath);
-      return;
-    }
-
-    if (instance?.folder_id) {
-      navigate(`/forms&reports/${instance.folder_id}`);
-      return;
-    }
-
-    if (currentFolderId) {
-      navigate(`/forms&reports/${currentFolderId}`);
-      return;
-    }
-
-    navigate('/forms&reports');
+    navigate(-1);
   };
 
-  const sections = useMemo(() => normalizeSections(template?.sections || {}), [template?.sections]);
-  const formData = instance?.form_data || {};
-  const signatures = Array.isArray(template?.signatures) ? template.signatures : [];
+  const refreshInstanceAfterWorkflow = useCallback(async () => {
+    if (!instanceId) return;
+
+    try {
+      const { instancesService } = await import('../services/supabaseService');
+      const refreshedInstance = await instancesService.getInstance(instanceId);
+      if (!refreshedInstance) return;
+
+      setLoadedInstance(refreshedInstance);
+      syncInstance(refreshedInstance);
+    } catch (error) {
+      console.error('[ReportViewerA4] Failed to refresh report instance after workflow action:', error);
+    }
+  }, [instanceId, syncInstance]);
+
+  const reportStatus = String(instance?.status || '').toLowerCase();
+  const hasEditPermission =
+    isAdmin ||
+    can('forms_reports', 'edit') ||
+    can('forms_reports', 'update') ||
+    can('reports', 'edit') ||
+    can('reports', 'update');
+  const hasReviewPermission =
+    isAdmin ||
+    can('forms_reports', 'approve') ||
+    can('forms_reports', 'review') ||
+    can('reports', 'approve') ||
+    can('forms', 'approve');
+
+  const canEditReport =
+    Boolean(instanceId) &&
+    hasEditPermission &&
+    ['draft', 'in_progress', 'rejected'].includes(reportStatus);
+  const canReviewReport =
+    Boolean(instanceId) &&
+    hasReviewPermission &&
+    ['submitted', 'under_review'].includes(reportStatus);
+
+  const navigateToEditReport = () => {
+    if (!instanceId || !canEditReport) return;
+
+    const editPath = `/reports/edit/${instanceId}`;
+    const folderId =
+      instance?.folder_id ||
+      new URLSearchParams(location.search).get('folderId') ||
+      new URLSearchParams(location.search).get('folder') ||
+      currentFolderId;
+    const query = folderId ? `?folderId=${encodeURIComponent(folderId)}` : '';
+    const returnPath =
+      instance?.folder_id
+        ? `/forms&reports/${instance.folder_id}`
+        : folderId
+          ? `/forms&reports/${folderId}`
+          : '/forms&reports';
+
+    // Keep tab metadata in sync before route navigation to avoid view/edit route ping-pong.
+    openTab('instance', instanceId, `تعديل - ${templateForRendering?.name || 'تقرير'}`, editPath, returnPath);
+
+    navigate(`${editPath}${query}`);
+  };
+
+  const ensureReportReadyForReviewAction = useCallback(async (): Promise<boolean> => {
+    if (!instanceId) return false;
+
+    if (reportStatus !== 'submitted') return true;
+
+    const claimResult = await claimReport(instanceId);
+    if (!claimResult.success) {
+      addToast({
+        type: 'error',
+        title: 'تعذر بدء المراجعة',
+        message: claimResult.error || 'لا يمكن اعتماد/رفض التقرير قبل استلامه للمراجعة',
+      });
+      return false;
+    }
+
+    await refreshInstanceAfterWorkflow();
+    return true;
+  }, [addToast, claimReport, instanceId, refreshInstanceAfterWorkflow, reportStatus]);
+
+  const handleApproveReport = async () => {
+    if (!instanceId || !canReviewReport || workflowLoading) return;
+    if (!window.confirm('هل تريد اعتماد هذا التقرير؟')) return;
+
+    const ready = await ensureReportReadyForReviewAction();
+    if (!ready) return;
+
+    const result = await approveReport(instanceId);
+    if (!result.success) {
+      addToast({
+        type: 'error',
+        title: 'فشل اعتماد التقرير',
+        message: result.error || 'حدث خطأ أثناء اعتماد التقرير',
+      });
+      return;
+    }
+
+    addToast({
+      type: 'success',
+      title: 'تم الاعتماد',
+      message: 'تم اعتماد التقرير بنجاح',
+    });
+    await refreshInstanceAfterWorkflow();
+  };
+
+  const handleRejectReport = async () => {
+    if (!instanceId || !canReviewReport || workflowLoading) return;
+
+    const reason = window.prompt('أدخل سبب الرفض:');
+    if (!reason || !reason.trim()) return;
+
+    const ready = await ensureReportReadyForReviewAction();
+    if (!ready) return;
+
+    const result = await rejectReport(instanceId, reason.trim());
+    if (!result.success) {
+      addToast({
+        type: 'error',
+        title: 'فشل رفض التقرير',
+        message: result.error || 'حدث خطأ أثناء رفض التقرير',
+      });
+      return;
+    }
+
+    addToast({
+      type: 'warning',
+      title: 'تم رفض التقرير',
+      message: 'تم إرجاع التقرير للتعديل',
+    });
+    await refreshInstanceAfterWorkflow();
+  };
+
+  const sections = useMemo(() => normalizeSections(templateForRendering?.sections || {}), [templateForRendering?.sections]);
+  const signatures = Array.isArray(templateForRendering?.signatures) ? templateForRendering.signatures : [];
   const signatureColumns = clamp(signatures.length || 1, 1, 4);
   const startTimeDisplay =
     (typeof formData?.inspection_start_time === 'string' && formData.inspection_start_time.trim()) ||
@@ -855,7 +1744,7 @@ const ReportViewerA4: React.FC = () => {
     );
   }
 
-  if (!template) {
+  if (!templateForRendering) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-white">
         <div className="text-center">
@@ -877,31 +1766,87 @@ const ReportViewerA4: React.FC = () => {
       className="a4-clean-shell mx-auto w-full max-w-[210mm] min-h-screen bg-white text-slate-900 print:max-w-none print:min-h-0 print:shadow-none"
       dir="rtl"
     >
+      <div className="print:hidden flex items-center justify-between gap-2 px-3 py-2 border-b border-slate-200 bg-white">
+        <button
+          type="button"
+          onClick={handleBack}
+          className="flex items-center gap-1.5 text-sm text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg px-2 py-1.5"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+          </svg>
+          رجوع
+        </button>
+
+        {!permissionsLoading && (canEditReport || canReviewReport) ? (
+          <div className="flex items-center gap-1.5">
+            {canEditReport && (
+              <button
+                type="button"
+                onClick={navigateToEditReport}
+                className="px-2.5 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                تعديل
+              </button>
+            )}
+            {canReviewReport && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleRejectReport}
+                  disabled={workflowLoading}
+                  className={cn(
+                    'px-2.5 py-1.5 rounded border text-xs font-semibold',
+                    workflowLoading
+                      ? 'border-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'border-red-300 text-red-700 hover:bg-red-50'
+                  )}
+                >
+                  رفض
+                </button>
+                <button
+                  type="button"
+                  onClick={handleApproveReport}
+                  disabled={workflowLoading}
+                  className={cn(
+                    'px-2.5 py-1.5 rounded border text-xs font-semibold',
+                    workflowLoading
+                      ? 'border-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'border-emerald-300 text-emerald-700 hover:bg-emerald-50'
+                  )}
+                >
+                  اعتماد
+                </button>
+              </>
+            )}
+          </div>
+        ) : null}
+      </div>
       <div className="a4-clean-root bg-white border border-slate-300 print:border-none">
         <div className="border-b-2 border-slate-800">
           <div className="grid grid-cols-3 gap-2 items-center px-3 py-2">
             <div className="text-[9px] leading-4 text-right">
-              {template?.document_control?.doc_code && (
+              {templateForRendering?.document_control?.doc_code && (
                 <div className="font-bold">
-                  رمز الوثيقة: <span className="font-mono">{template.document_control.doc_code}</span>
+                  رمز الوثيقة: <span className="font-mono">{templateForRendering.document_control.doc_code}</span>
                 </div>
               )}
               <div>
-                الإصدار: <span className="font-mono">{template?.document_control?.issue_no || '-'}</span>
+                الإصدار: <span className="font-mono">{templateForRendering?.document_control?.issue_no || '-'}</span>
               </div>
               <div>
-                تاريخ الإصدار: <span className="font-mono">{template?.document_control?.issue_date || '-'}</span>
+                تاريخ الإصدار: <span className="font-mono">{templateForRendering?.document_control?.issue_date || '-'}</span>
               </div>
               <div>
-                المراجعة: <span className="font-mono">{template?.document_control?.review_no || '-'}</span>
+                المراجعة: <span className="font-mono">{templateForRendering?.document_control?.review_no || '-'}</span>
               </div>
               <div>
-                تاريخ المراجعة: <span className="font-mono">{template?.document_control?.review_date || '-'}</span>
+                تاريخ المراجعة: <span className="font-mono">{templateForRendering?.document_control?.review_date || '-'}</span>
               </div>
             </div>
 
             <div className="text-center">
-              <h1 className="text-xl font-bold leading-tight">{template.name}</h1>
+              <h1 className="text-xl font-bold leading-tight">{templateForRendering.name}</h1>
               <div
                 className={cn(
                   'inline-flex mt-1 px-3 py-0.5 border rounded text-[10px] font-bold tracking-wide',
@@ -921,7 +1866,7 @@ const ReportViewerA4: React.FC = () => {
                   style={{ transform: `scale(${logoScale || 1})` }}
                 />
               </div>
-              <div className="text-[9px] font-semibold">{selectedCompany?.name || template?.basic_info?.company_name || '-'}</div>
+              <div className="text-[9px] font-semibold">{selectedCompany?.name || templateForRendering?.basic_info?.company_name || '-'}</div>
             </div>
           </div>
         </div>
@@ -936,7 +1881,7 @@ const ReportViewerA4: React.FC = () => {
                   <td className="border border-slate-300 bg-slate-800 text-white px-2 py-1 text-center font-semibold w-1/6">الوردية</td>
                   <td className="border border-slate-300 px-2 py-1 text-center">{toText(formData?.shift)}</td>
                 </tr>
-                {template.type !== 'data-collection' && (
+                {templateForRendering.type !== 'data-collection' && (
                   <tr>
                     <td className="border border-slate-300 bg-slate-800 text-white px-2 py-1 text-center font-semibold">رقم الدفعة</td>
                     <td className="border border-slate-300 px-2 py-1 text-center font-mono font-semibold text-blue-700">
@@ -946,7 +1891,7 @@ const ReportViewerA4: React.FC = () => {
                     <td className="border border-slate-300 px-2 py-1 text-center font-mono">{toText(startTimeDisplay)}</td>
                   </tr>
                 )}
-                {template.type === 'data-collection' && (
+                {templateForRendering.type === 'data-collection' && (
                   <tr>
                     <td className="border border-slate-300 bg-slate-800 text-white px-2 py-1 text-center font-semibold">وقت البدء</td>
                     <td colSpan={3} className="border border-slate-300 px-2 py-1 text-center font-mono">{toText(startTimeDisplay)}</td>
@@ -967,7 +1912,7 @@ const ReportViewerA4: React.FC = () => {
               {(section.tables || []).map((table, tableIndex) => {
                 const tableData = getFormTableData(formData, section.id, table.id);
                 const tableNotes = getFormTableNotes(formData, section.id, table.id);
-                const tableType = String((table as any)?.type || '').toLowerCase();
+                const tableType = String((table as any)?.type || '').toLowerCase().replace(/_/g, '-');
 
                 return (
                   <div key={table.id || `table-${tableIndex}`} className="space-y-1 a4-table-block">
@@ -979,11 +1924,34 @@ const ReportViewerA4: React.FC = () => {
                     </div>
 
                     {tableType === 'parameters' ? (
-                      <ParametersTable table={table} tableData={tableData} formData={formData} />
+                      <ParametersTable
+                        table={table}
+                        tableData={tableData}
+                        formData={formData}
+                        variableSnapshot={effectiveVariableSnapshot}
+                      />
                     ) : tableType === 'sample' || tableType === 'samples' ? (
-                      <SampleTable table={table} tableData={tableData} formData={formData} template={template} />
+                      <SampleTable
+                        table={table}
+                        tableData={tableData}
+                        formData={formData}
+                        template={templateForRendering}
+                        variableSnapshot={effectiveVariableSnapshot}
+                      />
+                    ) : tableType === 'recipe-traceability' ? (
+                      <RecipeTraceabilityPreviewTable
+                        table={table}
+                        tableData={tableData}
+                        previewRecipes={previewRecipes}
+                      />
                     ) : (
-                      <GenericTable table={table} tableData={tableData} />
+                      <GenericTable
+                        table={table}
+                        tableData={tableData}
+                        inspectionStartTime={formData?.inspection_start_time || '08:00'}
+                        shiftDuration={Number(formData?.shift_duration || 8)}
+                        variableSnapshot={effectiveVariableSnapshot}
+                      />
                     )}
 
                     {tableNotes ? (
@@ -1002,8 +1970,8 @@ const ReportViewerA4: React.FC = () => {
             </div>
           ))}
 
-          {Array.isArray(template.quality_criteria) && template.quality_criteria.length > 0 && (
-            <QualityCriteriaBlock title="معايير الجودة والقبول" items={template.quality_criteria} />
+          {Array.isArray(templateForRendering.quality_criteria) && templateForRendering.quality_criteria.length > 0 && (
+            <QualityCriteriaBlock title="معايير الجودة والقبول" items={templateForRendering.quality_criteria} />
           )}
 
           {signatures.length > 0 && (

@@ -339,7 +339,7 @@ const DetailsView: React.FC<DetailsViewProps> = ({
                                         <StatusIcon className={cn('w-5 h-5', statusColor)} />
                                     </div>
                                     <div className="flex-1 min-w-0">
-                                        <h3 className="font-medium text-gray-900 dark:text-white">{template?.name || 'تقرير'}</h3>
+                                        <h3 className="font-medium text-gray-900 dark:text-white">{instance.name || template?.name || 'تقرير'}</h3>
                                         <p className="text-xs text-gray-500 dark:text-gray-400">
                                             {instance.form_data?.batch_number && `دفعة: ${instance.form_data.batch_number} • `}
                                             {formatDate(instance.created_at, 'dd/MM/yyyy')}

@@ -7,6 +7,28 @@ export interface LabV2Context {
   department_id: string | null;
 }
 
+const LAB_V2_CONTEXT_CACHE_TTL_MS = 60 * 1000;
+
+let cachedContext: LabV2Context | null = null;
+let cachedContextAt = 0;
+let inFlightContextPromise: Promise<LabV2Context> | null = null;
+let authInvalidationAttached = false;
+
+export function invalidateLabV2ContextCache(): void {
+  cachedContext = null;
+  cachedContextAt = 0;
+  inFlightContextPromise = null;
+}
+
+function ensureAuthInvalidationAttached(): void {
+  if (authInvalidationAttached) return;
+  authInvalidationAttached = true;
+
+  supabase.auth.onAuthStateChange(() => {
+    invalidateLabV2ContextCache();
+  });
+}
+
 async function getCompanyIdFromSettings(): Promise<string | null> {
   const { data, error } = await supabase
     .from('settings')
@@ -24,9 +46,9 @@ async function getCompanyIdFromRpc(): Promise<string | null> {
   return (data as any) || null;
 }
 
-export async function getLabV2Context(): Promise<LabV2Context> {
-  const { data: userData } = await supabase.auth.getUser();
-  const user_id = userData.user?.id || null;
+async function fetchLabV2Context(): Promise<LabV2Context> {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const user_id = sessionData.session?.user?.id || null;
 
   let user_name: string | null = null;
   let department_id: string | null = null;
@@ -55,3 +77,32 @@ export async function getLabV2Context(): Promise<LabV2Context> {
   return { user_id, user_name, company_id, department_id };
 }
 
+export async function getLabV2Context(options?: { forceRefresh?: boolean }): Promise<LabV2Context> {
+  ensureAuthInvalidationAttached();
+
+  const forceRefresh = options?.forceRefresh === true;
+  const hasFreshCache =
+    !forceRefresh &&
+    cachedContext !== null &&
+    Date.now() - cachedContextAt < LAB_V2_CONTEXT_CACHE_TTL_MS;
+
+  if (hasFreshCache) {
+    return cachedContext as LabV2Context;
+  }
+
+  if (!forceRefresh && inFlightContextPromise) {
+    return inFlightContextPromise;
+  }
+
+  inFlightContextPromise = fetchLabV2Context()
+    .then((ctx) => {
+      cachedContext = ctx;
+      cachedContextAt = Date.now();
+      return ctx;
+    })
+    .finally(() => {
+      inFlightContextPromise = null;
+    });
+
+  return inFlightContextPromise;
+}

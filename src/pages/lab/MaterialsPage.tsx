@@ -4,7 +4,7 @@
  * Updated: Full Supabase CRUD integration
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import {
     PlusIcon,
@@ -20,9 +20,33 @@ import {
 import { TableSkeleton } from '../../components/common/LoadingStates';
 import { useRawMaterials } from '../../hooks/useMasterData';
 import * as masterDataService from '../../services/masterDataService';
-import { generateMaterialCode, materialCategoryLabels } from '../../domain/masterData/types';
-import type { RawMaterial, MaterialCategory } from '../../domain/masterData/types';
+import * as packagingSettingsService from '../../services/labPackagingSettingsService';
+import { generateMaterialCode, materialCategoryLabels, shelfLifeUnitLabels } from '../../domain/masterData/types';
+import type { RawMaterial, MaterialCategory, ShelfLifeUnit } from '../../domain/masterData/types';
 import { useCompanyStore } from '../../store/companyStore';
+import type { LabPackagingType } from '../../services/labPackagingSettingsService';
+
+const ALLERGEN_SUPPORTED_CATEGORIES: MaterialCategory[] = [
+    'ingredient',
+    'additive',
+    'flavoring',
+    'coloring',
+    'preservative'
+];
+
+const CATEGORY_FIELD_HINTS: Record<MaterialCategory, string> = {
+    ingredient: 'المكون الغذائي يدعم مسببات الحساسية وخيارات التعبئة.',
+    packaging: 'مواد التعبئة تتطلب اختيار نوع رئيسي ونوع فرعي من إعدادات المختبر.',
+    chemical: 'المواد الكيميائية لا تستخدم عادةً مسببات الحساسية.',
+    additive: 'المضافات قد تحتوي مسببات حساسية حسب المصدر.',
+    flavoring: 'النكهات قد تحتوي مسببات حساسية حسب التركيب.',
+    coloring: 'الملونات قد تحتوي مسببات حساسية حسب المصدر.',
+    preservative: 'المواد الحافظة قد تحتوي مسببات حساسية حسب المصدر.',
+    other: 'يمكن إدخال البيانات الأساسية للتصنيف الآخر.'
+};
+
+const supportsAllergensForCategory = (category: MaterialCategory): boolean =>
+    ALLERGEN_SUPPORTED_CATEGORIES.includes(category);
 
 const MaterialsPage: React.FC = () => {
     const { materials, isLoading, error, refetch } = useRawMaterials();
@@ -32,6 +56,8 @@ const MaterialsPage: React.FC = () => {
     const [showModal, setShowModal] = useState(false);
     const [editingMaterial, setEditingMaterial] = useState<RawMaterial | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+    const [packagingTypes, setPackagingTypes] = useState<LabPackagingType[]>([]);
+    const [packagingSettingsError, setPackagingSettingsError] = useState<string | null>(null);
 
     const [formData, setFormData] = useState({
         code: '',
@@ -41,10 +67,30 @@ const MaterialsPage: React.FC = () => {
         specifications: '',
         storageCondition: '',
         shelfLife: 0,
+        shelfLifeUnit: 'days' as ShelfLifeUnit,
+        expirySubtractDays: 0,
         requiresLabTest: true,
         packagingOptions: [] as string[],
+        packagingTypeId: '',
+        packagingSubtypeId: '',
         allergens: [] as string[]
     });
+
+    useEffect(() => {
+        const loadPackagingSettings = async () => {
+            try {
+                const tree = await packagingSettingsService.getLabPackagingSettingsTree({ includeInactive: true });
+                setPackagingTypes(tree);
+                setPackagingSettingsError(null);
+            } catch (error) {
+                console.error('Error loading packaging settings:', error);
+                setPackagingSettingsError('تعذر تحميل إعدادات مواد التعبئة');
+                setPackagingTypes([]);
+            }
+        };
+
+        loadPackagingSettings();
+    }, []);
 
     const ALLERGEN_OPTIONS = [
         'جلوتين',
@@ -85,8 +131,12 @@ const MaterialsPage: React.FC = () => {
             specifications: '',
             storageCondition: '',
             shelfLife: 0,
+            shelfLifeUnit: 'days',
+            expirySubtractDays: 0,
             requiresLabTest: true,
             packagingOptions: [],
+            packagingTypeId: '',
+            packagingSubtypeId: '',
             allergens: []
         });
         setShowModal(true);
@@ -102,8 +152,12 @@ const MaterialsPage: React.FC = () => {
             specifications: material.specifications || '',
             storageCondition: material.storageCondition || '',
             shelfLife: material.shelfLife || 0,
+            shelfLifeUnit: material.shelfLifeUnit || 'days',
+            expirySubtractDays: material.expirySubtractDays || 0,
             requiresLabTest: material.requiresLabTest,
             packagingOptions: material.packagingOptions || [],
+            packagingTypeId: material.packagingTypeId || '',
+            packagingSubtypeId: material.packagingSubtypeId || '',
             allergens: (material as any).allergens || []
         });
         setShowModal(true);
@@ -111,11 +165,29 @@ const MaterialsPage: React.FC = () => {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!formData.name) return;
+        if (!formData.name.trim() || !formData.code.trim()) return;
+
+        const isMonthlyOrYearlyShelfLife = formData.shelfLifeUnit === 'months' || formData.shelfLifeUnit === 'years';
+        const supportsAllergens = supportsAllergensForCategory(formData.category);
+        if (formData.category === 'packaging' && !formData.packagingTypeId) {
+            window.alert('يرجى اختيار النوع الرئيسي لمواد التعبئة قبل الحفظ');
+            return;
+        }
 
         const dataToSubmit = {
             ...formData,
-            packagingOptions: formData.packagingOptions.filter(Boolean)
+            code: formData.code.trim(),
+            name: formData.name.trim(),
+            shelfLife: Math.max(0, Math.trunc(Number(formData.shelfLife) || 0)),
+            expirySubtractDays: isMonthlyOrYearlyShelfLife
+                ? Math.max(0, Math.trunc(Number(formData.expirySubtractDays) || 0))
+                : 0,
+            packagingOptions: formData.category === 'packaging'
+                ? []
+                : formData.packagingOptions.map((option) => option.trim()).filter(Boolean),
+            allergens: supportsAllergens ? formData.allergens.filter(Boolean) : [],
+            packagingTypeId: formData.category === 'packaging' ? formData.packagingTypeId : null,
+            packagingSubtypeId: formData.category === 'packaging' ? (formData.packagingSubtypeId || null) : null
         };
 
         if (editingMaterial) {
@@ -140,6 +212,20 @@ const MaterialsPage: React.FC = () => {
         });
         refetch();
     };
+
+    const isMonthlyOrYearlyShelfLife = formData.shelfLifeUnit === 'months' || formData.shelfLifeUnit === 'years';
+    const supportsAllergens = supportsAllergensForCategory(formData.category);
+    const selectedPackagingType = packagingTypes.find((type) => type.id === formData.packagingTypeId);
+    const packagingSubtypeOptions = selectedPackagingType
+        ? selectedPackagingType.subtypes.filter((subtype) => subtype.isActive || subtype.id === formData.packagingSubtypeId)
+        : [];
+    const hasPackagingSubtypeOptions = packagingSubtypeOptions.length > 0;
+
+    useEffect(() => {
+        if (!hasPackagingSubtypeOptions && formData.packagingSubtypeId) {
+            setFormData((prev) => ({ ...prev, packagingSubtypeId: '' }));
+        }
+    }, [formData.packagingSubtypeId, hasPackagingSubtypeOptions]);
 
     if (isLoading) {
         return (
@@ -325,13 +411,24 @@ const MaterialsPage: React.FC = () => {
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium mb-1">كود المادة</label>
-                                    <input
-                                        type="text"
-                                        value={formData.code}
-                                        onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
-                                        readOnly
-                                    />
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="text"
+                                            value={formData.code}
+                                            onChange={(e) => setFormData({ ...formData, code: e.target.value })}
+                                            className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+                                            placeholder="مثال: ING-0001"
+                                            required
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setFormData({ ...formData, code: generateMaterialCode(formData.category, materials) })}
+                                            className="px-3 py-2 text-xs font-medium border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
+                                        >
+                                            توليد
+                                        </button>
+                                    </div>
+                                    <p className="mt-1 text-xs text-gray-500">يمكن إدخال الكود يدويًا أو توليده تلقائيًا.</p>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium mb-1">اسم المادة *</label>
@@ -352,11 +449,18 @@ const MaterialsPage: React.FC = () => {
                                         value={formData.category}
                                         onChange={(e) => {
                                             const newCategory = e.target.value as MaterialCategory;
+                                            const categorySupportsAllergens = supportsAllergensForCategory(newCategory);
+
                                             setFormData({
                                                 ...formData,
                                                 category: newCategory,
                                                 // Only regenerate code for new materials, keep existing code for edits
-                                                code: editingMaterial ? formData.code : generateMaterialCode(newCategory, materials)
+                                                code: editingMaterial ? formData.code : generateMaterialCode(newCategory, materials),
+                                                allergens: categorySupportsAllergens
+                                                    ? formData.allergens
+                                                    : [],
+                                                packagingTypeId: newCategory === 'packaging' ? formData.packagingTypeId : '',
+                                                packagingSubtypeId: newCategory === 'packaging' ? formData.packagingSubtypeId : ''
                                             });
                                         }}
                                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
@@ -365,6 +469,7 @@ const MaterialsPage: React.FC = () => {
                                             <option key={value} value={value}>{label}</option>
                                         ))}
                                     </select>
+                                    <p className="mt-1 text-xs text-gray-500">{CATEGORY_FIELD_HINTS[formData.category]}</p>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium mb-1">الوحدة</label>
@@ -384,6 +489,59 @@ const MaterialsPage: React.FC = () => {
                                 </div>
                             </div>
 
+                            {formData.category === 'packaging' && (
+                                <div className="grid grid-cols-2 gap-4 rounded-lg border border-blue-200 bg-blue-50/40 p-3 dark:border-blue-900 dark:bg-blue-900/10">
+                                    <div>
+                                        <label className="block text-sm font-medium mb-1">النوع الرئيسي *</label>
+                                        <select
+                                            value={formData.packagingTypeId}
+                                            onChange={(e) => {
+                                                const nextTypeId = e.target.value;
+                                                setFormData((prev) => ({
+                                                    ...prev,
+                                                    packagingTypeId: nextTypeId,
+                                                    packagingSubtypeId: ''
+                                                }));
+                                            }}
+                                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+                                            required={formData.category === 'packaging'}
+                                        >
+                                            <option value="">اختر النوع الرئيسي</option>
+                                            {packagingTypes
+                                                .filter((type) => type.isActive || type.id === formData.packagingTypeId)
+                                                .map((type) => (
+                                                    <option key={type.id} value={type.id}>
+                                                        {type.name}{type.isActive ? '' : ' (غير نشط)'}
+                                                    </option>
+                                                ))}
+                                        </select>
+                                    </div>
+                                    {hasPackagingSubtypeOptions && (
+                                        <div>
+                                            <label className="block text-sm font-medium mb-1">النوع الفرعي (اختياري)</label>
+                                            <select
+                                                value={formData.packagingSubtypeId}
+                                                onChange={(e) => setFormData({ ...formData, packagingSubtypeId: e.target.value })}
+                                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+                                                disabled={!formData.packagingTypeId}
+                                            >
+                                                <option value="">بدون نوع فرعي</option>
+                                                {packagingSubtypeOptions.map((subtype) => (
+                                                    <option key={subtype.id} value={subtype.id}>
+                                                        {subtype.name}{subtype.isActive ? '' : ' (غير نشط)'}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    )}
+                                    {packagingSettingsError && (
+                                        <p className="col-span-2 text-xs text-red-600 dark:text-red-400">
+                                            {packagingSettingsError}
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+
                             <div>
                                 <label className="block text-sm font-medium mb-1">المواصفات</label>
                                 <textarea
@@ -394,48 +552,50 @@ const MaterialsPage: React.FC = () => {
                                 />
                             </div>
 
-                            <div>
-                                <label className="block text-sm font-medium mb-1">أنواع التعبئة</label>
-                                <div className="space-y-2">
-                                    {formData.packagingOptions.map((option, index) => (
-                                        <div key={index} className="flex gap-2">
-                                            <input
-                                                type="text"
-                                                value={option}
-                                                onChange={(e) => {
-                                                    const newOptions = [...formData.packagingOptions];
-                                                    newOptions[index] = e.target.value;
-                                                    setFormData({ ...formData, packagingOptions: newOptions });
-                                                }}
-                                                placeholder="مثال: كيس 25 كجم"
-                                                className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
-                                            />
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    const newOptions = formData.packagingOptions.filter((_, i) => i !== index);
-                                                    setFormData({ ...formData, packagingOptions: newOptions });
-                                                }}
-                                                className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg"
-                                            >
-                                                <TrashIcon className="w-4 h-4" />
-                                            </button>
-                                        </div>
-                                    ))}
-                                    <button
-                                        type="button"
-                                        onClick={() => setFormData({ ...formData, packagingOptions: [...formData.packagingOptions, ''] })}
-                                        className="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-gray-600 dark:text-gray-400 hover:border-gray-400 dark:hover:border-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
-                                    >
-                                        + إضافة نوع تعبئة
-                                    </button>
+                            {formData.category !== 'packaging' && (
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">أنواع التعبئة</label>
+                                    <div className="space-y-2">
+                                        {formData.packagingOptions.map((option, index) => (
+                                            <div key={index} className="flex gap-2">
+                                                <input
+                                                    type="text"
+                                                    value={option}
+                                                    onChange={(e) => {
+                                                        const newOptions = [...formData.packagingOptions];
+                                                        newOptions[index] = e.target.value;
+                                                        setFormData({ ...formData, packagingOptions: newOptions });
+                                                    }}
+                                                    placeholder="مثال: كيس 25 كجم"
+                                                    className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const newOptions = formData.packagingOptions.filter((_, i) => i !== index);
+                                                        setFormData({ ...formData, packagingOptions: newOptions });
+                                                    }}
+                                                    className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg"
+                                                >
+                                                    <TrashIcon className="w-4 h-4" />
+                                                </button>
+                                            </div>
+                                        ))}
+                                        <button
+                                            type="button"
+                                            onClick={() => setFormData({ ...formData, packagingOptions: [...formData.packagingOptions, ''] })}
+                                            className="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-gray-600 dark:text-gray-400 hover:border-gray-400 dark:hover:border-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+                                        >
+                                            + إضافة نوع تعبئة
+                                        </button>
+                                    </div>
+                                    <p className="mt-1 text-xs text-gray-500">
+                                        أضف أنواع التعبئة المتاحة لهذه المادة (مثال: كيس 25 كجم، برميل 200 لتر)
+                                    </p>
                                 </div>
-                                <p className="mt-1 text-xs text-gray-500">
-                                    أضف أنواع التعبئة المتاحة لهذه المادة (مثال: كيس 25 كجم، برميل 200 لتر)
-                                </p>
-                            </div>
+                            )}
 
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-3 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium mb-1">شروط التخزين</label>
                                     <select
@@ -451,13 +611,48 @@ const MaterialsPage: React.FC = () => {
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium mb-1">مدة الصلاحية (أيام)</label>
+                                    <label className="block text-sm font-medium mb-1">مدة الصلاحية</label>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            value={formData.shelfLife}
+                                            onChange={(e) => setFormData({ ...formData, shelfLife: parseInt(e.target.value) || 0 })}
+                                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+                                            placeholder="مثال: 6"
+                                        />
+                                        <select
+                                            value={formData.shelfLifeUnit}
+                                            onChange={(e) => {
+                                                const nextUnit = e.target.value as ShelfLifeUnit;
+                                                setFormData({
+                                                    ...formData,
+                                                    shelfLifeUnit: nextUnit,
+                                                    expirySubtractDays: nextUnit === 'days' ? 0 : formData.expirySubtractDays
+                                                });
+                                            }}
+                                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+                                        >
+                                            {Object.entries(shelfLifeUnitLabels).map(([value, label]) => (
+                                                <option key={value} value={value}>{label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium mb-1">خصم أيام (للشهر/السنة)</label>
                                     <input
                                         type="number"
-                                        value={formData.shelfLife}
-                                        onChange={(e) => setFormData({ ...formData, shelfLife: parseInt(e.target.value) || 0 })}
-                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+                                        min="0"
+                                        value={formData.expirySubtractDays}
+                                        onChange={(e) => setFormData({ ...formData, expirySubtractDays: Math.max(0, parseInt(e.target.value, 10) || 0) })}
+                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 disabled:bg-gray-100 disabled:text-gray-500 dark:disabled:bg-gray-600"
+                                        disabled={!isMonthlyOrYearlyShelfLife}
+                                        placeholder="0"
                                     />
+                                    <p className="mt-1 text-xs text-gray-500">
+                                        يُطبق فقط إذا كانت الوحدة شهر أو سنة
+                                    </p>
                                 </div>
                             </div>
 
@@ -474,37 +669,39 @@ const MaterialsPage: React.FC = () => {
                             </div>
 
                             {/* مسببات الحساسية */}
-                            <div>
-                                <label className="block text-sm font-medium mb-2">مسببات الحساسية</label>
-                                <div className="flex flex-wrap gap-2">
-                                    {ALLERGEN_OPTIONS.map((allergen) => (
-                                        <label
-                                            key={allergen}
-                                            className={`flex items-center gap-1 px-3 py-1.5 rounded-full border cursor-pointer transition-colors ${formData.allergens.includes(allergen)
-                                                    ? 'bg-red-100 border-red-400 text-red-700 dark:bg-red-900/30 dark:border-red-600 dark:text-red-400'
-                                                    : 'bg-gray-100 border-gray-300 text-gray-600 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-400'
-                                                }`}
-                                        >
-                                            <input
-                                                type="checkbox"
-                                                checked={formData.allergens.includes(allergen)}
-                                                onChange={(e) => {
-                                                    if (e.target.checked) {
-                                                        setFormData({ ...formData, allergens: [...formData.allergens, allergen] });
-                                                    } else {
-                                                        setFormData({ ...formData, allergens: formData.allergens.filter(a => a !== allergen) });
-                                                    }
-                                                }}
-                                                className="sr-only"
-                                            />
-                                            <span className="text-sm">{allergen}</span>
-                                        </label>
-                                    ))}
+                            {supportsAllergens && (
+                                <div className="space-y-2">
+                                    <label className="block text-sm font-medium">مسببات الحساسية</label>
+                                    <div className="flex flex-wrap gap-2">
+                                        {ALLERGEN_OPTIONS.map((allergen) => (
+                                            <label
+                                                key={allergen}
+                                                className={`flex items-center gap-1 px-3 py-1.5 rounded-full border cursor-pointer transition-colors ${formData.allergens.includes(allergen)
+                                                        ? 'bg-red-100 border-red-400 text-red-700 dark:bg-red-900/30 dark:border-red-600 dark:text-red-400'
+                                                        : 'bg-gray-100 border-gray-300 text-gray-600 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-400'
+                                                    }`}
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={formData.allergens.includes(allergen)}
+                                                    onChange={(e) => {
+                                                        if (e.target.checked) {
+                                                            setFormData({ ...formData, allergens: [...formData.allergens, allergen] });
+                                                        } else {
+                                                            setFormData({ ...formData, allergens: formData.allergens.filter(a => a !== allergen) });
+                                                        }
+                                                    }}
+                                                    className="sr-only"
+                                                />
+                                                <span className="text-sm">{allergen}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                    {formData.allergens.length > 0 && (
+                                        <p className="text-xs text-red-500 mt-1">⚠️ تحتوي على: {formData.allergens.join('، ')}</p>
+                                    )}
                                 </div>
-                                {formData.allergens.length > 0 && (
-                                    <p className="text-xs text-red-500 mt-1">⚠️ تحتوي على: {formData.allergens.join('، ')}</p>
-                                )}
-                            </div>
+                            )}
 
                             <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
                                 <button

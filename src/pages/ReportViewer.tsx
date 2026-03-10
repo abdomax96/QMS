@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
     ArrowLeftIcon,
@@ -17,6 +17,27 @@ import { getRecipesByProduct } from '../services/recipeService';
 import type { Recipe } from '../types/recipe';
 import { ReportStatusBadge } from '../components/reports';
 import { useTabsStore } from '../store/tabsStore';
+import { formatMaterialDateForDisplay } from '../utils/materialReceivingDate';
+import {
+    applyDocumentVariableBindingsToTemplate,
+    isVariableToken,
+    resolveDocumentVariableDisplayValue,
+} from '../utils/documentVariableBindings';
+import {
+    buildSideHeaderRenderModel,
+    expandSideHeaderRowsToMatrix,
+    getCustomBoldColumnSeparatorsForRendering,
+    getCustomBoldRowSeparatorsForRendering,
+    getCustomColumnsForRendering,
+    getCustomGridSettingsForRendering,
+    getCustomHeaderRowsForRendering,
+    getCustomSideHeaderLabelsForRendering,
+    getCustomSideHeaderRowsForRendering,
+    getCustomSideHeaderTargetsForRendering,
+    getCustomLayoutForRendering,
+    resolveCustomCellDisplayValue,
+    resolveCustomCellType,
+} from '../utils/customTableV2';
 
 const ReportViewer: React.FC = () => {
     const { templateId, instanceId } = useParams<{ templateId?: string; instanceId?: string }>();
@@ -167,13 +188,66 @@ const ReportViewer: React.FC = () => {
 
     // Use loaded template or fallback to store
     const template = loadedTemplate || storeTemplate;
+    const formData = instance?.form_data || {};
+    const documentVariableSnapshot = useMemo(() => {
+        const snapshot = formData?.document_variables_snapshot;
+        if (!snapshot || typeof snapshot !== 'object') return undefined;
+        return snapshot as Record<string, string | number>;
+    }, [formData?.document_variables_snapshot]);
+    const templateForRendering = useMemo(() => {
+        if (!template) return template;
+        if (!documentVariableSnapshot || Object.keys(documentVariableSnapshot).length === 0) return template;
+        return applyDocumentVariableBindingsToTemplate(template, documentVariableSnapshot);
+    }, [documentVariableSnapshot, template]);
+    const resolveVariableDisplayValue = (rawValue: unknown): unknown => {
+        if (!documentVariableSnapshot || Object.keys(documentVariableSnapshot).length === 0) {
+            return rawValue;
+        }
+        return resolveDocumentVariableDisplayValue(rawValue, documentVariableSnapshot);
+    };
+    const resolveVariableNumericValue = (rawValue: unknown): number | undefined => {
+        const resolved = resolveVariableDisplayValue(rawValue);
+        const parsed = Number(resolved);
+        return Number.isFinite(parsed) ? parsed : undefined;
+    };
+    const hasResolvedVariableDisplayValue = (value: unknown): boolean =>
+        value !== undefined &&
+        value !== null &&
+        value !== '' &&
+        !(typeof value === 'string' && isVariableToken(value));
 
     // State for recipe data - moved here to fix hooks order
     const [previewRecipes, setPreviewRecipes] = useState<Recipe[]>([]);
 
+    const waitForReportImagesToLoad = async () => {
+        if (typeof document === 'undefined') return;
+
+        const scope = document.querySelector('.report-print-root') || document.body;
+        const images = Array.from(scope.querySelectorAll('img')) as HTMLImageElement[];
+        const pendingImages = images.filter((img) => !img.complete || img.naturalWidth === 0);
+
+        if (pendingImages.length === 0) return;
+
+        await Promise.race([
+            Promise.all(
+                pendingImages.map(
+                    (img) =>
+                        new Promise<void>((resolve) => {
+                            const done = () => resolve();
+                            img.addEventListener('load', done, { once: true });
+                            img.addEventListener('error', done, { once: true });
+                        })
+                )
+            ),
+            new Promise<void>((resolve) => {
+                window.setTimeout(resolve, 2000);
+            }),
+        ]);
+    };
+
     // Load ALL recipes based on product_id
     useEffect(() => {
-        const productId = template?.basic_info?.product_id;
+        const productId = templateForRendering?.basic_info?.product_id;
         if (productId) {
             getRecipesByProduct(productId).then(recipes => {
                 console.log('📋 Loaded', recipes.length, 'recipes for product:', productId);
@@ -181,28 +255,35 @@ const ReportViewer: React.FC = () => {
             }).catch(err => {
                 console.error('Failed to load recipes:', err);
             });
+            return;
         }
-    }, [template?.basic_info?.product_id]);
 
-    const triggerFullA4Print = () => {
+        setPreviewRecipes([]);
+    }, [templateForRendering?.basic_info?.product_id]);
+
+    const triggerFullA4Print = async () => {
         setIsPrintMode(true);
         if (typeof window === 'undefined') return;
 
         // Wait for React render so print always captures full A4 layout.
-        window.requestAnimationFrame(() => {
+        await new Promise<void>((resolve) => {
             window.requestAnimationFrame(() => {
-                window.print();
+                window.requestAnimationFrame(() => resolve());
             });
         });
+
+        // Ensure image cells and signatures are loaded before opening print dialog.
+        await waitForReportImagesToLoad();
+        window.print();
     };
 
     const handlePrint = () => {
-        triggerFullA4Print();
+        void triggerFullA4Print();
     };
 
     const handleExportPDF = () => {
         // Browser PDF export uses the same full A4 print layout.
-        triggerFullA4Print();
+        void triggerFullA4Print();
     };
 
     const handleBack = () => {
@@ -225,7 +306,7 @@ const ReportViewer: React.FC = () => {
         navigate(returnPath);
     };
 
-    if (!template) {
+    if (!templateForRendering) {
         return (
             <div className="h-full flex items-center justify-center">
                 <div className="text-center">
@@ -241,8 +322,7 @@ const ReportViewer: React.FC = () => {
         );
     }
 
-    const sections = Object.values(template.sections || {}).sort((a: any, b: any) => a.order - b.order);
-    const formData = instance?.form_data;
+    const sections = Object.values(templateForRendering.sections || {}).sort((a: any, b: any) => a.order - b.order);
 
     // Debug: Log section ID matching
     console.log('📊 [ReportViewer] Debug - Template sections:', sections.map((s: any) => s.id));
@@ -287,6 +367,21 @@ const ReportViewer: React.FC = () => {
         if (!Number.isFinite(parsed)) return null;
         const normalized = Math.floor(parsed);
         return normalized > 0 ? normalized : null;
+    };
+
+    const getUnitDisplayLabel = (unit: unknown): string => {
+        const normalized = String(unit ?? '').trim();
+        if (!normalized || normalized === '-') return '-';
+
+        const unitMap: Record<string, string> = {
+            kg: 'كجم',
+            g: 'جم',
+            mg: 'مجم',
+            l: 'لتر',
+            ml: 'مل',
+        };
+
+        return unitMap[normalized.toLowerCase()] || normalized;
     };
 
     const resolveSampleSize = (table: Table, fallback = 20): number => {
@@ -504,8 +599,9 @@ const ReportViewer: React.FC = () => {
         };
 
         const renderReadonlyCellValue = (col: any, val: unknown, compact = false) => {
+            const resolvedValue = resolveVariableDisplayValue(val);
             if (col.type === 'image') {
-                const images = normalizeImageCell(val);
+                const images = normalizeImageCell(resolvedValue);
                 if (images.length === 0) {
                     return <span className="text-gray-400">-</span>;
                 }
@@ -527,14 +623,14 @@ const ReportViewer: React.FC = () => {
             if (col.type === 'long-text') {
                 return (
                     <div className={cn('whitespace-pre-wrap text-right', compact ? 'text-xs' : 'text-sm')}>
-                        {val !== undefined && val !== '' ? String(val) : '-'}
+                        {resolvedValue !== undefined && resolvedValue !== '' ? String(resolvedValue) : '-'}
                     </div>
                 );
             }
 
             if (col.type === 'boolean-check') {
-                const isTrue = val === true || val === 'true' || val === 'checked' || val === 'مقبول';
-                const isFalse = val === false || val === 'false' || val === 'unchecked' || val === 'مرفوض';
+                const isTrue = resolvedValue === true || resolvedValue === 'true' || resolvedValue === 'checked' || resolvedValue === 'مقبول';
+                const isFalse = resolvedValue === false || resolvedValue === 'false' || resolvedValue === 'unchecked' || resolvedValue === 'مرفوض';
                 return isTrue ? (
                     <span className="text-green-600 text-lg font-bold">✓</span>
                 ) : isFalse ? (
@@ -545,8 +641,8 @@ const ReportViewer: React.FC = () => {
             }
 
             if (col.type === 'boolean-yesno') {
-                const isTrue = val === true || val === 'true' || val === 'yes' || val === 'نعم';
-                const isFalse = val === false || val === 'false' || val === 'no' || val === 'لا';
+                const isTrue = resolvedValue === true || resolvedValue === 'true' || resolvedValue === 'yes' || resolvedValue === 'نعم';
+                const isFalse = resolvedValue === false || resolvedValue === 'false' || resolvedValue === 'no' || resolvedValue === 'لا';
                 return (
                     <span className={compact ? 'text-xs' : 'text-sm'}>
                         {isTrue ? 'نعم' : isFalse ? 'لا' : '-'}
@@ -554,7 +650,7 @@ const ReportViewer: React.FC = () => {
                 );
             }
 
-            const cellStyle = getSmartCellStyle(val);
+            const cellStyle = getSmartCellStyle(resolvedValue);
             return (
                 <span
                     className={cn(
@@ -563,7 +659,7 @@ const ReportViewer: React.FC = () => {
                     )}
                     style={cellStyle.fontSize ? { fontSize: cellStyle.fontSize } : undefined}
                 >
-                    {val !== undefined && val !== '' ? String(val) : '-'}
+                    {resolvedValue !== undefined && resolvedValue !== '' ? String(resolvedValue) : '-'}
                 </span>
             );
         };
@@ -574,8 +670,12 @@ const ReportViewer: React.FC = () => {
             return 'text-center';
         };
 
+        const customColumns = getCustomColumnsForRendering(table);
+        const customGridSettings = getCustomGridSettingsForRendering(table);
+        const customLayoutSettings = getCustomLayoutForRendering(table);
+
         const normalizeCustomHeaderRows = (sourceTable: Table) => {
-            const rawRows = Array.isArray(sourceTable.header_rows) ? sourceTable.header_rows : [];
+            const rawRows = getCustomHeaderRowsForRendering(sourceTable);
             return rawRows
                 .filter((row) => Array.isArray(row) && row.length > 0)
                 .map((row) =>
@@ -592,9 +692,36 @@ const ReportViewer: React.FC = () => {
         };
 
         const customHeaderRows = normalizeCustomHeaderRows(table);
-        const hasCustomHeaderRows = customHeaderRows.length > 0;
-        const showRowNumbers = table.show_row_numbers !== false;
-        const rowHeaderLabel = table.row_header_label || '#';
+        const customSideHeaderRows = getCustomSideHeaderRowsForRendering(table);
+        const showTopHeader = customLayoutSettings.topHeader !== false;
+        const customMeta = (table.schema_v2?.meta as Record<string, unknown>) || {};
+        const useCustomTimeHeader = Boolean(customMeta.time_header_enabled);
+        const customIntervalMinutes = Math.max(1, Number(table.inspection_period || 30));
+        const generatedCustomTimeHeaders = useCustomTimeHeader
+            ? generateTimeHeaders(inspectionStartTime, shiftDuration, customIntervalMinutes)
+            : [];
+        const getCustomColumnLabel = (colIndex: number) =>
+            generatedCustomTimeHeaders[colIndex] || customColumns[colIndex]?.label || `#${colIndex + 1}`;
+        const hasCustomHeaderRows = showTopHeader && customHeaderRows.length > 0 && !useCustomTimeHeader;
+        const hasSideHeaderConfig = customLayoutSettings.sideHeader && customSideHeaderRows.length > 0;
+        const showRowNumbers = customGridSettings.showRowNumbers !== false;
+        const rowHeaderLabel = customGridSettings.rowHeaderLabel || '#';
+        const getResolvedCustomCellValue = (
+            rows: any[][],
+            rowIndex: number,
+            colIndex: number,
+            column: any
+        ) =>
+            resolveVariableDisplayValue(
+                resolveCustomCellDisplayValue(
+                    table,
+                    rows,
+                    rowIndex,
+                    colIndex,
+                    column.type || 'text',
+                    column
+                ).value
+            );
 
         if (table.type === 'parameters') {
             // Apply data fallback: check flat formData.tables if tableData is empty
@@ -675,6 +802,23 @@ const ReportViewer: React.FC = () => {
                                     const numericValues = rowData.filter((v) => typeof v === 'number' && !isNaN(v));
                                     const stats = calculateStats(numericValues);
                                     const isCritical = param.critical_level === 'ccp' || param.critical_level === 'oprp';
+                                    const resolvedParamMin = resolveVariableDisplayValue(param.min);
+                                    const resolvedParamMax = resolveVariableDisplayValue(param.max);
+                                    const resolvedParamLimits = resolveVariableDisplayValue(param.limits);
+                                    const resolvedParamMinNumber = resolveVariableNumericValue(param.min);
+                                    const resolvedParamMaxNumber = resolveVariableNumericValue(param.max);
+                                    const hasMin = hasResolvedVariableDisplayValue(resolvedParamMin);
+                                    const hasMax = hasResolvedVariableDisplayValue(resolvedParamMax);
+                                    const hasLimits = hasResolvedVariableDisplayValue(resolvedParamLimits);
+                                    const limitsText = hasMin && hasMax
+                                        ? `${resolvedParamMin}-${resolvedParamMax}`
+                                        : hasMin
+                                            ? `>= ${resolvedParamMin}`
+                                            : hasMax
+                                                ? `<= ${resolvedParamMax}`
+                                                : hasLimits
+                                                    ? String(resolvedParamLimits)
+                                                    : '-';
 
                                     return (
                                         <tr key={paramIndex} className={cn(
@@ -714,19 +858,21 @@ const ReportViewer: React.FC = () => {
                                                 )}
                                             </td>
                                             <td className="border border-gray-400 px-1 py-1 text-center text-gray-700 font-mono text-[10px]">
-                                                {param.min !== undefined && param.max !== undefined
-                                                    ? `${param.min}-${param.max}`
-                                                    : param.limits || '-'}
+                                                {limitsText}
                                             </td>
                                             {visibleTimeIndexes.map((colIndex) => {
                                                 const value = rowData[colIndex];
+                                                const resolvedValue = resolveVariableDisplayValue(value);
+                                                const numericValue = resolveVariableNumericValue(resolvedValue);
                                                 const isValid =
-                                                    param.min !== undefined && param.max !== undefined && value !== undefined && value !== null && value !== ''
-                                                        ? Number(value) >= Number(param.min) && Number(value) <= Number(param.max)
+                                                    resolvedParamMinNumber !== undefined &&
+                                                        resolvedParamMaxNumber !== undefined &&
+                                                        numericValue !== undefined
+                                                        ? numericValue >= resolvedParamMinNumber && numericValue <= resolvedParamMaxNumber
                                                         : true;
 
                                                 // Get smart styling based on content length
-                                                const cellStyle = getSmartCellStyle(value);
+                                                const cellStyle = getSmartCellStyle(resolvedValue);
 
                                                 return (
                                                     <td
@@ -740,7 +886,7 @@ const ReportViewer: React.FC = () => {
                                                         )}
                                                         style={cellStyle.fontSize ? { fontSize: cellStyle.fontSize } : undefined}
                                                     >
-                                                        {value !== undefined && value !== null && value !== '' ? value : '-'}
+                                                        {resolvedValue !== undefined && resolvedValue !== null && resolvedValue !== '' ? String(resolvedValue) : '-'}
                                                     </td>
                                                 );
                                             })}
@@ -1069,30 +1215,134 @@ const ReportViewer: React.FC = () => {
 
         // Recipe Traceability Table - NOW RENDERS ALL RECIPES
         if (table.type === 'recipe-traceability') {
-            const rawTableData = tableData || [];
+            const rawTableData = Array.isArray(tableData) ? tableData : [];
 
             // Check if LAST row is recipe metadata (metadata is appended at the end)
             const lastRow = rawTableData[rawTableData.length - 1] as any;
             const hasRecipeMeta = lastRow?.__recipe_meta__ === true;
             const recipeMeta = hasRecipeMeta ? lastRow : null;
-            let dataRows = hasRecipeMeta ? rawTableData.slice(0, -1) : rawTableData;
+            const dataRows = (hasRecipeMeta ? rawTableData.slice(0, -1) : rawTableData)
+                .filter((row) => Array.isArray(row));
+            const metaDoughCountByRecipe = (() => {
+                const source = recipeMeta?.dough_count_by_recipe || recipeMeta?.doughCountByRecipe;
+                if (!source || typeof source !== 'object' || Array.isArray(source)) return {} as Record<string, number>;
+
+                return Object.entries(source as Record<string, unknown>).reduce<Record<string, number>>((acc, [key, value]) => {
+                    const parsed = toPositiveInt(value);
+                    if (key && parsed !== null) {
+                        acc[key] = parsed;
+                    }
+                    return acc;
+                }, {});
+            })();
+            const metaRecipeRowsById = (() => {
+                const source = recipeMeta?.recipe_rows_by_id || recipeMeta?.recipeRowsById || recipeMeta?.rows_by_recipe;
+                if (!source || typeof source !== 'object' || Array.isArray(source)) return {} as Record<string, any[][]>;
+
+                return Object.entries(source as Record<string, unknown>).reduce<Record<string, any[][]>>((acc, [key, value]) => {
+                    if (!key || !Array.isArray(value)) return acc;
+                    acc[key] = value.filter((row) => Array.isArray(row)) as any[][];
+                    return acc;
+                }, {});
+            })();
+
+            const tableDerivedIngredients = dataRows.map((row: any) => ({
+                ingredient_name: row[0],
+                quantity: row[1],
+                unit: row[2],
+                batches: Array.isArray(row[3]) ? row[3] : []
+            }));
 
             // Determine which recipes to display
             const isPreviewMode = !instance && previewRecipes.length > 0;
-            const recipesToDisplay = isPreviewMode ? previewRecipes : (recipeMeta ? [recipeMeta] : previewRecipes);
+            const recipesToDisplay = isPreviewMode
+                ? previewRecipes
+                : recipeMeta
+                    ? [recipeMeta]
+                    : previewRecipes.length > 0
+                        ? previewRecipes
+                        : tableDerivedIngredients.length > 0
+                            ? [{
+                                id: `table-${table.id}`,
+                                name: table.name || 'تتبع الخامات',
+                                ingredients: tableDerivedIngredients,
+                                mixing_steps: [],
+                                notes: '',
+                            } as any]
+                            : [];
+
+            const getRecipeKey = (recipe: any, recipeIndex: number) =>
+                String(recipe?.id || recipe?.recipe_id || recipe?.name || `recipe-${recipeIndex}`);
+
+            const getRecipeDoughCount = (recipe: any, recipeIndex: number): number => {
+                const recipeId = String(recipe?.id || recipe?.recipe_id || '').trim();
+                if (recipeId && metaDoughCountByRecipe[recipeId] !== undefined) {
+                    return metaDoughCountByRecipe[recipeId];
+                }
+
+                const recipeRows = recipeId ? metaRecipeRowsById[recipeId] : undefined;
+                if (Array.isArray(recipeRows) && Array.isArray(recipeRows[0])) {
+                    const parsed = toPositiveInt(recipeRows[0]?.[4]);
+                    if (parsed !== null) return parsed;
+                }
+
+                if (recipeIndex === 0 && Array.isArray(dataRows[0])) {
+                    const parsed = toPositiveInt(dataRows[0]?.[4]);
+                    if (parsed !== null) return parsed;
+                }
+
+                return 1;
+            };
+
+            const normalizeSummaryRecipeName = (name: string): string => {
+                const normalized = String(name || '')
+                    .replace(/مكونا\s+ت/gi, 'مكونات')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                if (!normalized) return 'وصفة';
+
+                const withoutRepeatedDoughPrefix = normalized
+                    .replace(/^مكونات?\s+العجين\s*/i, '')
+                    .trim();
+
+                return withoutRepeatedDoughPrefix || normalized;
+            };
+
+            const doughCountSummary = recipesToDisplay.map((recipe, recipeIndex) => ({
+                key: getRecipeKey(recipe, recipeIndex),
+                name: normalizeSummaryRecipeName(String(recipe?.name || `وصفة ${recipeIndex + 1}`)),
+                doughCount: getRecipeDoughCount(recipe, recipeIndex),
+            }));
 
             // Helper function to render a single recipe table
             const renderRecipeTable = (recipe: any, recipeIndex: number) => {
-                // Get ingredients from recipe or from dataRows
-                const ingredients = recipe?.ingredients || (recipeIndex === 0 ? dataRows.map((row: any) => ({
-                    ingredient_name: Array.isArray(row) ? row[0] : row.ingredient_name,
-                    quantity: Array.isArray(row) ? row[1] : row.quantity,
-                    unit: Array.isArray(row) ? row[2] : row.unit,
-                    batches: Array.isArray(row) ? row[3] : row.batches
-                })) : []);
+                // Prefer recipe ingredients, then fallback to data captured inside the report table.
+                const recipeIngredients = Array.isArray(recipe?.ingredients) ? recipe.ingredients : [];
+                const baseIngredients = recipeIngredients.length > 0
+                    ? recipeIngredients
+                    : (recipeIndex === 0 ? tableDerivedIngredients : []);
+                const ingredients = baseIngredients.map((ing: any, ingIndex: number) => {
+                    const fromTableRow = dataRows[ingIndex];
+                    const rowBatches = Array.isArray(fromTableRow?.[3]) ? fromTableRow[3] : [];
+                    return {
+                        ...ing,
+                        ingredient_name: ing?.ingredient_name || ing?.name || tableDerivedIngredients[ingIndex]?.ingredient_name,
+                        quantity: ing?.quantity ?? tableDerivedIngredients[ingIndex]?.quantity,
+                        unit: ing?.unit ?? tableDerivedIngredients[ingIndex]?.unit,
+                        batches: rowBatches.length > 0
+                            ? rowBatches
+                            : (Array.isArray(ing?.batches) ? ing.batches : [])
+                    };
+                });
                 const useMobileCards = isMobile && !isPrintMode;
 
-                if (!ingredients || ingredients.length === 0) return null;
+                if (!ingredients || ingredients.length === 0) {
+                    return (
+                        <div key={recipe?.id || recipeIndex} className="mb-4 text-center text-xs text-gray-500 border border-gray-200 rounded p-3">
+                            لا توجد بيانات تتبع خامات لهذا الجدول.
+                        </div>
+                    );
+                }
 
                 return (
                     <div key={recipe?.id || recipeIndex} className="mb-6 print:mb-4">
@@ -1127,7 +1377,7 @@ const ReportViewer: React.FC = () => {
                                 {ingredients.map((ing: any, ingIndex: number) => {
                                     const ingredientName = ing.ingredient_name || ing.name || '-';
                                     const quantity = ing.quantity || '-';
-                                    const unit = ing.unit || '-';
+                                    const unit = getUnitDisplayLabel(ing.unit);
                                     const batches = Array.isArray(ing.batches) && ing.batches.length > 0
                                         ? ing.batches
                                         : [{ batchNumber: '', productionDate: '', expiryDate: '' }];
@@ -1158,7 +1408,13 @@ const ReportViewer: React.FC = () => {
                                                             </div>
                                                             <div className="text-xs">
                                                                 <div className="text-[11px] text-gray-500">تاريخ الإنتاج</div>
-                                                                <div className="text-gray-900">{batch.productionDate || '-'}</div>
+                                                                <div className="text-gray-900">
+                                                                    {formatMaterialDateForDisplay(
+                                                                        batch.productionDate,
+                                                                        batch.productionDateFormat || 'dmy',
+                                                                        'ar'
+                                                                    )}
+                                                                </div>
                                                             </div>
                                                             <div className={cn(
                                                                 'text-xs rounded px-1.5 py-1',
@@ -1167,7 +1423,13 @@ const ReportViewer: React.FC = () => {
                                                                     : 'bg-transparent text-gray-900'
                                                             )}>
                                                                 <div className="text-[11px] text-gray-500">تاريخ الانتهاء</div>
-                                                                <div>{batch.expiryDate || '-'}</div>
+                                                                <div>
+                                                                    {formatMaterialDateForDisplay(
+                                                                        batch.expiryDate,
+                                                                        batch.expiryDateFormat || 'dmy',
+                                                                        'ar'
+                                                                    )}
+                                                                </div>
                                                             </div>
                                                         </div>
                                                     </div>
@@ -1194,7 +1456,7 @@ const ReportViewer: React.FC = () => {
                                         {ingredients.map((ing: any, ingIndex: number) => {
                                             const ingredientName = ing.ingredient_name || ing.name || '-';
                                             const quantity = ing.quantity || '-';
-                                            const unit = ing.unit || '-';
+                                            const unit = getUnitDisplayLabel(ing.unit);
                                             const batches = ing.batches || [];
 
                                             // If no batches, show single row
@@ -1222,11 +1484,23 @@ const ReportViewer: React.FC = () => {
                                                         </>
                                                     ) : null}
                                                     <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center">{batch.batchNumber || '-'}</td>
-                                                    <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center">{batch.productionDate || '-'}</td>
+                                                    <td className="border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center">
+                                                        {formatMaterialDateForDisplay(
+                                                            batch.productionDate,
+                                                            batch.productionDateFormat || 'dmy',
+                                                            'ar'
+                                                        )}
+                                                    </td>
                                                     <td className={cn(
                                                         "border border-gray-400 px-2 py-1 print:px-1 print:py-0.5 text-center",
                                                         batch.expiryDate && new Date(batch.expiryDate) < new Date() && 'bg-red-100 text-red-700'
-                                                    )}>{batch.expiryDate || '-'}</td>
+                                                    )}>
+                                                        {formatMaterialDateForDisplay(
+                                                            batch.expiryDate,
+                                                            batch.expiryDateFormat || 'dmy',
+                                                            'ar'
+                                                        )}
+                                                    </td>
                                                 </tr>
                                             ));
                                         })}
@@ -1254,9 +1528,68 @@ const ReportViewer: React.FC = () => {
                         </div>
                     )}
 
-                    {/* Render ALL recipes, each in separate table */}
+                    {/* Render recipes: first pair side-by-side (RTL), then full-width rows */}
                     {recipesToDisplay.length > 0 ? (
-                        recipesToDisplay.map((recipe, index) => renderRecipeTable(recipe, index))
+                        <>
+                            {(() => {
+                                const firstPair = recipesToDisplay.slice(0, 2);
+                                const remainingRecipes = recipesToDisplay.slice(2);
+                                const useSingleColumnLayout = isMobile && !isPrintMode;
+
+                                return (
+                                    <>
+                                        {firstPair.length > 0 && (
+                                            firstPair.length === 1 ? (
+                                                renderRecipeTable(firstPair[0], 0)
+                                            ) : (
+                                                        <div
+                                                    className={cn(
+                                                        'grid gap-4',
+                                                        useSingleColumnLayout ? 'grid-cols-1' : 'grid-cols-2'
+                                                    )}
+                                                    dir={useSingleColumnLayout ? undefined : 'rtl'}
+                                                >
+                                                    {firstPair.map((recipe, index) => (
+                                                        <div key={getRecipeKey(recipe, index)} className="min-w-0">
+                                                            {renderRecipeTable(recipe, index)}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )
+                                        )}
+
+                                        {remainingRecipes.map((recipe, index) => (
+                                            <div key={getRecipeKey(recipe, index + 2)} className="w-full">
+                                                {renderRecipeTable(recipe, index + 2)}
+                                            </div>
+                                        ))}
+
+                                        {doughCountSummary.length > 0 && (
+                                            <div className="rounded border border-gray-300 px-3 py-2 bg-gray-50 dark:bg-gray-900/30 dark:border-gray-600">
+                                                <div className="text-xs font-semibold text-gray-700 dark:text-gray-200 mb-2">
+                                                    عدد العجنات
+                                                </div>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {doughCountSummary.map((item) => (
+                                                        <div
+                                                            key={item.key}
+                                                            className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-2 py-1 dark:bg-gray-800 dark:border-gray-600"
+                                                        >
+                                                            <span className="text-xs text-gray-700 dark:text-gray-200">
+                                                                {item.name}
+                                                            </span>
+                                                            <span className="inline-flex min-w-6 h-6 items-center justify-center rounded border border-gray-400 bg-transparent text-black dark:text-black text-xs font-bold px-1.5">
+                                                                {item.doughCount}
+                                                            </span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </>
+                                );
+                            })()}
+                        </>
                     ) : (
                         <div className="text-center text-gray-500 py-4">
                             لم يتم العثور على وصفات لهذا المنتج
@@ -1268,16 +1601,66 @@ const ReportViewer: React.FC = () => {
 
         // Printing Verification Table - Custom handler for image support
         if (table.type === 'printing_verification') {
-            const columns = table.columns || [];
+            const columns = customColumns;
             const dataRows = tableData || [];
-            const rowsCount = table.rows || dataRows.length || 1;
+            const rowsCount = customGridSettings.rows || dataRows.length || 1;
+            const sideHeaderModel = buildSideHeaderRenderModel(customSideHeaderRows, Math.max(rowsCount, dataRows.length, 1));
+            const sideHeaderRenderRows = sideHeaderModel.rows;
+            const hasCustomSideHeaders = hasSideHeaderConfig && sideHeaderModel.columnCount > 0;
+            const customSideHeaderColumnCount = hasCustomSideHeaders ? sideHeaderModel.columnCount : 0;
+            const sideHeaderColumnLabels = hasCustomSideHeaders
+                ? getCustomSideHeaderLabelsForRendering(table, customSideHeaderColumnCount)
+                : [];
+            const sideHeaderMatrix = hasCustomSideHeaders
+                ? expandSideHeaderRowsToMatrix(sideHeaderRenderRows, customSideHeaderColumnCount)
+                : [];
+            const useDistributedSideHeaders = hasCustomSideHeaders && !hasCustomHeaderRows;
+            const sideHeaderTargets = useDistributedSideHeaders
+                ? getCustomSideHeaderTargetsForRendering(table, customSideHeaderColumnCount, columns.length)
+                : [];
+            const sideHeaderIndexesByTarget = sideHeaderTargets.reduce<Record<number, number[]>>((acc, target, sideIndex) => {
+                const normalizedTarget = Math.max(0, Math.min(columns.length, Number(target) || 0));
+                if (!acc[normalizedTarget]) acc[normalizedTarget] = [];
+                acc[normalizedTarget].push(sideIndex);
+                return acc;
+            }, {});
+            const totalRows = Math.max(rowsCount, dataRows.length, sideHeaderRenderRows.length);
+            const boldRowSeparators = getCustomBoldRowSeparatorsForRendering(table, totalRows);
+            const boldColumnSeparators = getCustomBoldColumnSeparatorsForRendering(table, columns.length);
+            const boldRowSeparatorSet = new Set(boldRowSeparators);
+            const boldColumnSeparatorSet = new Set(boldColumnSeparators);
+            const getColumnSeparatorStyle = (colIndex: number): React.CSSProperties | undefined => {
+                if (!boldColumnSeparatorSet.has(colIndex + 1)) return undefined;
+                if (customLayoutSettings.direction === 'rtl') {
+                    return { borderLeftWidth: '3px', borderLeftStyle: 'double' };
+                }
+                return { borderRightWidth: '3px', borderRightStyle: 'double' };
+            };
+            const getDataSeparatorStyle = (rowIndex: number, colIndex: number) => {
+                const style: React.CSSProperties = {};
+                const columnStyle = getColumnSeparatorStyle(colIndex);
+                if (columnStyle) Object.assign(style, columnStyle);
+                if (boldRowSeparatorSet.has(rowIndex + 1)) {
+                    style.borderBottomWidth = '3px';
+                    style.borderBottomStyle = 'double';
+                }
+                return Object.keys(style).length > 0 ? style : undefined;
+            };
+            const getRowSeparatorStyle = (rowIndex: number) =>
+                boldRowSeparatorSet.has(rowIndex + 1)
+                    ? ({ borderBottomWidth: '3px', borderBottomStyle: 'double' } as const)
+                    : undefined;
             const useMobileCards = isMobile && !isPrintMode;
 
             if (useMobileCards) {
                 return (
-                    <div className="space-y-2 print:hidden">
-                        {Array.from({ length: Math.max(rowsCount, dataRows.length) }).map((_, rowIndex) => {
-                            const row = dataRows[rowIndex] || [];
+                    <div className="space-y-2 print:hidden" dir={customLayoutSettings.direction}>
+                        {Array.from({ length: totalRows }).map((_, rowIndex) => {
+                            const sideLabels = hasCustomSideHeaders
+                                ? Array.from({ length: customSideHeaderColumnCount })
+                                    .map((_, sideIndex) => sideHeaderMatrix[rowIndex]?.[sideIndex]?.label || '')
+                                    .filter((label) => label.length > 0)
+                                : [];
                             return (
                                 <div
                                     key={rowIndex}
@@ -1288,12 +1671,28 @@ const ReportViewer: React.FC = () => {
                                             {showRowNumbers ? `${rowHeaderLabel} ${rowIndex + 1}` : `صف ${rowIndex + 1}`}
                                         </span>
                                     </div>
+                                    {hasCustomSideHeaders && (
+                                        <div className="flex flex-wrap gap-1">
+                                            {sideLabels.map((label, sideIndex) => (
+                                                <span
+                                                    key={`pv-mobile-side-${rowIndex}-${sideIndex}`}
+                                                    className="inline-flex items-center rounded-full border border-gray-200 px-2 py-0.5 text-[10px] text-gray-600"
+                                                >
+                                                    {label}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
                                     <div className="space-y-2">
                                         {columns.map((col, colIndex) => (
                                             <div key={col.key || colIndex} className="rounded-md border border-gray-100 px-2.5 py-2">
-                                                <div className="text-[11px] font-semibold text-gray-500 mb-1">{col.label || `عمود ${colIndex + 1}`}</div>
+                                                <div className="text-[11px] font-semibold text-gray-500 mb-1">{getCustomColumnLabel(colIndex)}</div>
                                                 <div className="text-gray-900 text-right">
-                                                    {renderReadonlyCellValue(col, row[colIndex], true)}
+                                                    {renderReadonlyCellValue(
+                                                        { ...col, type: resolveCustomCellType(table, rowIndex, colIndex, col.type || 'text') },
+                                                        getResolvedCustomCellValue(dataRows, rowIndex, colIndex, col),
+                                                        true
+                                                    )}
                                                 </div>
                                             </div>
                                         ))}
@@ -1307,8 +1706,15 @@ const ReportViewer: React.FC = () => {
 
             const visibleColumnIndexes = getVisibleColumnIndexes(table.id, columns.length, MOBILE_CUSTOM_COLUMNS_PER_VIEW);
             const visibleColumns = visibleColumnIndexes.map((index) => ({ index, column: columns[index] })).filter((entry) => !!entry.column);
+            const visibleColumnByIndex = new Map(
+                visibleColumns.map((entry, visibleIndex) => [entry.index, { ...entry, visibleIndex }])
+            );
             const rowNumberWidthPercent = showRowNumbers ? 7 : 0;
-            const availableColumnsWidthPercent = 100 - rowNumberWidthPercent;
+            const sideColumnsWidthPercent = hasCustomSideHeaders ? Math.min(30, customSideHeaderColumnCount * 8) : 0;
+            const availableColumnsWidthPercent = 100 - rowNumberWidthPercent - sideColumnsWidthPercent;
+            const perSideColumnWidthPercent = hasCustomSideHeaders && customSideHeaderColumnCount > 0
+                ? sideColumnsWidthPercent / customSideHeaderColumnCount
+                : 0;
             const normalizedColumnWidths = (() => {
                 const weights = visibleColumns.map(({ index }) => Math.max(1, Number(columns[index]?.width) || 100));
                 const total = weights.reduce((sum, weight) => sum + weight, 0) || 1;
@@ -1316,13 +1722,13 @@ const ReportViewer: React.FC = () => {
             })();
 
             return (
-                <div className="space-y-2 print:space-y-0">
+                <div className="space-y-2 print:space-y-0" dir={customLayoutSettings.direction}>
                     {renderMobileColumnPager({
                         tableId: table.id,
                         totalColumns: columns.length,
                         visibleIndexes: visibleColumnIndexes,
                         windowSize: MOBILE_CUSTOM_COLUMNS_PER_VIEW,
-                        labels: columns.map((column) => column.label || '-'),
+                        labels: columns.map((_, index) => getCustomColumnLabel(index)),
                     })}
                     <div className="overflow-x-hidden print-table-container">
                         <table
@@ -1333,19 +1739,442 @@ const ReportViewer: React.FC = () => {
                         >
                             <colgroup>
                                 {showRowNumbers && <col style={{ width: `${rowNumberWidthPercent}%` }} />}
-                                {visibleColumns.map(({ index }, visibleIndex) => (
-                                    <col
-                                        key={index}
-                                        style={{
-                                            width: `${normalizedColumnWidths[visibleIndex] || 0}%`,
-                                        }}
-                                    />
-                                ))}
+                                {useDistributedSideHeaders
+                                    ? Array.from({ length: columns.length + 1 }).map((_, positionIndex) => (
+                                        <React.Fragment key={`pv-colgroup-position-${positionIndex}`}>
+                                            {(sideHeaderIndexesByTarget[positionIndex] || []).map((sideIndex) => (
+                                                <col
+                                                    key={`pv-side-col-${positionIndex}-${sideIndex}`}
+                                                    style={{ width: `${perSideColumnWidthPercent}%` }}
+                                                />
+                                            ))}
+                                            {visibleColumnByIndex.has(positionIndex) && (
+                                                <col
+                                                    key={`pv-col-${positionIndex}`}
+                                                    style={{
+                                                        width: `${normalizedColumnWidths[visibleColumnByIndex.get(positionIndex)!.visibleIndex] || 0}%`,
+                                                    }}
+                                                />
+                                            )}
+                                        </React.Fragment>
+                                    ))
+                                    : (
+                                        <>
+                                            {hasCustomSideHeaders &&
+                                                Array.from({ length: customSideHeaderColumnCount }).map((_, sideIndex) => (
+                                                    <col key={`pv-side-col-${sideIndex}`} style={{ width: `${perSideColumnWidthPercent}%` }} />
+                                                ))}
+                                            {visibleColumns.map(({ index }, visibleIndex) => (
+                                                <col
+                                                    key={index}
+                                                    style={{
+                                                        width: `${normalizedColumnWidths[visibleIndex] || 0}%`,
+                                                    }}
+                                                />
+                                            ))}
+                                        </>
+                                    )}
                             </colgroup>
+                            {showTopHeader && (
+                                <thead>
+                                    {hasCustomHeaderRows ? (
+                                        customHeaderRows.map((headerRow, headerRowIndex) => (
+                                            <tr key={`pv-header-row-${headerRowIndex}`} className="bg-gray-800 text-white">
+                                                {showRowNumbers && headerRowIndex === 0 && (
+                                                    <th
+                                                        rowSpan={customHeaderRows.length}
+                                                        className="border border-gray-400 px-2 py-1.5 text-center w-10 font-bold"
+                                                >
+                                                    {rowHeaderLabel}
+                                                </th>
+                                            )}
+                                                {hasCustomSideHeaders && headerRowIndex === 0 && (
+                                                    <th
+                                                        rowSpan={customHeaderRows.length}
+                                                        colSpan={customSideHeaderColumnCount}
+                                                        className="border border-gray-400 px-2 py-1.5 text-center font-bold"
+                                                    >
+                                                        الرأس الجانبي
+                                                    </th>
+                                                )}
+                                                {headerRow.map((cell, cellIndex) => (
+                                                    <th
+                                                        key={`pv-header-cell-${headerRowIndex}-${cellIndex}`}
+                                                        colSpan={cell.col_span || 1}
+                                                        rowSpan={cell.row_span || 1}
+                                                        className={cn(
+                                                            'border border-gray-400 px-2 py-1.5 font-bold',
+                                                            getColumnAlignClass(cell.align),
+                                                            cell.class_name
+                                                        )}
+                                                        style={{
+                                                            backgroundColor: cell.background_color || undefined,
+                                                            color: cell.text_color || undefined,
+                                                        }}
+                                                    >
+                                                        {cell.label}
+                                                    </th>
+                                                ))}
+                                            </tr>
+                                        ))
+                                    ) : (
+                                        <tr className="bg-gray-800 text-white">
+                                            {showRowNumbers && (
+                                                <th className="border border-gray-400 px-2 py-1.5 text-center w-10 font-bold">
+                                                    {rowHeaderLabel}
+                                                </th>
+                                            )}
+                                            {useDistributedSideHeaders
+                                                ? Array.from({ length: columns.length + 1 }).map((_, positionIndex) => (
+                                                    <React.Fragment key={`pv-head-position-${positionIndex}`}>
+                                                        {(sideHeaderIndexesByTarget[positionIndex] || []).map((sideIndex) => (
+                                                            <th
+                                                                key={`pv-side-header-${positionIndex}-${sideIndex}`}
+                                                                className="border border-gray-400 px-2 py-1.5 text-center font-bold"
+                                                            >
+                                                                {sideHeaderColumnLabels[sideIndex] || `رأس ${sideIndex + 1}`}
+                                                            </th>
+                                                        ))}
+                                                        {visibleColumnByIndex.has(positionIndex) && (
+                                                            <th
+                                                                key={`pv-header-col-${positionIndex}`}
+                                                                className={cn(
+                                                                    'border border-gray-400 px-2 py-1.5 font-bold',
+                                                                    getColumnAlignClass(visibleColumnByIndex.get(positionIndex)!.column.align)
+                                                                )}
+                                                                style={getColumnSeparatorStyle(positionIndex)}
+                                                            >
+                                                                {getCustomColumnLabel(positionIndex)}
+                                                            </th>
+                                                        )}
+                                                    </React.Fragment>
+                                                ))
+                                                : (
+                                                    <>
+                                                        {hasCustomSideHeaders &&
+                                                            Array.from({ length: customSideHeaderColumnCount }).map((_, sideIndex) => (
+                                                                <th
+                                                                    key={`pv-side-header-${sideIndex}`}
+                                                                    className="border border-gray-400 px-2 py-1.5 text-center font-bold"
+                                                                >
+                                                                    {sideHeaderColumnLabels[sideIndex] || `رأس ${sideIndex + 1}`}
+                                                                </th>
+                                                            ))}
+                                                        {visibleColumns.map(({ index, column }) => (
+                                                            <th
+                                                                key={column.key || index}
+                                                                className={cn(
+                                                                    'border border-gray-400 px-2 py-1.5 font-bold',
+                                                                    getColumnAlignClass(column.align)
+                                                                )}
+                                                                style={getColumnSeparatorStyle(index)}
+                                                            >
+                                                                {getCustomColumnLabel(index)}
+                                                            </th>
+                                                        ))}
+                                                    </>
+                                                )}
+                                        </tr>
+                                    )}
+                                </thead>
+                            )}
+                            <tbody>
+                                {Array.from({ length: totalRows }).map((_, rowIndex) => {
+                                    return (
+                                        <tr key={rowIndex} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                            {showRowNumbers && (
+                                                <td
+                                                    className="border border-gray-400 px-2 py-1 text-center text-gray-500"
+                                                    style={getRowSeparatorStyle(rowIndex)}
+                                                >
+                                                    {rowIndex + 1}
+                                                </td>
+                                            )}
+                                            {useDistributedSideHeaders
+                                                ? Array.from({ length: columns.length + 1 }).map((_, positionIndex) => (
+                                                    <React.Fragment key={`pv-body-position-${rowIndex}-${positionIndex}`}>
+                                                        {(sideHeaderIndexesByTarget[positionIndex] || []).map((sideIndex) => {
+                                                            const cell = sideHeaderMatrix[rowIndex]?.[sideIndex];
+                                                            if (!cell) return null;
+                                                            return (
+                                                                <th
+                                                                    key={`pv-side-row-${rowIndex}-${positionIndex}-${sideIndex}`}
+                                                                    rowSpan={cell.row_span || 1}
+                                                                    className={cn(
+                                                                        'border border-gray-400 px-2 py-1 font-semibold text-white bg-gray-800',
+                                                                        getColumnAlignClass(cell.align),
+                                                                        cell.class_name
+                                                                    )}
+                                                                    style={{
+                                                                        ...getRowSeparatorStyle(rowIndex),
+                                                                        backgroundColor: cell.background_color || undefined,
+                                                                        color: cell.text_color || undefined,
+                                                                    }}
+                                                                >
+                                                                    {cell.label || '-'}
+                                                                </th>
+                                                            );
+                                                        })}
+                                                        {visibleColumnByIndex.has(positionIndex) && (() => {
+                                                            const entry = visibleColumnByIndex.get(positionIndex)!;
+                                                            const colIndex = entry.index;
+                                                            const col = entry.column;
+                                                            const val = getResolvedCustomCellValue(dataRows, rowIndex, colIndex, col);
+                                                            return (
+                                                                <td
+                                                                    key={col.key || colIndex}
+                                                                    className={cn(
+                                                                        'border border-gray-400 px-2 py-0.5',
+                                                                        getColumnAlignClass(col.align),
+                                                                        'print:break-words print:overflow-wrap-anywhere'
+                                                                    )}
+                                                                    style={getDataSeparatorStyle(rowIndex, colIndex)}
+                                                                >
+                                                                    {renderReadonlyCellValue(
+                                                                        { ...col, type: resolveCustomCellType(table, rowIndex, colIndex, col.type || 'text') },
+                                                                        val
+                                                                    )}
+                                                                </td>
+                                                            );
+                                                        })()}
+                                                    </React.Fragment>
+                                                ))
+                                        : (
+                                            <>
+                                                {hasCustomSideHeaders &&
+                                                            Array.from({ length: customSideHeaderColumnCount }).map((_, sideIndex) => {
+                                                                const cell = sideHeaderMatrix[rowIndex]?.[sideIndex];
+                                                                if (!cell) return null;
+                                                                return (
+                                                                    <th
+                                                                        key={`pv-side-row-${rowIndex}-${sideIndex}`}
+                                                                        rowSpan={cell.row_span || 1}
+                                                                        className={cn(
+                                                                            'border border-gray-400 px-2 py-1 font-semibold text-white bg-gray-800',
+                                                                            getColumnAlignClass(cell.align),
+                                                                            cell.class_name
+                                                                        )}
+                                                                        style={{
+                                                                            ...getRowSeparatorStyle(rowIndex),
+                                                                            backgroundColor: cell.background_color || undefined,
+                                                                            color: cell.text_color || undefined,
+                                                                        }}
+                                                                    >
+                                                                        {cell.label || '-'}
+                                                                    </th>
+                                                                );
+                                                            })}
+                                                {visibleColumns.map(({ index: colIndex, column: col }) => {
+                                                    const val = getResolvedCustomCellValue(dataRows, rowIndex, colIndex, col);
+                                                    return (
+                                                                <td
+                                                                    key={col.key || colIndex}
+                                                                    className={cn(
+                                                                        'border border-gray-400 px-2 py-0.5',
+                                                                        getColumnAlignClass(col.align),
+                                                                        'print:break-words print:overflow-wrap-anywhere'
+                                                                    )}
+                                                                    style={getDataSeparatorStyle(rowIndex, colIndex)}
+                                                                >
+                                                                    {renderReadonlyCellValue(
+                                                                        { ...col, type: resolveCustomCellType(table, rowIndex, colIndex, col.type || 'text') },
+                                                                        val
+                                                                    )}
+                                                                </td>
+                                                            );
+                                                        })}
+                                                    </>
+                                                )}
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+
+        // Default table rendering for custom/ai-code
+        const columns = customColumns;
+        const dataRows = tableData || [];
+        const rowsCount = customGridSettings.rows || dataRows.length || 5;
+        const sideHeaderModel = buildSideHeaderRenderModel(customSideHeaderRows, Math.max(rowsCount, dataRows.length, 1));
+        const sideHeaderRenderRows = sideHeaderModel.rows;
+        const hasCustomSideHeaders = hasSideHeaderConfig && sideHeaderModel.columnCount > 0;
+        const customSideHeaderColumnCount = hasCustomSideHeaders ? sideHeaderModel.columnCount : 0;
+        const sideHeaderColumnLabels = hasCustomSideHeaders
+            ? getCustomSideHeaderLabelsForRendering(table, customSideHeaderColumnCount)
+            : [];
+        const sideHeaderMatrix = hasCustomSideHeaders
+            ? expandSideHeaderRowsToMatrix(sideHeaderRenderRows, customSideHeaderColumnCount)
+            : [];
+        const useDistributedSideHeaders = hasCustomSideHeaders && !hasCustomHeaderRows;
+        const sideHeaderTargets = useDistributedSideHeaders
+            ? getCustomSideHeaderTargetsForRendering(table, customSideHeaderColumnCount, columns.length)
+            : [];
+        const sideHeaderIndexesByTarget = sideHeaderTargets.reduce<Record<number, number[]>>((acc, target, sideIndex) => {
+            const normalizedTarget = Math.max(0, Math.min(columns.length, Number(target) || 0));
+            if (!acc[normalizedTarget]) acc[normalizedTarget] = [];
+            acc[normalizedTarget].push(sideIndex);
+            return acc;
+        }, {});
+        const totalRows = Math.max(rowsCount, dataRows.length, sideHeaderRenderRows.length);
+        const boldRowSeparators = getCustomBoldRowSeparatorsForRendering(table, totalRows);
+        const boldColumnSeparators = getCustomBoldColumnSeparatorsForRendering(table, columns.length);
+        const boldRowSeparatorSet = new Set(boldRowSeparators);
+        const boldColumnSeparatorSet = new Set(boldColumnSeparators);
+        const getColumnSeparatorStyle = (colIndex: number): React.CSSProperties | undefined => {
+            if (!boldColumnSeparatorSet.has(colIndex + 1)) return undefined;
+            if (customLayoutSettings.direction === 'rtl') {
+                return { borderLeftWidth: '3px', borderLeftStyle: 'double' };
+            }
+            return { borderRightWidth: '3px', borderRightStyle: 'double' };
+        };
+        const getDataSeparatorStyle = (rowIndex: number, colIndex: number) => {
+            const style: React.CSSProperties = {};
+            const columnStyle = getColumnSeparatorStyle(colIndex);
+            if (columnStyle) Object.assign(style, columnStyle);
+            if (boldRowSeparatorSet.has(rowIndex + 1)) {
+                style.borderBottomWidth = '3px';
+                style.borderBottomStyle = 'double';
+            }
+            return Object.keys(style).length > 0 ? style : undefined;
+        };
+        const getRowSeparatorStyle = (rowIndex: number) =>
+            boldRowSeparatorSet.has(rowIndex + 1)
+                ? ({ borderBottomWidth: '3px', borderBottomStyle: 'double' } as const)
+                : undefined;
+        const useMobileCards = isMobile && !isPrintMode;
+
+        if (useMobileCards) {
+            return (
+                <div className="space-y-2 print:hidden" dir={customLayoutSettings.direction}>
+                    {Array.from({ length: totalRows }).map((_, rowIndex) => {
+                        const sideLabels = hasCustomSideHeaders
+                            ? Array.from({ length: customSideHeaderColumnCount })
+                                .map((_, sideIndex) => sideHeaderMatrix[rowIndex]?.[sideIndex]?.label || '')
+                                .filter((label) => label.length > 0)
+                            : [];
+                        return (
+                            <div
+                                key={rowIndex}
+                                className="rounded-lg border border-gray-200 bg-white px-3 py-2.5 space-y-2"
+                            >
+                                <div className="flex items-center justify-between">
+                                    <span className="text-[11px] font-semibold text-gray-500">
+                                        {showRowNumbers ? `${rowHeaderLabel} ${rowIndex + 1}` : `صف ${rowIndex + 1}`}
+                                    </span>
+                                </div>
+                                {hasCustomSideHeaders && (
+                                    <div className="flex flex-wrap gap-1">
+                                        {sideLabels.map((label, sideIndex) => (
+                                            <span
+                                                key={`custom-mobile-side-${rowIndex}-${sideIndex}`}
+                                                className="inline-flex items-center rounded-full border border-gray-200 px-2 py-0.5 text-[10px] text-gray-600"
+                                            >
+                                                {label}
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
+                                <div className="space-y-2">
+                                    {columns.map((col, colIndex) => (
+                                        <div key={col.key || colIndex} className="rounded-md border border-gray-100 px-2.5 py-2">
+                                            <div className="text-[11px] font-semibold text-gray-500 mb-1">{getCustomColumnLabel(colIndex)}</div>
+                                            <div className="text-gray-900 text-right">
+                                                {renderReadonlyCellValue(
+                                                    { ...col, type: resolveCustomCellType(table, rowIndex, colIndex, col.type || 'text') },
+                                                    getResolvedCustomCellValue(dataRows, rowIndex, colIndex, col),
+                                                    true
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            );
+        }
+
+        const visibleColumnIndexes = getVisibleColumnIndexes(table.id, columns.length, MOBILE_CUSTOM_COLUMNS_PER_VIEW);
+        const visibleColumns = visibleColumnIndexes.map((index) => ({ index, column: columns[index] })).filter((entry) => !!entry.column);
+        const visibleColumnByIndex = new Map(
+            visibleColumns.map((entry, visibleIndex) => [entry.index, { ...entry, visibleIndex }])
+        );
+        const rowNumberWidthPercent = showRowNumbers ? 7 : 0;
+        const sideColumnsWidthPercent = hasCustomSideHeaders ? Math.min(30, customSideHeaderColumnCount * 8) : 0;
+        const availableColumnsWidthPercent = 100 - rowNumberWidthPercent - sideColumnsWidthPercent;
+        const perSideColumnWidthPercent = hasCustomSideHeaders && customSideHeaderColumnCount > 0
+            ? sideColumnsWidthPercent / customSideHeaderColumnCount
+            : 0;
+        const normalizedColumnWidths = (() => {
+            const weights = visibleColumns.map(({ index }) => Math.max(1, Number(columns[index]?.width) || 100));
+            const total = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+            return weights.map((weight) => (weight / total) * availableColumnsWidthPercent);
+        })();
+
+        return (
+            <div className="space-y-2 print:space-y-0" dir={customLayoutSettings.direction}>
+                {renderMobileColumnPager({
+                    tableId: table.id,
+                    totalColumns: columns.length,
+                    visibleIndexes: visibleColumnIndexes,
+                    windowSize: MOBILE_CUSTOM_COLUMNS_PER_VIEW,
+                    labels: columns.map((_, index) => getCustomColumnLabel(index)),
+                })}
+                <div className="overflow-x-hidden print-table-container">
+                    <table
+                        className="w-full border-collapse text-xs print:text-[10px]"
+                        style={{
+                            tableLayout: 'fixed',
+                        }}
+                    >
+                        <colgroup>
+                            {showRowNumbers && <col style={{ width: `${rowNumberWidthPercent}%` }} />}
+                            {useDistributedSideHeaders
+                                ? Array.from({ length: columns.length + 1 }).map((_, positionIndex) => (
+                                    <React.Fragment key={`custom-colgroup-position-${positionIndex}`}>
+                                        {(sideHeaderIndexesByTarget[positionIndex] || []).map((sideIndex) => (
+                                            <col
+                                                key={`custom-side-col-${positionIndex}-${sideIndex}`}
+                                                style={{ width: `${perSideColumnWidthPercent}%` }}
+                                            />
+                                        ))}
+                                        {visibleColumnByIndex.has(positionIndex) && (
+                                            <col
+                                                key={`custom-col-${positionIndex}`}
+                                                style={{
+                                                    width: `${normalizedColumnWidths[visibleColumnByIndex.get(positionIndex)!.visibleIndex] || 0}%`,
+                                                }}
+                                            />
+                                        )}
+                                    </React.Fragment>
+                                ))
+                                : (
+                                    <>
+                                        {hasCustomSideHeaders &&
+                                            Array.from({ length: customSideHeaderColumnCount }).map((_, sideIndex) => (
+                                                <col key={`custom-side-col-${sideIndex}`} style={{ width: `${perSideColumnWidthPercent}%` }} />
+                                            ))}
+                                        {visibleColumns.map(({ index }, visibleIndex) => (
+                                            <col
+                                                key={`custom-col-${index}`}
+                                                style={{
+                                                    width: `${normalizedColumnWidths[visibleIndex] || 0}%`,
+                                                }}
+                                            />
+                                        ))}
+                                    </>
+                                )}
+                        </colgroup>
+                        {showTopHeader && (
                             <thead>
                                 {hasCustomHeaderRows ? (
                                     customHeaderRows.map((headerRow, headerRowIndex) => (
-                                        <tr key={`pv-header-row-${headerRowIndex}`} className="bg-gray-800 text-white">
+                                        <tr key={`custom-header-row-${headerRowIndex}`} className="bg-gray-800 text-white">
                                             {showRowNumbers && headerRowIndex === 0 && (
                                                 <th
                                                     rowSpan={customHeaderRows.length}
@@ -1354,9 +2183,18 @@ const ReportViewer: React.FC = () => {
                                                     {rowHeaderLabel}
                                                 </th>
                                             )}
+                                            {hasCustomSideHeaders && headerRowIndex === 0 && (
+                                                <th
+                                                    rowSpan={customHeaderRows.length}
+                                                    colSpan={customSideHeaderColumnCount}
+                                                    className="border border-gray-400 px-2 py-1.5 text-center font-bold"
+                                                >
+                                                    الرأس الجانبي
+                                                </th>
+                                            )}
                                             {headerRow.map((cell, cellIndex) => (
                                                 <th
-                                                    key={`pv-header-cell-${headerRowIndex}-${cellIndex}`}
+                                                    key={`custom-header-cell-${headerRowIndex}-${cellIndex}`}
                                                     colSpan={cell.col_span || 1}
                                                     rowSpan={cell.row_span || 1}
                                                     className={cn(
@@ -1381,208 +2219,167 @@ const ReportViewer: React.FC = () => {
                                                 {rowHeaderLabel}
                                             </th>
                                         )}
-                                        {visibleColumns.map(({ index, column }) => (
-                                            <th
-                                                key={column.key || index}
-                                                className={cn(
-                                                    'border border-gray-400 px-2 py-1.5 font-bold',
-                                                    getColumnAlignClass(column.align)
-                                                )}
-                                            >
-                                                {column.label}
-                                            </th>
-                                        ))}
+                                        {useDistributedSideHeaders
+                                            ? Array.from({ length: columns.length + 1 }).map((_, positionIndex) => (
+                                                <React.Fragment key={`custom-head-position-${positionIndex}`}>
+                                                    {(sideHeaderIndexesByTarget[positionIndex] || []).map((sideIndex) => (
+                                                        <th
+                                                            key={`custom-side-header-${positionIndex}-${sideIndex}`}
+                                                            className="border border-gray-400 px-2 py-1.5 text-center font-bold"
+                                                        >
+                                                            {sideHeaderColumnLabels[sideIndex] || `رأس ${sideIndex + 1}`}
+                                                        </th>
+                                                    ))}
+                                                    {visibleColumnByIndex.has(positionIndex) && (
+                                                        <th
+                                                            key={`custom-head-col-${positionIndex}`}
+                                                            className={cn(
+                                                                'border border-gray-400 px-2 py-1.5 font-bold',
+                                                                getColumnAlignClass(visibleColumnByIndex.get(positionIndex)!.column.align)
+                                                            )}
+                                                            style={getColumnSeparatorStyle(positionIndex)}
+                                                        >
+                                                            {getCustomColumnLabel(positionIndex)}
+                                                        </th>
+                                                    )}
+                                                </React.Fragment>
+                                            ))
+                                            : (
+                                                <>
+                                                    {hasCustomSideHeaders &&
+                                                        Array.from({ length: customSideHeaderColumnCount }).map((_, sideIndex) => (
+                                                            <th
+                                                                key={`custom-side-header-${sideIndex}`}
+                                                                className="border border-gray-400 px-2 py-1.5 text-center font-bold"
+                                                            >
+                                                                {sideHeaderColumnLabels[sideIndex] || `رأس ${sideIndex + 1}`}
+                                                            </th>
+                                                        ))}
+                                                    {visibleColumns.map(({ index, column: col }) => (
+                                                        <th
+                                                            key={col.key || index}
+                                                            className={cn(
+                                                                'border border-gray-400 px-2 py-1.5 font-bold',
+                                                                getColumnAlignClass(col.align)
+                                                            )}
+                                                            style={getColumnSeparatorStyle(index)}
+                                                        >
+                                                            {getCustomColumnLabel(index)}
+                                                        </th>
+                                                    ))}
+                                                </>
+                                            )}
                                     </tr>
                                 )}
                             </thead>
-                            <tbody>
-                                {Array.from({ length: Math.max(rowsCount, dataRows.length) }).map((_, rowIndex) => {
-                                    const row = dataRows[rowIndex] || [];
-                                    return (
-                                        <tr key={rowIndex} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                                            {showRowNumbers && (
-                                                <td className="border border-gray-400 px-2 py-1 text-center text-gray-500">
-                                                    {rowIndex + 1}
-                                                </td>
-                                            )}
-                                            {visibleColumns.map(({ index: colIndex, column: col }) => {
-                                                const val = row[colIndex];
-                                                return (
-                                                    <td
-                                                        key={col.key || colIndex}
-                                                        className={cn(
-                                                            'border border-gray-400 px-2 py-0.5',
-                                                            getColumnAlignClass(col.align),
-                                                            'print:break-words print:overflow-wrap-anywhere'
-                                                        )}
-                                                    >
-                                                        {renderReadonlyCellValue(col, val)}
-                                                    </td>
-                                                );
-                                            })}
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            );
-        }
-
-        // Default table rendering for custom/ai-code
-        const columns = table.columns || [];
-        const dataRows = tableData || [];
-        const rowsCount = table.rows || dataRows.length || 5;
-        const useMobileCards = isMobile && !isPrintMode;
-
-        if (useMobileCards) {
-            return (
-                <div className="space-y-2 print:hidden">
-                    {Array.from({ length: Math.max(rowsCount, dataRows.length) }).map((_, rowIndex) => {
-                        const row = dataRows[rowIndex] || [];
-                        return (
-                            <div
-                                key={rowIndex}
-                                className="rounded-lg border border-gray-200 bg-white px-3 py-2.5 space-y-2"
-                            >
-                                <div className="flex items-center justify-between">
-                                    <span className="text-[11px] font-semibold text-gray-500">
-                                        {showRowNumbers ? `${rowHeaderLabel} ${rowIndex + 1}` : `صف ${rowIndex + 1}`}
-                                    </span>
-                                </div>
-                                <div className="space-y-2">
-                                    {columns.map((col, colIndex) => (
-                                        <div key={col.key || colIndex} className="rounded-md border border-gray-100 px-2.5 py-2">
-                                            <div className="text-[11px] font-semibold text-gray-500 mb-1">{col.label || `عمود ${colIndex + 1}`}</div>
-                                            <div className="text-gray-900 text-right">
-                                                {renderReadonlyCellValue(col, row[colIndex], true)}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-            );
-        }
-
-        const visibleColumnIndexes = getVisibleColumnIndexes(table.id, columns.length, MOBILE_CUSTOM_COLUMNS_PER_VIEW);
-        const visibleColumns = visibleColumnIndexes.map((index) => ({ index, column: columns[index] })).filter((entry) => !!entry.column);
-        const rowNumberWidthPercent = showRowNumbers ? 7 : 0;
-        const availableColumnsWidthPercent = 100 - rowNumberWidthPercent;
-        const normalizedColumnWidths = (() => {
-            const weights = visibleColumns.map(({ index }) => Math.max(1, Number(columns[index]?.width) || 100));
-            const total = weights.reduce((sum, weight) => sum + weight, 0) || 1;
-            return weights.map((weight) => (weight / total) * availableColumnsWidthPercent);
-        })();
-
-        return (
-            <div className="space-y-2 print:space-y-0">
-                {renderMobileColumnPager({
-                    tableId: table.id,
-                    totalColumns: columns.length,
-                    visibleIndexes: visibleColumnIndexes,
-                    windowSize: MOBILE_CUSTOM_COLUMNS_PER_VIEW,
-                    labels: columns.map((column) => column.label || '-'),
-                })}
-                <div className="overflow-x-hidden print-table-container">
-                    <table
-                        className="w-full border-collapse text-xs print:text-[10px]"
-                        style={{
-                            tableLayout: 'fixed',
-                        }}
-                    >
-                        <colgroup>
-                            {showRowNumbers && <col style={{ width: `${rowNumberWidthPercent}%` }} />}
-                            {visibleColumns.map(({ index }, visibleIndex) => (
-                                <col
-                                    key={`custom-col-${index}`}
-                                    style={{
-                                        width: `${normalizedColumnWidths[visibleIndex] || 0}%`,
-                                    }}
-                                />
-                            ))}
-                        </colgroup>
-                        <thead>
-                            {hasCustomHeaderRows ? (
-                                customHeaderRows.map((headerRow, headerRowIndex) => (
-                                    <tr key={`custom-header-row-${headerRowIndex}`} className="bg-gray-800 text-white">
-                                        {showRowNumbers && headerRowIndex === 0 && (
-                                            <th
-                                                rowSpan={customHeaderRows.length}
-                                                className="border border-gray-400 px-2 py-1.5 text-center w-10 font-bold"
-                                            >
-                                                {rowHeaderLabel}
-                                            </th>
-                                        )}
-                                        {headerRow.map((cell, cellIndex) => (
-                                            <th
-                                                key={`custom-header-cell-${headerRowIndex}-${cellIndex}`}
-                                                colSpan={cell.col_span || 1}
-                                                rowSpan={cell.row_span || 1}
-                                                className={cn(
-                                                    'border border-gray-400 px-2 py-1.5 font-bold',
-                                                    getColumnAlignClass(cell.align),
-                                                    cell.class_name
-                                                )}
-                                                style={{
-                                                    backgroundColor: cell.background_color || undefined,
-                                                    color: cell.text_color || undefined,
-                                                }}
-                                            >
-                                                {cell.label}
-                                            </th>
-                                        ))}
-                                    </tr>
-                                ))
-                            ) : (
-                                <tr className="bg-gray-800 text-white">
-                                    {showRowNumbers && (
-                                        <th className="border border-gray-400 px-2 py-1.5 text-center w-10 font-bold">
-                                            {rowHeaderLabel}
-                                        </th>
-                                    )}
-                                    {visibleColumns.map(({ index, column: col }) => (
-                                        <th
-                                            key={col.key || index}
-                                            className={cn(
-                                                'border border-gray-400 px-2 py-1.5 font-bold',
-                                                getColumnAlignClass(col.align)
-                                            )}
-                                        >
-                                            {col.label}
-                                        </th>
-                                    ))}
-                                </tr>
-                            )}
-                        </thead>
+                        )}
                         <tbody>
-                            {Array.from({ length: Math.max(rowsCount, dataRows.length) }).map((_, rowIndex) => {
-                                const row = dataRows[rowIndex] || [];
+                            {Array.from({ length: totalRows }).map((_, rowIndex) => {
                                 return (
                                     <tr key={rowIndex} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                                        {showRowNumbers && (
-                                            <td className="border border-gray-400 px-2 py-1 text-center text-gray-500">
-                                                {rowIndex + 1}
-                                            </td>
+                                    {showRowNumbers && (
+                                        <td
+                                            className="border border-gray-400 px-2 py-1 text-center text-gray-500"
+                                            style={getRowSeparatorStyle(rowIndex)}
+                                        >
+                                            {rowIndex + 1}
+                                        </td>
+                                    )}
+                                    {useDistributedSideHeaders
+                                        ? Array.from({ length: columns.length + 1 }).map((_, positionIndex) => (
+                                            <React.Fragment key={`custom-body-position-${rowIndex}-${positionIndex}`}>
+                                                {(sideHeaderIndexesByTarget[positionIndex] || []).map((sideIndex) => {
+                                                    const cell = sideHeaderMatrix[rowIndex]?.[sideIndex];
+                                                    if (!cell) return null;
+                                                    return (
+                                                        <th
+                                                            key={`custom-side-row-${rowIndex}-${positionIndex}-${sideIndex}`}
+                                                            rowSpan={cell.row_span || 1}
+                                                            className={cn(
+                                                                'border border-gray-400 px-2 py-1 font-semibold text-white bg-gray-800',
+                                                                getColumnAlignClass(cell.align),
+                                                                cell.class_name
+                                                            )}
+                                                            style={{
+                                                                ...getRowSeparatorStyle(rowIndex),
+                                                                backgroundColor: cell.background_color || undefined,
+                                                                color: cell.text_color || undefined,
+                                                            }}
+                                                        >
+                                                            {cell.label || '-'}
+                                                        </th>
+                                                    );
+                                                })}
+                                                {visibleColumnByIndex.has(positionIndex) && (() => {
+                                                    const entry = visibleColumnByIndex.get(positionIndex)!;
+                                                    const colIndex = entry.index;
+                                                    const col = entry.column;
+                                                    const val = getResolvedCustomCellValue(dataRows, rowIndex, colIndex, col);
+                                                    return (
+                                                        <td
+                                                            key={col.key || colIndex}
+                                                            className={cn(
+                                                                'border border-gray-400 px-2 py-0.5',
+                                                                getColumnAlignClass(col.align),
+                                                                'print:break-words print:overflow-wrap-anywhere'
+                                                            )}
+                                                            style={getDataSeparatorStyle(rowIndex, colIndex)}
+                                                        >
+                                                            {renderReadonlyCellValue(
+                                                                { ...col, type: resolveCustomCellType(table, rowIndex, colIndex, col.type || 'text') },
+                                                                val
+                                                            )}
+                                                        </td>
+                                                    );
+                                                })()}
+                                            </React.Fragment>
+                                        ))
+                                        : (
+                                            <>
+                                                {hasCustomSideHeaders &&
+                                                    Array.from({ length: customSideHeaderColumnCount }).map((_, sideIndex) => {
+                                                        const cell = sideHeaderMatrix[rowIndex]?.[sideIndex];
+                                                        if (!cell) return null;
+                                                        return (
+                                                            <th
+                                                                key={`custom-side-row-${rowIndex}-${sideIndex}`}
+                                                                rowSpan={cell.row_span || 1}
+                                                                className={cn(
+                                                                    'border border-gray-400 px-2 py-1 font-semibold text-white bg-gray-800',
+                                                                    getColumnAlignClass(cell.align),
+                                                                    cell.class_name
+                                                                )}
+                                                                style={{
+                                                                    ...getRowSeparatorStyle(rowIndex),
+                                                                    backgroundColor: cell.background_color || undefined,
+                                                                    color: cell.text_color || undefined,
+                                                                }}
+                                                            >
+                                                                {cell.label || '-'}
+                                                            </th>
+                                                        );
+                                                    })}
+                                                {visibleColumns.map(({ index: colIndex, column: col }) => {
+                                                    const val = getResolvedCustomCellValue(dataRows, rowIndex, colIndex, col);
+                                                    return (
+                                                        <td
+                                                            key={col.key || colIndex}
+                                                            className={cn(
+                                                                'border border-gray-400 px-2 py-0.5',
+                                                                getColumnAlignClass(col.align),
+                                                                'print:break-words print:overflow-wrap-anywhere'
+                                                            )}
+                                                            style={getDataSeparatorStyle(rowIndex, colIndex)}
+                                                        >
+                                                            {renderReadonlyCellValue(
+                                                                { ...col, type: resolveCustomCellType(table, rowIndex, colIndex, col.type || 'text') },
+                                                                val
+                                                            )}
+                                                        </td>
+                                                    );
+                                                })}
+                                            </>
                                         )}
-                                        {visibleColumns.map(({ index: colIndex, column: col }) => {
-                                            const val = row[colIndex];
-                                            return (
-                                                <td
-                                                    key={col.key || colIndex}
-                                                    className={cn(
-                                                        'border border-gray-400 px-2 py-0.5',
-                                                        getColumnAlignClass(col.align),
-                                                        'print:break-words print:overflow-wrap-anywhere'
-                                                    )}
-                                                >
-                                                    {renderReadonlyCellValue(col, val)}
-                                                </td>
-                                            );
-                                        })}
                                     </tr>
                                 );
                             })}
@@ -1612,9 +2409,9 @@ const ReportViewer: React.FC = () => {
                                 معاينة التقرير
                             </h1>
                             <div className="flex flex-wrap items-center gap-1.5 sm:gap-3 text-xs sm:text-sm text-gray-500 dark:text-gray-400">
-                                <span className="truncate max-w-[220px] sm:max-w-none">{template.name}</span>
+                                <span className="truncate max-w-[220px] sm:max-w-none">{templateForRendering.name}</span>
                                 <span>•</span>
-                                <span>الإصدار {template.version}</span>
+                                <span>الإصدار {templateForRendering.version}</span>
                                 {instance && (
                                     <>
                                         <span>•</span>
@@ -1661,29 +2458,29 @@ const ReportViewer: React.FC = () => {
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-3 sm:px-4 py-2">
                                 {/* Right: Document Control Info - Vertical layout */}
                                 <div className="text-right text-[9px] w-full sm:w-auto sm:min-w-[120px]">
-                                    {template.document_control && (
+                                    {templateForRendering.document_control && (
                                         <div className="space-y-0">
                                             {/* Document Code */}
-                                            {template.document_control.doc_code && (
+                                            {templateForRendering.document_control.doc_code && (
                                                 <div className="font-bold text-[10px]">
-                                                    رمز الوثيقة: <span className="font-mono">{template.document_control.doc_code}</span>
+                                                    رمز الوثيقة: <span className="font-mono">{templateForRendering.document_control.doc_code}</span>
                                                 </div>
                                             )}
                                             {/* Issue Number */}
                                             <div>
-                                                الإصدار: <span className="font-mono font-bold">{template.document_control.issue_no}</span>
+                                                الإصدار: <span className="font-mono font-bold">{templateForRendering.document_control.issue_no}</span>
                                             </div>
                                             {/* Issue Date */}
                                             <div>
-                                                تاريخ الإصدار: <span className="font-mono">{template.document_control.issue_date}</span>
+                                                تاريخ الإصدار: <span className="font-mono">{templateForRendering.document_control.issue_date}</span>
                                             </div>
                                             {/* Review Number */}
                                             <div>
-                                                المراجعة: <span className="font-mono font-bold">{template.document_control.review_no}</span>
+                                                المراجعة: <span className="font-mono font-bold">{templateForRendering.document_control.review_no}</span>
                                             </div>
                                             {/* Review Date */}
                                             <div>
-                                                تاريخ المراجعة: <span className="font-mono">{template.document_control.review_date || '-'}</span>
+                                                تاريخ المراجعة: <span className="font-mono">{templateForRendering.document_control.review_date || '-'}</span>
                                             </div>
                                         </div>
                                     )}
@@ -1692,7 +2489,7 @@ const ReportViewer: React.FC = () => {
                                 {/* Center: Document Title + Status */}
                                 <div className="flex-1 text-center px-0 sm:px-4">
                                     <h1 className="text-lg font-bold text-gray-900">
-                                        {template.name}
+                                        {templateForRendering.name}
                                     </h1>
                                     {/* Status Badge - Below title */}
                                     {instance && (
@@ -1735,7 +2532,7 @@ const ReportViewer: React.FC = () => {
                                                 <td className="border border-gray-400 px-2 py-1 w-1/3 text-center">{formData?.shift || '-'}</td>
                                             </tr>
                                             {/* Hide batch number row for data-collection type */}
-                                            {template.type !== 'data-collection' && (
+                                            {templateForRendering.type !== 'data-collection' && (
                                                 <tr>
                                                     <td className="border border-gray-400 bg-gray-800 text-white px-2 py-1 font-bold text-center">رقم الدُفعة</td>
                                                     <td className="border border-gray-400 px-2 py-1 font-mono font-bold text-primary-700 text-center">{formData?.batch_number || '-'}</td>
@@ -1869,13 +2666,13 @@ const ReportViewer: React.FC = () => {
                     </div>
 
                     {/* Quality Criteria Section */}
-                    {template.quality_criteria && template.quality_criteria.length > 0 && (
+                    {templateForRendering.quality_criteria && templateForRendering.quality_criteria.length > 0 && (
                         <div className="report-quality-block p-4 border-t-2 border-gray-800">
                             <div className="bg-gray-800 text-white px-3 py-2 mb-3">
                                 <h3 className="text-sm font-bold">معايير الجودة والقبول</h3>
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 print:grid-cols-1">
-                                {template.quality_criteria.map((criteria, index) => (
+                                {templateForRendering.quality_criteria.map((criteria, index) => (
                                     <div key={criteria.id || index} className="border border-gray-400">
                                         <div className={cn(
                                             "px-3 py-1.5 font-bold text-sm border-b border-gray-400",
@@ -1909,26 +2706,26 @@ const ReportViewer: React.FC = () => {
                     )}
 
                     {/* Notes Section */}
-                    {template.notes && (
+                    {templateForRendering.notes && (
                         <div className="p-4 border-t border-gray-300 print:break-inside-avoid">
                             <div className="bg-yellow-50 border border-yellow-300 p-3">
                                 <h4 className="text-xs font-bold text-yellow-800 mb-1">ملاحظات هامة:</h4>
                                 <div
                                     className="text-xs text-yellow-900 prose prose-sm max-w-none prose-p:my-0 prose-ul:my-0 prose-ol:my-0"
-                                    dangerouslySetInnerHTML={{ __html: template.notes }}
+                                    dangerouslySetInnerHTML={{ __html: templateForRendering.notes }}
                                 />
                             </div>
                         </div>
                     )}
 
                     {/* Signatures Section */}
-                    {template.signatures && template.signatures.length > 0 && (
+                    {templateForRendering.signatures && templateForRendering.signatures.length > 0 && (
                         <div className="report-signatures-block p-4 border-t-2 border-gray-800">
                             <div className="bg-gray-800 text-white px-3 py-2 mb-3">
                                 <h3 className="text-sm font-bold">التواقيع والاعتمادات</h3>
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 print:grid-cols-2">
-                                {template.signatures.map((sig, index) => {
+                                {templateForRendering.signatures.map((sig, index) => {
                                     const signatureData = instance?.signatures?.[index];
 
                                     return (

@@ -11,6 +11,7 @@ import {
 import { usePrompt } from '../hooks/usePrompt';
 import useStore from '../store';
 import { cn, generateId, debounce } from '../utils';
+import { convertQuantity } from '../utils/unitConversion';
 import { useSupabaseAuth } from '../hooks/useSupabaseAuth';
 import { useFormCollaboration } from '../hooks/useFormCollaboration';
 import type { FormTemplate, FormInstance } from '../types';
@@ -23,8 +24,14 @@ import CollaborationPanel, {
 } from '../components/collaboration/CollaborationPanel';
 import collaborationTelemetryService from '../services/collaborationTelemetryService';
 import { foldersService } from '../services/supabaseService';
+import { variableService } from '../services/variableService';
 import { useTabsStore } from '../store/tabsStore';
 import { useToastStore } from '../store/toastStore';
+import {
+    applyDocumentVariableBindingsToTemplate,
+    buildDocumentVariableSnapshot,
+    type DocumentVariableSnapshot,
+} from '../utils/documentVariableBindings';
 
 const REPORT_COLLAB_ENABLED = !['0', 'false'].includes(
     String(import.meta.env.VITE_REPORT_COLLAB_ENABLED ?? '1').toLowerCase()
@@ -205,6 +212,10 @@ const createSafeReportFormData = (input: any = {}) => {
         source.table_notes && typeof source.table_notes === 'object' ? source.table_notes : {};
     const stoppedTimes =
         source.stopped_times && typeof source.stopped_times === 'object' ? source.stopped_times : {};
+    const documentVariablesSnapshot =
+        source.document_variables_snapshot && typeof source.document_variables_snapshot === 'object'
+            ? source.document_variables_snapshot
+            : undefined;
 
     return {
         ...source,
@@ -215,6 +226,15 @@ const createSafeReportFormData = (input: any = {}) => {
         sections,
         table_notes: tableNotes,
         stopped_times: stoppedTimes,
+        document_variables_snapshot: documentVariablesSnapshot,
+        document_variables_source_document_id:
+            typeof source.document_variables_source_document_id === 'string'
+                ? source.document_variables_source_document_id
+                : null,
+        document_variables_snapshot_at:
+            typeof source.document_variables_snapshot_at === 'string'
+                ? source.document_variables_snapshot_at
+                : undefined,
     };
 };
 
@@ -266,6 +286,7 @@ const DataEntryPageContent: React.FC = () => {
     const { profile, session, loading: authLoading } = useSupabaseAuth();
     const authUserId = profile?.uid || session?.user?.id || '';
     const addToast = useToastStore((state) => state.addToast);
+    const duplicateReportWarningRef = useRef<string | null>(null);
 
     const [isSaving, setIsSaving] = useState(false);
     const [lastSaved, setLastSaved] = useState<Date | null>(null);
@@ -273,7 +294,6 @@ const DataEntryPageContent: React.FC = () => {
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
     const [isMobile, setIsMobile] = useState(false);
-    const [isReportInfoCollapsed, setIsReportInfoCollapsed] = useState(false);
     const [tabsCollaborationSlot, setTabsCollaborationSlot] = useState<HTMLElement | null>(null);
 
     useEffect(() => {
@@ -313,6 +333,12 @@ const DataEntryPageContent: React.FC = () => {
     // Get template ID
     const actualTemplateId =
         templateId || hydratedTemplateId || (instanceId ? formInstances[instanceId]?.template_id : null);
+    const activeSectionStorageKey = useMemo(() => {
+        if (instanceId) return `qms:data-entry:active-section:instance:${instanceId}`;
+        if (templateId) return `qms:data-entry:active-section:template:${templateId}`;
+        if (actualTemplateId) return `qms:data-entry:active-section:template:${actualTemplateId}`;
+        return null;
+    }, [actualTemplateId, instanceId, templateId]);
 
     // State for loaded template (full template from database)
     const [loadedTemplate, setLoadedTemplate] = useState<FormTemplate | null>(null);
@@ -367,8 +393,8 @@ const DataEntryPageContent: React.FC = () => {
             : null;
     const entryTabTitle = useMemo(() => {
         if (instanceId) {
-            if (template?.name) return `مسودة - ${template.name}`;
             if (existingInstance?.name) return existingInstance.name;
+            if (template?.name) return `مسودة - ${template.name}`;
             return 'تعديل مسودة';
         }
 
@@ -518,6 +544,9 @@ const DataEntryPageContent: React.FC = () => {
                 shift_duration: 8,
                 batch_number: batchNumber,
                 sections: {},
+                document_variables_snapshot: undefined,
+                document_variables_source_document_id: null,
+                document_variables_snapshot_at: undefined,
             },
             signatures: [],
             attachments: [],
@@ -528,12 +557,41 @@ const DataEntryPageContent: React.FC = () => {
         () => createSafeReportFormData(formData.form_data),
         [formData.form_data]
     );
+    const documentVariableSnapshot = useMemo(() => {
+        const snapshot = safeFormData.document_variables_snapshot;
+        if (!snapshot || typeof snapshot !== 'object') {
+            return undefined;
+        }
+        return snapshot as DocumentVariableSnapshot;
+    }, [safeFormData.document_variables_snapshot]);
+    const templateForRendering = useMemo(() => {
+        if (!template) return template;
+        if (!documentVariableSnapshot || Object.keys(documentVariableSnapshot).length === 0) {
+            return template;
+        }
+
+        return applyDocumentVariableBindingsToTemplate(template, documentVariableSnapshot);
+    }, [documentVariableSnapshot, template]);
     const latestFormDataRef = useRef(formData);
     const lastSaveToastAtRef = useRef(0);
 
     useEffect(() => {
         latestFormDataRef.current = formData;
     }, [formData]);
+
+    useEffect(() => {
+        if (!activeSectionStorageKey || typeof window === 'undefined') return;
+
+        const savedSection = window.sessionStorage.getItem(activeSectionStorageKey);
+        if (savedSection) {
+            setActiveSection(savedSection);
+        }
+    }, [activeSectionStorageKey]);
+
+    useEffect(() => {
+        if (!activeSectionStorageKey || !activeSection || typeof window === 'undefined') return;
+        window.sessionStorage.setItem(activeSectionStorageKey, activeSection);
+    }, [activeSection, activeSectionStorageKey]);
 
     const notifySaveSuccess = useCallback(() => {
         const now = Date.now();
@@ -576,6 +634,7 @@ const DataEntryPageContent: React.FC = () => {
     }, [hasUnsavedChanges, activeTabId, instanceId, templateId, getActiveTab, markDirty]);
 
     const isEditingExistingInstance = Boolean(instanceId);
+    const lastSnapshotProductIdRef = useRef<string | null>(null);
     const hasLocalFullInstanceSnapshot = Boolean(
         isEditingExistingInstance && existingInstance && (existingInstance as any).form_data != null
     );
@@ -587,6 +646,73 @@ const DataEntryPageContent: React.FC = () => {
     const [hasHydratedExistingInstance, setHasHydratedExistingInstance] = useState(
         !isEditingExistingInstance || hasLocalFullInstanceSnapshot
     );
+
+    useEffect(() => {
+        if (isEditingExistingInstance) {
+            return;
+        }
+
+        const productId = template?.basic_info?.product_id || null;
+        if (!productId) {
+            return;
+        }
+
+        const existingSnapshot = safeFormData.document_variables_snapshot;
+        if (existingSnapshot && Object.keys(existingSnapshot).length > 0) {
+            lastSnapshotProductIdRef.current = productId;
+            return;
+        }
+
+        if (lastSnapshotProductIdRef.current === productId) {
+            return;
+        }
+        lastSnapshotProductIdRef.current = productId;
+
+        let cancelled = false;
+        const captureSnapshot = async () => {
+            try {
+                const context = await variableService.getDocumentVariablesContextByProduct(productId);
+                if (cancelled) return;
+
+                const snapshot = buildDocumentVariableSnapshot(
+                    (context.variables || []).map((variable) => ({
+                        name: variable.name,
+                        value: variable.value,
+                    }))
+                );
+
+                setFormData((prev) => {
+                    const prevSafe = createSafeReportFormData(prev.form_data);
+                    const prevSnapshot = prevSafe.document_variables_snapshot;
+                    if (prevSnapshot && Object.keys(prevSnapshot).length > 0) {
+                        return prev;
+                    }
+
+                    return {
+                        ...prev,
+                        form_data: {
+                            ...prevSafe,
+                            document_variables_snapshot: snapshot,
+                            document_variables_source_document_id: context.sourceDocumentId || null,
+                            document_variables_snapshot_at: new Date().toISOString(),
+                        },
+                    };
+                });
+            } catch (error) {
+                console.error('[DataEntry] Failed to capture document variable snapshot:', error);
+                lastSnapshotProductIdRef.current = null;
+            }
+        };
+
+        void captureSnapshot();
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        isEditingExistingInstance,
+        safeFormData.document_variables_snapshot,
+        template?.basic_info?.product_id,
+    ]);
 
     // Sync instance snapshot from store before the first local edit.
     // This covers same-ID updates that arrive after initial mount.
@@ -1100,7 +1226,7 @@ const DataEntryPageContent: React.FC = () => {
                 return;
             }
 
-            if (!template?.sections?.[target.sectionId]) {
+            if (!templateForRendering?.sections?.[target.sectionId]) {
                 return;
             }
 
@@ -1132,7 +1258,7 @@ const DataEntryPageContent: React.FC = () => {
 
             activityNavigationTimerRef.current = setTimeout(tryFocus, 0);
         },
-        [focusCellByLocation, template]
+        [focusCellByLocation, templateForRendering]
     );
 
     const CELL_BROADCAST_DEBOUNCE_MS = 120;
@@ -1459,7 +1585,7 @@ const DataEntryPageContent: React.FC = () => {
                     console.log('  ➡️ Adding new instance');
 
                     // ✅ FIX: Apply Smart Filing on first auto-save to ensure folder_id is set
-                    let dataToSave = { ...data };
+                    const dataToSave = { ...data };
                     if (!dataToSave.folder_id && template) {
                         console.log('  📁 Applying Smart Filing for new instance...');
                         const folderId = await runSmartFiling(dataToSave);
@@ -1471,7 +1597,21 @@ const DataEntryPageContent: React.FC = () => {
                         }
                     }
 
+                    const duplicates = await findDuplicateReportsForInstance(dataToSave);
+                    if (duplicates.length > 0) {
+                        const duplicateKey = buildDuplicateCheckKey(dataToSave);
+                        if (duplicateReportWarningRef.current !== duplicateKey) {
+                            duplicateReportWarningRef.current = duplicateKey;
+                            warnDuplicateReports(dataToSave, duplicates);
+                        }
+                        setSaveError('تم اكتشاف تقرير مشابه بنفس التاريخ والوردية. يرجى الحفظ اليدوي بعد التأكيد.');
+                        return;
+                    }
+
                     await addFormInstance(dataToSave);
+                    if (dataToSave.name) {
+                        setFormData(prev => ({ ...prev, name: dataToSave.name }));
+                    }
                     setHasBeenSaved(true);
                 }
                 setLastSaved(new Date());
@@ -1531,13 +1671,35 @@ const DataEntryPageContent: React.FC = () => {
 
     // Set initial active section
     useEffect(() => {
-        if (template && !activeSection) {
-            const sections = Object.values(template.sections || {}).sort((a, b) => a.order - b.order);
-            if (sections.length > 0) {
-                setActiveSection(sections[0].id);
-            }
+        if (!templateForRendering) return;
+
+        const sortedSections = Object.values(templateForRendering.sections || {}).sort((a, b) => a.order - b.order);
+        const validSectionIds = new Set<string>(sortedSections.map((section) => section.id));
+
+        if (templateForRendering.quality_criteria && templateForRendering.quality_criteria.length > 0) {
+            validSectionIds.add('quality_criteria');
         }
-    }, [template, activeSection]);
+
+        if (templateForRendering.notes) {
+            validSectionIds.add('template_notes');
+        }
+
+        if (activeSection && validSectionIds.has(activeSection)) {
+            return;
+        }
+
+        const fallbackSection =
+            sortedSections[0]?.id ||
+            (validSectionIds.has('quality_criteria')
+                ? 'quality_criteria'
+                : validSectionIds.has('template_notes')
+                    ? 'template_notes'
+                    : null);
+
+        if (fallbackSection) {
+            setActiveSection(fallbackSection);
+        }
+    }, [templateForRendering, activeSection]);
 
     // Helper to push current state to history before changing
     const pushToHistory = (currentState: FormInstance) => {
@@ -2183,11 +2345,148 @@ const DataEntryPageContent: React.FC = () => {
         }
     };
 
+    const buildDuplicateCheckKey = useCallback((instanceData: FormInstance) => {
+        const safeData = createSafeReportFormData(instanceData.form_data);
+        return [
+            instanceData.template_id || '',
+            instanceData.folder_id || 'root',
+            safeData.report_date || '',
+            safeData.shift || 'A',
+        ].join('|');
+    }, []);
+
+    const findDuplicateReportsForInstance = useCallback(async (instanceData: FormInstance) => {
+        const safeData = createSafeReportFormData(instanceData.form_data);
+        if (!instanceData.template_id || !safeData.report_date) {
+            return [];
+        }
+
+        try {
+            const { instancesService } = await import('../services/supabaseService');
+            return await instancesService.findDuplicateReportsByDetails({
+                templateId: instanceData.template_id,
+                folderId: instanceData.folder_id || null,
+                reportDate: safeData.report_date,
+                shift: safeData.shift || 'A',
+                excludeInstanceId: instanceData.instance_id,
+            });
+        } catch (error) {
+            console.warn('[DataEntry] Duplicate report check failed:', error);
+            return [];
+        }
+    }, []);
+
+    const warnDuplicateReports = useCallback(
+        (instanceData: FormInstance, duplicates: Array<{ id: string; name: string | null }>) => {
+            const safeData = createSafeReportFormData(instanceData.form_data);
+            const duplicateName = duplicates[0]?.name || 'تقرير موجود مسبقاً';
+            addToast({
+                type: 'warning',
+                title: 'تحذير: تقرير مكرر',
+                message: `يوجد تقرير بنفس التاريخ (${safeData.report_date || '-'}) والوردية (${safeData.shift || 'A'}) في نفس المجلد. مثال: ${duplicateName}`,
+                duration: 6000,
+            });
+        },
+        [addToast]
+    );
+
+    const validateRecipeTraceabilityForSubmit = useCallback(
+        (templateToValidate: FormTemplate | null | undefined, formDataToValidate: any): string | null => {
+            if (!templateToValidate) {
+                return null;
+            }
+
+            const sections = Object.values(templateToValidate.sections || {});
+            if (sections.length === 0) {
+                return null;
+            }
+
+            const toPositive = (value: unknown): number | null => {
+                if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+                if (typeof value === 'string' && value.trim()) {
+                    const parsed = Number(value);
+                    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+                }
+                return null;
+            };
+
+            const normalizeUnit = (value: unknown): string => String(value || '').trim();
+
+            for (const section of sections) {
+                const recipeTables = (section.tables || []).filter((table) => table.type === 'recipe-traceability');
+                if (recipeTables.length === 0) continue;
+
+                for (const table of recipeTables) {
+                    const rows = formDataToValidate?.sections?.[section.id]?.tables?.[table.id]?.data;
+                    if (!Array.isArray(rows)) continue;
+
+                    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+                        const row = rows[rowIndex];
+                        if (!Array.isArray(row)) continue;
+
+                        const ingredientName = String(row[0] || `الخامة ${rowIndex + 1}`);
+                        const recipeQty = toPositive(row[1]) ?? 0;
+                        const recipeUnit = normalizeUnit(row[2]);
+                        const doughCount = toPositive(row[4]) ?? 1;
+                        const requiredQty = recipeQty * doughCount;
+                        if (requiredQty <= 0) continue;
+
+                        const batches = Array.isArray(row[3]) ? row[3] : [];
+                        const selectedBatches = batches.filter((batch: any) =>
+                            batch &&
+                            typeof batch === 'object' &&
+                            String(batch.receivingId || batch.receiving_id || '').trim().length > 0
+                        );
+
+                        if (selectedBatches.length === 0) {
+                            return `يرجى اختيار باتش للخامة "${ingredientName}" في جدول "${table.name || table.id}".`;
+                        }
+
+                        let usedTotalInRecipeUnit = 0;
+                        for (const batch of selectedBatches) {
+                            const usedQty = toPositive(batch.usedQuantity ?? batch.used_quantity);
+                            if (!usedQty) continue;
+
+                            const usedUnit = normalizeUnit(batch.usedUnit || batch.used_unit || batch.unit);
+                            if (!recipeUnit || !usedUnit || recipeUnit === usedUnit) {
+                                usedTotalInRecipeUnit += usedQty;
+                                continue;
+                            }
+
+                            const converted = convertQuantity(usedQty, usedUnit, recipeUnit);
+                            if (converted === null) {
+                                return `تعذر تحويل وحدة استهلاك الخامة "${ingredientName}" من ${usedUnit} إلى ${recipeUnit}.`;
+                            }
+                            usedTotalInRecipeUnit += converted;
+                        }
+
+                        if (usedTotalInRecipeUnit + 0.000001 < requiredQty) {
+                            return `الكمية غير كافية للخامة "${ingredientName}" في جدول "${table.name || table.id}". المطلوب ${requiredQty.toFixed(3)} ${recipeUnit || ''}.`;
+                        }
+                    }
+                }
+            }
+
+            return null;
+        },
+        []
+    );
+
 
     const handleSubmit = async () => {
         if (!isReportEditable) {
             await refreshReportStatusFromServer();
             setSaveError('لا يمكن إرسال أو تعديل التقرير لأنه في حالة غير قابلة للتحرير.');
+            return;
+        }
+
+        const submitValidationError = validateRecipeTraceabilityForSubmit(
+            templateForRendering || template,
+            createSafeReportFormData(formData.form_data)
+        );
+        if (submitValidationError) {
+            setSaveError(submitValidationError);
+            alert(submitValidationError);
             return;
         }
 
@@ -2232,6 +2531,21 @@ const DataEntryPageContent: React.FC = () => {
                 if (folderId) {
                     updatedData.folder_id = folderId;
                     setFormData(prev => ({ ...prev, folder_id: folderId }));
+                }
+
+                const duplicates = await findDuplicateReportsForInstance(updatedData);
+                if (duplicates.length > 0) {
+                    const proceed = window.confirm(
+                        `تحذير: يوجد تقرير بنفس التاريخ والوردية داخل نفس المجلد.\n\n` +
+                        `عدد التقارير المشابهة: ${duplicates.length}\n` +
+                        `مثال: ${duplicates[0]?.name || 'تقرير موجود'}\n\n` +
+                        `هل تريد المتابعة وإنشاء تقرير جديد؟`
+                    );
+
+                    if (!proceed) {
+                        warnDuplicateReports(updatedData, duplicates);
+                        return;
+                    }
                 }
 
                 await addFormInstance(updatedData);
@@ -2293,7 +2607,26 @@ const DataEntryPageContent: React.FC = () => {
                         setFormData(prev => ({ ...prev, folder_id: folderId }));
                     }
                 }
+
+                const duplicates = await findDuplicateReportsForInstance(dataToSave);
+                if (duplicates.length > 0) {
+                    const proceed = window.confirm(
+                        `تحذير: يوجد تقرير بنفس التاريخ والوردية داخل نفس المجلد.\n\n` +
+                        `عدد التقارير المشابهة: ${duplicates.length}\n` +
+                        `مثال: ${duplicates[0]?.name || 'تقرير موجود'}\n\n` +
+                        `هل تريد المتابعة وحفظ مسودة جديدة؟`
+                    );
+
+                    if (!proceed) {
+                        warnDuplicateReports(dataToSave, duplicates);
+                        return;
+                    }
+                }
+
                 await addFormInstance(dataToSave);
+                if (dataToSave.name) {
+                    setFormData(prev => ({ ...prev, name: dataToSave.name }));
+                }
             }
             setLastSaved(new Date());
             notifySaveSuccess();
@@ -2430,7 +2763,7 @@ const DataEntryPageContent: React.FC = () => {
         );
     }
 
-    const sections = Object.values(template.sections || {}).sort((a, b) => a.order - b.order);
+    const sections = Object.values(templateForRendering?.sections || {}).sort((a, b) => a.order - b.order);
     const currentSection = sections.find(s => s.id === activeSection);
     const collaborationPanel = (
         <CollaborationPanel
@@ -2461,10 +2794,10 @@ const DataEntryPageContent: React.FC = () => {
                         </button>
                         <div className="min-w-0">
                             <h1 className="text-base sm:text-xl font-bold text-gray-900 dark:text-white truncate">
-                                {template.name}
+                                {templateForRendering?.name}
                             </h1>
                             <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-xs sm:text-sm text-gray-500 dark:text-gray-400">
-                                <span>الإصدار {template.version}</span>
+                                <span>الإصدار {templateForRendering?.version}</span>
                                 {saveError && (
                                     <>
                                         <span>•</span>
@@ -2609,7 +2942,7 @@ const DataEntryPageContent: React.FC = () => {
                             ))}
 
                             {/* Quality Criteria Sidebar Item */}
-                            {template.quality_criteria && template.quality_criteria.length > 0 && (
+                            {templateForRendering?.quality_criteria && templateForRendering.quality_criteria.length > 0 && (
                                 <button
                                     onClick={() => setActiveSection('quality_criteria')}
                                     className={cn(
@@ -2624,7 +2957,7 @@ const DataEntryPageContent: React.FC = () => {
                             )}
 
                             {/* Template Notes Sidebar Item */}
-                            {template.notes && (
+                            {templateForRendering?.notes && (
                                 <button
                                     onClick={() => setActiveSection('template_notes')}
                                     className={cn(
@@ -2642,28 +2975,12 @@ const DataEntryPageContent: React.FC = () => {
 
                     {/* Basic Info */}
                     <div className="p-4 border-t border-gray-200 dark:border-gray-700">
-                        <div className="mb-3 flex items-center justify-between gap-2">
+                        <div className="mb-3">
                             <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">
                                 معلومات التقرير
                             </h3>
-                            <button
-                                type="button"
-                                onClick={() => setIsReportInfoCollapsed((prev) => !prev)}
-                                aria-expanded={!isReportInfoCollapsed}
-                                className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 dark:border-gray-600 px-2.5 py-1 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                            >
-                                <span>{isReportInfoCollapsed ? 'عرض' : 'طي'}</span>
-                                <svg
-                                    className={cn('h-3.5 w-3.5 transition-transform', !isReportInfoCollapsed && 'rotate-180')}
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                </svg>
-                            </button>
                         </div>
-                        <div className={cn('space-y-3', isReportInfoCollapsed && 'hidden')}>
+                        <div className="space-y-3">
                             <div>
                                 <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                                     التاريخ
@@ -2728,7 +3045,7 @@ const DataEntryPageContent: React.FC = () => {
                                 />
                             </div>
                             {/* Hide batch number for data-collection type */}
-                            {template.type !== 'data-collection' && (
+                            {templateForRendering?.type !== 'data-collection' && (
                                 <div>
                                     <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                                         رقم الدُفعة
@@ -2770,7 +3087,7 @@ const DataEntryPageContent: React.FC = () => {
                                             {section.name}
                                         </button>
                                     ))}
-                                    {template.quality_criteria && template.quality_criteria.length > 0 && (
+                                    {templateForRendering?.quality_criteria && templateForRendering.quality_criteria.length > 0 && (
                                         <button
                                             onClick={() => setActiveSection('quality_criteria')}
                                             className={cn(
@@ -2783,7 +3100,7 @@ const DataEntryPageContent: React.FC = () => {
                                             معايير الجودة
                                         </button>
                                     )}
-                                    {template.notes && (
+                                    {templateForRendering?.notes && (
                                         <button
                                             onClick={() => setActiveSection('template_notes')}
                                             className={cn(
@@ -2800,28 +3117,12 @@ const DataEntryPageContent: React.FC = () => {
                             </div>
 
                             <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
-                                <div className="mb-3 flex items-center justify-between gap-2">
+                                <div className="mb-3">
                                     <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200">
                                         معلومات التقرير
                                     </h3>
-                                    <button
-                                        type="button"
-                                        onClick={() => setIsReportInfoCollapsed((prev) => !prev)}
-                                        aria-expanded={!isReportInfoCollapsed}
-                                        className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 dark:border-gray-600 px-2.5 py-1 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                                    >
-                                        <span>{isReportInfoCollapsed ? 'عرض' : 'طي'}</span>
-                                        <svg
-                                            className={cn('h-3.5 w-3.5 transition-transform', !isReportInfoCollapsed && 'rotate-180')}
-                                            fill="none"
-                                            stroke="currentColor"
-                                            viewBox="0 0 24 24"
-                                        >
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                        </svg>
-                                    </button>
                                 </div>
-                                <div className={cn('grid grid-cols-1 sm:grid-cols-2 gap-3', isReportInfoCollapsed && 'hidden')}>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                     <div>
                                         <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                                             التاريخ
@@ -2883,7 +3184,7 @@ const DataEntryPageContent: React.FC = () => {
                                             className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded dark:bg-gray-700"
                                         />
                                     </div>
-                                    {template.type !== 'data-collection' && (
+                                    {templateForRendering?.type !== 'data-collection' && (
                                         <div className="sm:col-span-2">
                                             <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                                                 رقم الدُفعة
@@ -2913,7 +3214,7 @@ const DataEntryPageContent: React.FC = () => {
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {template.quality_criteria?.map((criteria, index) => (
+                                {templateForRendering?.quality_criteria?.map((criteria, index) => (
                                     <div key={criteria.id || index} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800">
                                         <div className={cn(
                                             "px-4 py-2 font-bold text-sm border-b border-gray-200 dark:border-gray-700",
@@ -2958,7 +3259,7 @@ const DataEntryPageContent: React.FC = () => {
                             <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800/50 rounded-lg p-3 sm:p-6">
                                 <div
                                     className="prose prose-sm max-w-none dark:prose-invert text-gray-800 dark:text-gray-200"
-                                    dangerouslySetInnerHTML={{ __html: template.notes || '' }}
+                                    dangerouslySetInnerHTML={{ __html: templateForRendering?.notes || '' }}
                                 />
                             </div>
                         </div>
@@ -2986,7 +3287,8 @@ const DataEntryPageContent: React.FC = () => {
                                 }));
                             }}
                             stoppedTimesByGroup={safeFormData.stopped_times || {}}
-                            template={template}
+                            boundGlobalVariables={documentVariableSnapshot}
+                            template={templateForRendering || template}
                             inspectionStartTime={safeFormData.inspection_start_time || '08:00'}
                             shiftDuration={safeFormData.shift_duration || 8}
                         />

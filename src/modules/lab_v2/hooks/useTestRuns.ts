@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToastStore } from '../../../store/toastStore';
-import { labV2TestRunService } from '../services/testRunService';
+import { labTestRunsService } from '../../../services/labTestsService';
 
 export const useLabV2Runs = (filters?: {
   status?: string;
@@ -12,25 +12,38 @@ export const useLabV2Runs = (filters?: {
   created_from?: string;
   created_to?: string;
   limit?: number;
+  include_snapshots?: boolean;
 }) => {
   return useQuery({
     queryKey: ['lab_v2', 'runs', filters],
-    queryFn: () => labV2TestRunService.listRuns(filters),
+    queryFn: () => labTestRunsService.listRuns(filters),
   });
 };
 
 export const useLabV2Run = (runId: string | undefined) => {
   return useQuery({
     queryKey: ['lab_v2', 'run', runId],
-    queryFn: () => (runId ? labV2TestRunService.getRunById(runId) : Promise.resolve(null)),
+    queryFn: () => (runId ? labTestRunsService.getRunById(runId) : Promise.resolve(null)),
     enabled: Boolean(runId),
+  });
+};
+
+export const useLabV2ReportContextForProduct = (productId: string | undefined) => {
+  return useQuery({
+    queryKey: ['lab_v2', 'run_report_context', productId],
+    queryFn: () => (productId ? labTestRunsService.getReportBatchShiftContextForProduct(productId) : Promise.resolve({
+      availableBatches: [],
+      availableShiftsByBatch: {},
+      latestReportIdByBatchShift: {},
+    })),
+    enabled: Boolean(productId),
   });
 };
 
 export const useCreateLabV2Run = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: Parameters<typeof labV2TestRunService.createRun>[0]) => labV2TestRunService.createRun(input),
+    mutationFn: (input: Parameters<typeof labTestRunsService.createRun>[0]) => labTestRunsService.createRun(input),
     onSuccess: (run) => {
       qc.invalidateQueries({ queryKey: ['lab_v2', 'runs'] });
       qc.setQueryData(['lab_v2', 'run', run.id], run);
@@ -43,7 +56,7 @@ export const useCreateLabV2Run = () => {
 export const useSaveLabV2RunValues = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: Parameters<typeof labV2TestRunService.saveRunValues>[0]) => labV2TestRunService.saveRunValues(input),
+    mutationFn: (input: Parameters<typeof labTestRunsService.saveRunValues>[0]) => labTestRunsService.saveRunValues(input),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['lab_v2', 'run', vars.run_id] });
       qc.invalidateQueries({ queryKey: ['lab_v2', 'runs'] });
@@ -56,7 +69,7 @@ export const useSaveLabV2RunValues = () => {
 export const useCompleteLabV2Run = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ run_id, notes }: { run_id: string; notes?: string | null }) => labV2TestRunService.completeRun(run_id, notes),
+    mutationFn: ({ run_id, notes }: { run_id: string; notes?: string | null }) => labTestRunsService.completeRun(run_id, notes),
     onSuccess: (run) => {
       qc.invalidateQueries({ queryKey: ['lab_v2', 'run', run.id] });
       qc.invalidateQueries({ queryKey: ['lab_v2', 'runs'] });
@@ -69,7 +82,7 @@ export const useCompleteLabV2Run = () => {
 export const useApproveLabV2Run = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ run_id, notes }: { run_id: string; notes?: string | null }) => labV2TestRunService.approveRun(run_id, notes),
+    mutationFn: ({ run_id, notes }: { run_id: string; notes?: string | null }) => labTestRunsService.approveRun(run_id, notes),
     onSuccess: (run) => {
       qc.invalidateQueries({ queryKey: ['lab_v2', 'run', run.id] });
       qc.invalidateQueries({ queryKey: ['lab_v2', 'runs'] });
@@ -82,7 +95,7 @@ export const useApproveLabV2Run = () => {
 export const useRejectLabV2Run = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ run_id, reason }: { run_id: string; reason: string }) => labV2TestRunService.rejectRun(run_id, reason),
+    mutationFn: ({ run_id, reason }: { run_id: string; reason: string }) => labTestRunsService.rejectRun(run_id, reason),
     onSuccess: (run) => {
       qc.invalidateQueries({ queryKey: ['lab_v2', 'run', run.id] });
       qc.invalidateQueries({ queryKey: ['lab_v2', 'runs'] });
@@ -95,7 +108,7 @@ export const useRejectLabV2Run = () => {
 export const useAddLabV2RunMaterial = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: Parameters<typeof labV2TestRunService.addRunMaterial>[0]) => labV2TestRunService.addRunMaterial(input),
+    mutationFn: (input: Parameters<typeof labTestRunsService.addRunMaterial>[0]) => labTestRunsService.addRunMaterial(input),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['lab_v2', 'run', vars.run_id] });
       useToastStore.getState().success('تمت إضافة المواد المستخدمة');

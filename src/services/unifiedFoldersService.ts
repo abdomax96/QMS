@@ -53,7 +53,7 @@ export async function getFoldersByDepartment(departmentId: string): Promise<Unif
             .from('unified_folders')
             .select('*')
             .eq('department_id', departmentId)
-            .eq('archived', false)
+            .not('archived', 'is', true)
             .order('sort_order', { ascending: true })
             .order('name', { ascending: true });
 
@@ -134,7 +134,7 @@ export async function getChildFolders(parentId: string): Promise<UnifiedFolder[]
             .from('unified_folders')
             .select('*')
             .eq('parent_id', parentId)
-            .eq('archived', false)
+            .not('archived', 'is', true)
             .order('sort_order', { ascending: true })
             .order('name', { ascending: true });
 
@@ -364,7 +364,7 @@ export async function searchFolders(query: string, departmentId?: string): Promi
         let queryBuilder = supabase
             .from('unified_folders')
             .select('*')
-            .eq('archived', false)
+            .not('archived', 'is', true)
             .or(`name.ilike.%${query}%,name_en.ilike.%${query}%,description.ilike.%${query}%`);
 
         if (departmentId) {
@@ -391,7 +391,7 @@ export async function getRecentFolders(limit: number = 10): Promise<UnifiedFolde
         const { data, error } = await supabase
             .from('unified_folders')
             .select('*')
-            .eq('archived', false)
+            .not('archived', 'is', true)
             .not('stats->last_activity', 'is', null)
             .order('stats->last_activity', { ascending: false })
             .limit(limit);

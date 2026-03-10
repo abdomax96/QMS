@@ -1,5 +1,7 @@
 // ==================== Re-exports from other type files ====================
 export * from './permission';
+export * from './tableV2';
+import type { CustomTableSchemaV2 } from './tableV2';
 
 // ==================== Template Types ====================
 export type TemplateType = 'quality-control' | 'inspection' | 'data-collection' | 'audit' | 'checklist' | 'report' | 'policy' | 'procedure' | 'form' | 'risk-assessment' | 'manual';
@@ -108,17 +110,17 @@ export interface BasicInfo {
   company_name?: string;   // اسم الشركة للعرض في التقارير
   product_id?: string;     // معرف المنتج (لنماذج مراقبة الجودة)
   product_name?: string;   // اسم المنتج للعرض في التقارير
-  standard_weight?: number;
-  shelf_life_months?: number;
-  cartons_per_pallet?: number;
-  packs_per_box?: number;
-  boxes_per_carton?: number;
-  empty_box_weight?: number;
-  empty_carton_weight?: number;
+  standard_weight?: number | string;
+  shelf_life_months?: number | string;
+  cartons_per_pallet?: number | string;
+  packs_per_box?: number | string;
+  boxes_per_carton?: number | string;
+  empty_box_weight?: number | string;
+  empty_carton_weight?: number | string;
   aql_level?: string;  // MIL-STD-105E AQL levels (0.010 to 1000)
   inspection_level?: 'I' | 'II' | 'III' | 'S-1' | 'S-2' | 'S-3' | 'S-4';  // MIL-STD-105E inspection levels
   inspection_type?: 'normal' | 'tightened' | 'reduced';  // MIL-STD-105E inspection types
-  lot_size?: number;  // Optional lot size for reference
+  lot_size?: number | string;  // Optional lot size for reference
 }
 
 export interface DocumentControl {
@@ -255,12 +257,12 @@ export interface Table {
   allowDynamicRows?: boolean; // Allow user to add/remove rows dynamically
   sample_size?: number;
   aql_level?: string;
-  max_std?: number;
+  max_std?: number | string;
   number_constraints?: {
     allow_negative?: boolean;
-    step?: number;
-    min?: number;
-    max?: number;
+    step?: number | string;
+    min?: number | string;
+    max?: number | string;
   };
   features?: TableFeatures;
   header_rows?: TableHeaderCell[][];
@@ -272,6 +274,8 @@ export interface Table {
   linked_stop_group?: string; // Group ID to link stop status between tables
   // خصائص جدول تتبع الوصفات
   expiry_warning_days?: number; // أيام التحذير قبل الانتهاء
+  // Custom Table Engine V2
+  schema_v2?: CustomTableSchemaV2;
 }
 
 export interface ChecklistItem {
@@ -435,6 +439,9 @@ export interface FormInstance {
       }>;
     }>;
     table_notes?: Record<string, string>; // Global table notes keyed by table ID
+    document_variables_snapshot?: Record<string, string | number>; // Frozen at report creation
+    document_variables_source_document_id?: string | null;
+    document_variables_snapshot_at?: string;
   };
 
   calculations?: {

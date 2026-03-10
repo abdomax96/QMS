@@ -10,6 +10,21 @@ import { useLabV2Tests } from '../hooks/useTests';
 import { useNavigate } from 'react-router-dom';
 
 type CsvRow = Record<string, string | number | null | undefined>;
+const evaluationLabels: Record<string, string> = {
+  pass: 'مطابق',
+  fail: 'غير مطابق',
+  warning: 'تحذير',
+  na: 'غير متاح',
+};
+
+function getRunResultLabel(run: { status?: string | null; evaluation_result?: string | null; results_count?: number | null }): string {
+  const normalized = String(run.evaluation_result || '').toLowerCase();
+  if (normalized) return evaluationLabels[normalized] || run.evaluation_result || '—';
+  const resultsCount = Number(run.results_count || 0);
+  if (resultsCount > 0) return `تم إدخال نتائج (${resultsCount})`;
+  if (run.status === 'in_progress' || run.status === 'completed' || run.status === 'approved') return 'تم إدخال نتائج';
+  return '—';
+}
 
 const toCsv = (rows: CsvRow[]): string => {
   if (rows.length === 0) return '';
@@ -145,7 +160,7 @@ const LabReportsPage: React.FC = () => {
     }));
 
     const csv = toCsv(rows);
-    const fileName = `lab_v2_reports_${fromDate || 'all'}_${toDate || 'all'}.csv`;
+    const fileName = `lab_tests_reports_${fromDate || 'all'}_${toDate || 'all'}.csv`;
     downloadTextFile(fileName, csv, 'text/csv;charset=utf-8');
   };
 
@@ -240,7 +255,7 @@ const LabReportsPage: React.FC = () => {
                       <td className="px-4 py-3">
                         <RunStatusBadge status={r.status} />
                       </td>
-                      <td className="px-4 py-3">{r.evaluation_result || '—'}</td>
+                      <td className="px-4 py-3">{getRunResultLabel(r as any)}</td>
                       <td className="px-4 py-3">{r.operator_name || '—'}</td>
                       <td className="px-4 py-3">
                         <Button variant="ghost" size="sm" onClick={() => navigate(`/lab/tests/runs/${r.id}`)}>

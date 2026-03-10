@@ -91,7 +91,7 @@ const SortableSection: React.FC<SortableSectionProps> = ({
         transition,
     };
 
-    const getTableTypeName = (type: TableType) => {
+    const getTableTypeName = (table: Table) => {
         const names: Record<TableType, string> = {
             'parameters': 'جدول معلمات',
             'sample': 'جدول عينات',
@@ -102,7 +102,10 @@ const SortableSection: React.FC<SortableSectionProps> = ({
             'recipe': 'جدول وصفة',
             'recipe-traceability': 'جدول تتبع الخامات',
         };
-        return names[type] || type;
+        if (table.type === 'custom' && (table as any).schema_v2?.version === 2) {
+            return 'الجدول المخصص الجديد';
+        }
+        return names[table.type] || table.type;
     };
 
     return (
@@ -181,7 +184,7 @@ const SortableSection: React.FC<SortableSectionProps> = ({
                                             )}
                                         </div>
                                         <div className="text-xs text-gray-500 dark:text-gray-400">
-                                            {getTableTypeName(table.type)}
+                                            {getTableTypeName(table)}
                                             {table.rows && ` • ${table.rows} صف`}
                                         </div>
                                     </div>

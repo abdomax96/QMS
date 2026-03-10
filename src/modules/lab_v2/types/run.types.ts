@@ -6,6 +6,9 @@ export interface LabV2TestRun {
   run_number: string;
   test_id: string;
   batch_id?: string | null;
+  batch_number_snapshot?: string | null;
+  shift_snapshot?: string | null;
+  source_report_instance_id?: string | null;
   product_id?: string | null;
   device_id?: string | null;
   status: LabV2RunStatus;
@@ -22,10 +25,13 @@ export interface LabV2TestRun {
 
   evaluation_result?: LabV2EvaluationResult | null;
   failed_params?: string[] | null;
+  results_count?: number;
 
   test_snapshot?: Record<string, any> | null;
   params_snapshot?: any[] | null;
   rules_snapshot?: any[] | null;
+  steps_snapshot?: any[] | null;
+  materials_plan_snapshot?: any[] | null;
 
   notes?: string | null;
   approval_notes?: string | null;
@@ -38,6 +44,16 @@ export interface LabV2TestRun {
   created_by?: string | null;
   updated_at: string;
   updated_by?: string | null;
+}
+
+export interface LabV2RunLaunchContext {
+  test_id: string;
+  product_id?: string | null;
+  batch_number?: string | null;
+  shift?: string | null;
+  device_id: string;
+  notes?: string | null;
+  source_report_instance_id?: string | null;
 }
 
 export interface LabV2RunValue {
@@ -78,4 +94,22 @@ export interface LabV2RunMaterial {
   unit?: string | null;
   notes?: string | null;
   created_at: string;
+}
+
+export interface LabV2RunMaterialSelection {
+  id: string;
+  run_id: string;
+  plan_material_id?: string | null;
+  step_snapshot_key: string;
+  chemical_id: string;
+  chemical_receipt_id: string;
+  planned_quantity: number;
+  unit?: string | null;
+  selection_notes?: string | null;
+  consumption_posted_at?: string | null;
+  consumed_quantity?: number | null;
+  created_at: string;
+  created_by?: string | null;
+  updated_at?: string | null;
+  updated_by?: string | null;
 }

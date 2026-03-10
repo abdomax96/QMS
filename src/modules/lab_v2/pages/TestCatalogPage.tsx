@@ -3,13 +3,16 @@ import { Link, useNavigate } from 'react-router-dom';
 import { PlusIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import Button from '../../../components/common/Button';
 import Input from '../../../components/common/Input';
+import Select from '../../../components/common/Select';
 import { useDeleteLabV2Test, useLabV2Tests } from '../hooks/useTests';
-import type { LabV2Test } from '../types/test.types';
+import { LAB_TEST_FAMILY_OPTIONS, LAB_TEST_FAMILY_LABELS } from '../types/test.types';
+import type { LabV2Test, LabV2TestFamily } from '../types/test.types';
 
 const TestCatalogPage: React.FC = () => {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
-  const { data: tests, isLoading } = useLabV2Tests({ search });
+  const [family, setFamily] = useState('');
+  const { data: tests, isLoading } = useLabV2Tests({ search, family: family || undefined });
   const deleteTest = useDeleteLabV2Test();
 
   const sorted = useMemo(() => (tests || []).slice().sort((a, b) => (a.created_at < b.created_at ? 1 : -1)), [tests]);
@@ -37,6 +40,13 @@ const TestCatalogPage: React.FC = () => {
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="بحث بالكود/الاسم/الفئة..."
                 leftIcon={<MagnifyingGlassIcon className="w-4 h-4" />}
+              />
+            </div>
+            <div className="w-72 max-w-full">
+              <Select
+                options={[{ value: '', label: 'كل الفئات' }, ...LAB_TEST_FAMILY_OPTIONS]}
+                value={family}
+                onChange={(e) => setFamily(e.target.value)}
               />
             </div>
             <div className="text-sm text-slate-500 dark:text-slate-400">
@@ -67,7 +77,7 @@ const TestCatalogPage: React.FC = () => {
                       </Link>
                       <div className="text-xs text-slate-500 dark:text-slate-400">{t.name}</div>
                     </td>
-                    <td className="px-4 py-3">{t.category || '—'}</td>
+                    <td className="px-4 py-3">{LAB_TEST_FAMILY_LABELS[(t.test_family as LabV2TestFamily)] || '—'}</td>
                     <td className="px-4 py-3">{t.is_active ? 'نعم' : 'لا'}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -107,4 +117,3 @@ const TestCatalogPage: React.FC = () => {
 };
 
 export default TestCatalogPage;
-

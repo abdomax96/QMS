@@ -56,7 +56,7 @@ export const ParameterEditor: React.FC<{
   };
 
   return (
-    <div className="space-y-3" dir="rtl">
+    <div className="space-y-2" dir="rtl">
       <div className="flex items-center justify-between">
         <div className="text-sm font-semibold text-slate-900 dark:text-white">المعاملات</div>
         <Button type="button" variant="secondary" size="sm" onClick={add}>
@@ -68,14 +68,14 @@ export const ParameterEditor: React.FC<{
         <div className="text-sm text-slate-600 dark:text-slate-400">لا توجد معاملات بعد.</div>
       ) : null}
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         {value.map((p, idx) => {
           const typeOptions = LAB_V2_DATA_TYPES.map((t) => ({ value: t, label: LAB_V2_DATA_TYPE_LABELS[t] }));
           const showAllowed = p.data_type === 'dropdown' || p.data_type === 'multi_select';
 
           return (
-            <div key={p.param_key || idx} className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-800">
-              <div className="flex items-center justify-between mb-3">
+            <div key={p.param_key || idx} className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-800">
+              <div className="flex items-center justify-between mb-2">
                 <div className="text-sm font-medium text-slate-800 dark:text-slate-200">#{idx + 1}</div>
                 <div className="flex items-center gap-2">
                   <Button type="button" variant="ghost" size="sm" onClick={() => move(idx, -1)} disabled={idx === 0}>
@@ -90,7 +90,7 @@ export const ParameterEditor: React.FC<{
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                 <Input label="Key" value={p.param_key || ''} onChange={(e) => setAt(idx, { param_key: e.target.value })} />
                 <Select label="نوع البيانات" options={typeOptions} value={(p.data_type as any) || 'number'} onChange={(e) => setAt(idx, { data_type: e.target.value as any })} />
                 <Input label="Label" value={p.label || ''} onChange={(e) => setAt(idx, { label: e.target.value })} />
@@ -122,7 +122,7 @@ export const ParameterEditor: React.FC<{
               </div>
 
               {showAllowed ? (
-                <div className="mt-4">
+                <div className="mt-3">
                   <Input
                     label="القيم المسموحة (افصل بفاصلة)"
                     value={fromAllowedValues(p.allowed_values as any)}
@@ -132,7 +132,7 @@ export const ParameterEditor: React.FC<{
                 </div>
               ) : null}
 
-              <div className="mt-4">
+              <div className="mt-3">
                 <Input label="Help" value={p.help_text || ''} onChange={(e) => setAt(idx, { help_text: e.target.value })} />
               </div>
             </div>
@@ -144,4 +144,3 @@ export const ParameterEditor: React.FC<{
 };
 
 export default ParameterEditor;
-

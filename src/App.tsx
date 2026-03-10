@@ -11,7 +11,7 @@ import { ModuleRoute, FormsReportsRoute, TasksRoute, NcrRoute } from './componen
 const UnauthorizedPage = lazy(() => import('./pages/UnauthorizedPage'));
 
 // Lazy load pages for better performance
-const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Dashboard = lazy(() => import('./pages/Dashboard/index'));
 const FormDesigner = lazy(() => import('./pages/FormDesigner'));
 const DataEntryPage = lazy(() => import('./pages/DataEntryPage'));
 const ReportViewer = lazy(() => import('./pages/ReportViewerA4'));
@@ -47,17 +47,17 @@ const InspectionCriteriaPage = lazy(() => import('./pages/lab/InspectionCriteria
 const CompaniesPage = lazy(() => import('./pages/lab/CompaniesPage'));
 const LabTestDetailsPage = lazy(() => import('./pages/lab/LabTestDetailsPage'));
 
-// Lab V2 Pages - lazy loaded
-const LabV2DashboardPage = lazy(() => import('./modules/lab_v2/pages/LabV2DashboardPage'));
-const LabV2DevicesPage = lazy(() => import('./modules/lab_v2/pages/DevicesPage'));
-const LabV2DeviceDetailsPage = lazy(() => import('./modules/lab_v2/pages/DeviceDetailsPage'));
-const LabV2ChemicalsPage = lazy(() => import('./modules/lab_v2/pages/ChemicalsPage'));
-const LabV2TestCatalogPage = lazy(() => import('./modules/lab_v2/pages/TestCatalogPage'));
-const LabV2TestEditorPage = lazy(() => import('./modules/lab_v2/pages/TestEditorPage'));
-const LabV2TestRunsPage = lazy(() => import('./modules/lab_v2/pages/TestRunsPage'));
-const LabV2TestRunPage = lazy(() => import('./modules/lab_v2/pages/TestRunPage'));
-const LabV2ReportsPage = lazy(() => import('./modules/lab_v2/pages/LabReportsPage'));
-const LabV2SettingsPage = lazy(() => import('./modules/lab_v2/pages/LabV2SettingsPage'));
+// Lab Tests Pages - lazy loaded
+const LabTestsHomePage = lazy(() => import('./modules/lab_v2/pages/LabV2DashboardPage'));
+const LabTestsDevicesPage = lazy(() => import('./modules/lab_v2/pages/DevicesPage'));
+const LabTestsDeviceDetailsPage = lazy(() => import('./modules/lab_v2/pages/DeviceDetailsPage'));
+const LabTestsChemicalsPage = lazy(() => import('./modules/lab_v2/pages/ChemicalsPage'));
+const LabTestsCatalogPage = lazy(() => import('./modules/lab_v2/pages/TestCatalogPage'));
+const LabTestsEditorPage = lazy(() => import('./modules/lab_v2/pages/TestEditorPage'));
+const LabTestsRunsPage = lazy(() => import('./modules/lab_v2/pages/TestRunsPage'));
+const LabTestsRunPage = lazy(() => import('./modules/lab_v2/pages/TestRunPage'));
+const LabTestsReportsPage = lazy(() => import('./modules/lab_v2/pages/LabReportsPage'));
+const LabTestsSettingsPage = lazy(() => import('./modules/lab_v2/pages/LabV2SettingsPage'));
 
 // Lab Tests Dynamic System (New)
 const QuickTestEntryPage = lazy(() => import('./pages/lab/QuickTestEntryPage'));
@@ -208,16 +208,22 @@ const LabOldMaterialDetailsRedirect = () => {
   return <Navigate to={id ? `/lab/materials/${id}` : '/lab/materials'} replace />;
 };
 
-// Redirect helpers for legacy Lab V2 routes that used to live under `/lab/*`.
-// Canonical Lab V2 lives under `/lab/tests/*`.
-const LabV2DeviceDetailsRedirect = () => {
+// Redirect helpers for legacy lab-tests routes that used to live under `/lab/*`.
+// Canonical lab-tests routes live under `/lab/tests/*`.
+const LabTestsDeviceDetailsRedirect = () => {
   const { id } = useParams<{ id: string }>();
   return <Navigate to={id ? `/lab/tests/devices/${id}` : '/lab/tests/devices'} replace />;
 };
 
-const LabV2RunDetailsRedirect = () => {
+const LabTestsRunDetailsRedirect = () => {
   const { runId } = useParams<{ runId: string }>();
   return <Navigate to={runId ? `/lab/tests/runs/${runId}` : '/lab/tests/runs'} replace />;
+};
+
+// Redirect helper for legacy single report URL `/report/:instanceId`.
+const LegacySingleReportRedirect = () => {
+  const { instanceId } = useParams<{ instanceId: string }>();
+  return <Navigate to={instanceId ? `/reports/view/${instanceId}` : '/reports'} replace />;
 };
 
 // Define router configuration
@@ -359,6 +365,14 @@ const router = createBrowserRouter([
             <Suspense fallback={<PageLoader />}>
               <ReportViewer />
             </Suspense>
+          </FormsReportsRoute>
+        )
+      },
+      {
+        path: "report/:instanceId",
+        element: (
+          <FormsReportsRoute>
+            <LegacySingleReportRedirect />
           </FormsReportsRoute>
         )
       },
@@ -597,7 +611,7 @@ const router = createBrowserRouter([
         element: (
           <ModuleRoute module="lab_tests">
             <Suspense fallback={<PageLoader />}>
-              <LabV2DashboardPage />
+              <LabTestsHomePage />
             </Suspense>
           </ModuleRoute>
         )
@@ -607,7 +621,7 @@ const router = createBrowserRouter([
         element: (
           <ModuleRoute module="lab_tests">
             <Suspense fallback={<PageLoader />}>
-              <LabV2DevicesPage />
+              <LabTestsDevicesPage />
             </Suspense>
           </ModuleRoute>
         )
@@ -617,7 +631,7 @@ const router = createBrowserRouter([
         element: (
           <ModuleRoute module="lab_tests">
             <Suspense fallback={<PageLoader />}>
-              <LabV2DeviceDetailsPage />
+              <LabTestsDeviceDetailsPage />
             </Suspense>
           </ModuleRoute>
         )
@@ -627,7 +641,7 @@ const router = createBrowserRouter([
         element: (
           <ModuleRoute module="lab_tests">
             <Suspense fallback={<PageLoader />}>
-              <LabV2ChemicalsPage />
+              <LabTestsChemicalsPage />
             </Suspense>
           </ModuleRoute>
         )
@@ -637,7 +651,7 @@ const router = createBrowserRouter([
         element: (
           <ModuleRoute module="lab_tests">
             <Suspense fallback={<PageLoader />}>
-              <LabV2TestCatalogPage />
+              <LabTestsCatalogPage />
             </Suspense>
           </ModuleRoute>
         )
@@ -647,7 +661,7 @@ const router = createBrowserRouter([
         element: (
           <ModuleRoute module="lab_tests">
             <Suspense fallback={<PageLoader />}>
-              <LabV2TestEditorPage />
+              <LabTestsEditorPage />
             </Suspense>
           </ModuleRoute>
         )
@@ -657,7 +671,7 @@ const router = createBrowserRouter([
         element: (
           <ModuleRoute module="lab_tests">
             <Suspense fallback={<PageLoader />}>
-              <LabV2TestEditorPage />
+              <LabTestsEditorPage />
             </Suspense>
           </ModuleRoute>
         )
@@ -667,7 +681,17 @@ const router = createBrowserRouter([
         element: (
           <ModuleRoute module="lab_tests">
             <Suspense fallback={<PageLoader />}>
-              <LabV2TestRunsPage />
+              <LabTestsRunsPage />
+            </Suspense>
+          </ModuleRoute>
+        )
+      },
+      {
+        path: "lab/tests/runs/new",
+        element: (
+          <ModuleRoute module="lab_tests">
+            <Suspense fallback={<PageLoader />}>
+              <LabTestsRunPage />
             </Suspense>
           </ModuleRoute>
         )
@@ -677,7 +701,7 @@ const router = createBrowserRouter([
         element: (
           <ModuleRoute module="lab_tests">
             <Suspense fallback={<PageLoader />}>
-              <LabV2TestRunPage />
+              <LabTestsRunPage />
             </Suspense>
           </ModuleRoute>
         )
@@ -687,7 +711,7 @@ const router = createBrowserRouter([
         element: (
           <ModuleRoute module="lab_tests">
             <Suspense fallback={<PageLoader />}>
-              <LabV2ReportsPage />
+              <LabTestsReportsPage />
             </Suspense>
           </ModuleRoute>
         )
@@ -697,7 +721,7 @@ const router = createBrowserRouter([
         element: (
           <ModuleRoute module="lab_tests">
             <Suspense fallback={<PageLoader />}>
-              <LabV2SettingsPage />
+              <LabTestsSettingsPage />
             </Suspense>
           </ModuleRoute>
         )
@@ -743,7 +767,7 @@ const router = createBrowserRouter([
           </ModuleRoute>
         )
       },
-      // ==================== Laboratory Module (Lab V2 Legacy Aliases - Deprecated) ====================
+      // ==================== Laboratory Module (Lab Tests Legacy Aliases - Deprecated) ====================
       {
         path: "lab/devices",
         element: (
@@ -756,7 +780,7 @@ const router = createBrowserRouter([
         path: "lab/devices/:id",
         element: (
           <ModuleRoute module="lab_tests">
-            <LabV2DeviceDetailsRedirect />
+            <LabTestsDeviceDetailsRedirect />
           </ModuleRoute>
         )
       },
@@ -777,10 +801,18 @@ const router = createBrowserRouter([
         )
       },
       {
+        path: "lab/runs/new",
+        element: (
+          <ModuleRoute module="lab_tests">
+            <Navigate to="/lab/tests/runs/new" replace />
+          </ModuleRoute>
+        )
+      },
+      {
         path: "lab/runs/:runId",
         element: (
           <ModuleRoute module="lab_tests">
-            <LabV2RunDetailsRedirect />
+            <LabTestsRunDetailsRedirect />
           </ModuleRoute>
         )
       },
@@ -796,7 +828,9 @@ const router = createBrowserRouter([
         path: "lab/settings",
         element: (
           <ModuleRoute module="lab_tests">
-            <Navigate to="/lab/tests/settings" replace />
+            <Suspense fallback={<PageLoader />}>
+              <LabTestsSettingsPage />
+            </Suspense>
           </ModuleRoute>
         )
       },
@@ -1281,3 +1315,4 @@ function App() {
 }
 
 export default App;
+

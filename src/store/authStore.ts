@@ -153,17 +153,31 @@ export const useAuthStore = create<AuthState>((set, get) => {
             if (get().initialized) return;
 
             console.log('[AuthStore] Initializing...');
-            const { data: { session } } = await supabase.auth.getSession();
 
+            // Wrap getSession with timeout so initialize() always completes promptly.
+            // Without this, a slow Supabase response (>10s) causes ProtectedRoute to
+            // fire its timeout while session is still null, wrongly redirecting
+            // authenticated users to /login.
+            let session: Session | null = null;
+            try {
+                const result = await withTimeout(
+                    supabase.auth.getSession(),
+                    8000, // 8s — safely under ProtectedRoute's 10s timeout
+                    { data: { session: null } } as any
+                );
+                session = result?.data?.session ?? null;
+            } catch {
+                session = null;
+            }
+
+            // Update session state immediately after getSession() resolves.
             if (session?.user) {
                 set({ session });
-                await loadUserProfile(session.user.id, session.user.email || '');
-                setupRealtimeUserWatch(session.user.id);
             } else {
                 set({ session: null, profile: null, loading: false });
             }
 
-            // Set up listener
+            // Set up listener BEFORE marking initialized so no auth events are missed.
             const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, newSession) => {
                 console.log(`[AuthStore] 🔔 Auth event: ${event}`, {
                     hasSession: !!newSession,
@@ -196,7 +210,17 @@ export const useAuthStore = create<AuthState>((set, get) => {
             });
 
             authSubscription = subscription;
+
+            // Mark initialized NOW — session state is known and listener is active.
+            // Profile loading below is intentionally decoupled: ProtectedRoute and
+            // useSupabaseSync can proceed as soon as they see initialized=true.
             set({ initialized: true });
+
+            // Load profile in the background (after unblocking waiters).
+            if (session?.user) {
+                await loadUserProfile(session.user.id, session.user.email || '');
+                setupRealtimeUserWatch(session.user.id);
+            }
         },
 
         signIn: async (email, password) => {

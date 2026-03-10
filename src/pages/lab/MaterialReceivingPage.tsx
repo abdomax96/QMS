@@ -133,7 +133,7 @@ const MaterialReceivingPage: React.FC = () => {
             </div>
 
             {/* Stats */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                 <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 text-center">
                     <div className="text-2xl font-bold text-gray-900 dark:text-white">{stats.total}</div>
                     <div className="text-sm text-gray-500">إجمالي</div>
@@ -141,10 +141,6 @@ const MaterialReceivingPage: React.FC = () => {
                 <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 text-center">
                     <div className="text-2xl font-bold text-yellow-600">{stats.pending}</div>
                     <div className="text-sm text-gray-500">قيد الانتظار</div>
-                </div>
-                <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 text-center">
-                    <div className="text-2xl font-bold text-green-600">{stats.accepted}</div>
-                    <div className="text-sm text-gray-500">مقبول</div>
                 </div>
                 <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 text-center">
                     <div className="text-2xl font-bold text-green-600">{stats.accepted}</div>
@@ -248,6 +244,7 @@ const MaterialReceivingPage: React.FC = () => {
                                 <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">المورد</th>
                                 <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">الكمية</th>
                                 <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">الحالة</th>
+                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">الاستهلاك</th>
                                 <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">التاريخ</th>
                                 <th className="px-4 py-3 text-center text-sm font-medium text-gray-700 dark:text-gray-300">إجراء</th>
                             </tr>
@@ -272,6 +269,15 @@ const MaterialReceivingPage: React.FC = () => {
                                         <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${materialReceivingStatusColors[material.status].bg} ${materialReceivingStatusColors[material.status].text}`}>
                                             {materialReceivingStatusLabels[material.status]}
                                         </span>
+                                        {material.isManuallyDepleted && (
+                                            <span className="mr-2 px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                                                نفدت يدوياً
+                                            </span>
+                                        )}
+                                    </td>
+                                    <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">
+                                        <div>مستهلك: {Number(material.consumedQuantity ?? 0).toFixed(3)} {material.unit}</div>
+                                        <div className="font-medium">متبقي: {Number(material.remainingQuantity ?? material.acceptedQuantity ?? material.quantity ?? 0).toFixed(3)} {material.unit}</div>
                                     </td>
                                     <td className="px-4 py-3 text-sm text-gray-500">
                                         <FormattedDate date={material.receivedAt} />

@@ -80,7 +80,11 @@ interface NavItem {
 
 const MainLayout: React.FC = () => {
   const location = useLocation();
-  const isReportPreviewRoute = location.pathname.startsWith('/reports/');
+  // Keep report pages inside normal app chrome (sidebar/header/tabs) by default.
+  // Use explicit query flag `?layout=clean` only when a clean/embedded report shell is needed.
+  const reportLayoutMode = new URLSearchParams(location.search).get('layout');
+  const isReportPreviewRoute =
+    location.pathname.startsWith('/reports/') && reportLayoutMode === 'clean';
   const {
     theme,
     toggleTheme,
@@ -756,9 +760,11 @@ const MainLayout: React.FC = () => {
       />
 
       {DevReleasePanel && !isReportPreviewRoute && (
-        <Suspense fallback={null}>
-          <DevReleasePanel />
-        </Suspense>
+        <div className="print:hidden">
+          <Suspense fallback={null}>
+            <DevReleasePanel />
+          </Suspense>
+        </div>
       )}
 
       {chatProvider !== 'mattermost' && !isReportPreviewRoute && <ChatDrawer />}

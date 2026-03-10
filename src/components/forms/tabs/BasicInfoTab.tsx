@@ -4,6 +4,8 @@ import { useCompanyStore } from '../../../store/companyStore';
 import { getAllCompanies } from '../../../services/companyService';
 import { getProducts } from '../../../services/productService';
 import type { Product } from '../../../types/product';
+import NumericOrVariableInput from '../../common/NumericOrVariableInput';
+import { useProductDocumentVariables } from '../../../hooks/useProductDocumentVariables';
 
 interface BasicInfoTabProps {
     template: FormTemplate;
@@ -14,6 +16,11 @@ const BasicInfoTab: React.FC<BasicInfoTabProps> = ({ template, onChange }) => {
     const { companies, setCompanies } = useCompanyStore();
     const [products, setProducts] = useState<Product[]>([]);
     const [loadingProducts, setLoadingProducts] = useState(false);
+    const {
+        variables: productDocumentVariables,
+        sourceDocumentId: productSourceDocumentId,
+        isLoading: loadingProductDocumentVariables,
+    } = useProductDocumentVariables(template.basic_info?.product_id);
 
     // Auto-load companies
     useEffect(() => {
@@ -258,18 +265,28 @@ const BasicInfoTab: React.FC<BasicInfoTabProps> = ({ template, onChange }) => {
                             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                                 عند اختيار المنتج سيتم تحديث اسم النموذج تلقائياً
                             </p>
+                            {template.basic_info?.product_id && (
+                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                    {loadingProductDocumentVariables
+                                        ? 'جاري تحميل متغيرات وثيقة المنتج...'
+                                        : productSourceDocumentId
+                                            ? `تم ربط ${productDocumentVariables.length} متغير من وثيقة SOP الخاصة بالمنتج`
+                                            : 'لا توجد وثيقة SOP مرتبطة بهذا المنتج حتى الآن'}
+                                </p>
+                            )}
                         </div>
 
                         <div>
                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                                 الوزن القياسي (جم)
                             </label>
-                            <input
-                                type="number"
-                                value={template.basic_info?.standard_weight || ''}
-                                onChange={(e) => handleBasicInfoChange('standard_weight', parseFloat(e.target.value) || 0)}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
+                            <NumericOrVariableInput
+                                value={template.basic_info?.standard_weight as number | string | undefined}
+                                onChange={(value) => handleBasicInfoChange('standard_weight', value)}
+                                variables={productDocumentVariables}
+                                numericType="decimal"
                                 placeholder="0"
+                                className="w-full"
                             />
                         </div>
 
@@ -277,12 +294,13 @@ const BasicInfoTab: React.FC<BasicInfoTabProps> = ({ template, onChange }) => {
                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                                 مدة الصلاحية (شهور)
                             </label>
-                            <input
-                                type="number"
-                                value={template.basic_info?.shelf_life_months || ''}
-                                onChange={(e) => handleBasicInfoChange('shelf_life_months', parseInt(e.target.value) || 0)}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
+                            <NumericOrVariableInput
+                                value={template.basic_info?.shelf_life_months as number | string | undefined}
+                                onChange={(value) => handleBasicInfoChange('shelf_life_months', value)}
+                                variables={productDocumentVariables}
+                                numericType="integer"
                                 placeholder="12"
+                                className="w-full"
                             />
                         </div>
 
@@ -341,12 +359,13 @@ const BasicInfoTab: React.FC<BasicInfoTabProps> = ({ template, onChange }) => {
                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                                 كراتين لكل باليت
                             </label>
-                            <input
-                                type="number"
-                                value={template.basic_info?.cartons_per_pallet || ''}
-                                onChange={(e) => handleBasicInfoChange('cartons_per_pallet', parseInt(e.target.value) || 0)}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
+                            <NumericOrVariableInput
+                                value={template.basic_info?.cartons_per_pallet as number | string | undefined}
+                                onChange={(value) => handleBasicInfoChange('cartons_per_pallet', value)}
+                                variables={productDocumentVariables}
+                                numericType="integer"
                                 placeholder="0"
+                                className="w-full"
                             />
                         </div>
 
@@ -354,12 +373,13 @@ const BasicInfoTab: React.FC<BasicInfoTabProps> = ({ template, onChange }) => {
                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                                 عبوات لكل علبة
                             </label>
-                            <input
-                                type="number"
-                                value={template.basic_info?.packs_per_box || ''}
-                                onChange={(e) => handleBasicInfoChange('packs_per_box', parseInt(e.target.value) || 0)}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
+                            <NumericOrVariableInput
+                                value={template.basic_info?.packs_per_box as number | string | undefined}
+                                onChange={(value) => handleBasicInfoChange('packs_per_box', value)}
+                                variables={productDocumentVariables}
+                                numericType="integer"
                                 placeholder="0"
+                                className="w-full"
                             />
                         </div>
 
@@ -367,12 +387,13 @@ const BasicInfoTab: React.FC<BasicInfoTabProps> = ({ template, onChange }) => {
                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                                 علب لكل كرتون
                             </label>
-                            <input
-                                type="number"
-                                value={template.basic_info?.boxes_per_carton || ''}
-                                onChange={(e) => handleBasicInfoChange('boxes_per_carton', parseInt(e.target.value) || 0)}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
+                            <NumericOrVariableInput
+                                value={template.basic_info?.boxes_per_carton as number | string | undefined}
+                                onChange={(value) => handleBasicInfoChange('boxes_per_carton', value)}
+                                variables={productDocumentVariables}
+                                numericType="integer"
                                 placeholder="0"
+                                className="w-full"
                             />
                         </div>
 
@@ -380,12 +401,13 @@ const BasicInfoTab: React.FC<BasicInfoTabProps> = ({ template, onChange }) => {
                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                                 وزن العلبة الفارغة (جم)
                             </label>
-                            <input
-                                type="number"
-                                value={template.basic_info?.empty_box_weight || ''}
-                                onChange={(e) => handleBasicInfoChange('empty_box_weight', parseFloat(e.target.value) || 0)}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
+                            <NumericOrVariableInput
+                                value={template.basic_info?.empty_box_weight as number | string | undefined}
+                                onChange={(value) => handleBasicInfoChange('empty_box_weight', value)}
+                                variables={productDocumentVariables}
+                                numericType="decimal"
                                 placeholder="0"
+                                className="w-full"
                             />
                         </div>
 
@@ -393,12 +415,13 @@ const BasicInfoTab: React.FC<BasicInfoTabProps> = ({ template, onChange }) => {
                             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                                 وزن الكرتون الفارغ (جم)
                             </label>
-                            <input
-                                type="number"
-                                value={template.basic_info?.empty_carton_weight || ''}
-                                onChange={(e) => handleBasicInfoChange('empty_carton_weight', parseFloat(e.target.value) || 0)}
-                                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-white"
+                            <NumericOrVariableInput
+                                value={template.basic_info?.empty_carton_weight as number | string | undefined}
+                                onChange={(value) => handleBasicInfoChange('empty_carton_weight', value)}
+                                variables={productDocumentVariables}
+                                numericType="decimal"
                                 placeholder="0"
+                                className="w-full"
                             />
                         </div>
                     </div>

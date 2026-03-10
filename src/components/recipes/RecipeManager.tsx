@@ -47,6 +47,8 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({
     userRole,
     onClose
 }) => {
+    const WATER_INGREDIENT_VALUE = '__water__';
+
     const [recipes, setRecipes] = useState<Recipe[]>([]);
     const [rawMaterials, setRawMaterials] = useState<RawMaterial[]>([]);
     const [loading, setLoading] = useState(true);
@@ -195,8 +197,30 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({
 
     // تحديث مكون - عند اختيار خامة من الـ dropdown
     const handleMaterialSelect = (index: number, materialId: string) => {
-        const material = rawMaterials.find(m => m.id === materialId);
         const newIngredients = [...formData.ingredients];
+
+        if (materialId === WATER_INGREDIENT_VALUE) {
+            newIngredients[index] = {
+                ...newIngredients[index],
+                material_id: '',
+                ingredient_name: 'مياه',
+                unit: newIngredients[index].unit || 'l'
+            };
+            setFormData({ ...formData, ingredients: newIngredients });
+            return;
+        }
+
+        if (!materialId) {
+            newIngredients[index] = {
+                ...newIngredients[index],
+                material_id: '',
+                ingredient_name: ''
+            };
+            setFormData({ ...formData, ingredients: newIngredients });
+            return;
+        }
+
+        const material = rawMaterials.find(m => m.id === materialId);
         newIngredients[index] = {
             ...newIngredients[index],
             material_id: materialId,
@@ -440,11 +464,14 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({
                                                     <tr key={ing.id}>
                                                         <td className="px-3 py-2">
                                                             <select
-                                                                value={ing.material_id || (ing as any).materialId || ''}
+                                                                value={
+                                                                    ing.material_id || (ing as any).materialId || ((ing.ingredient_name || '').trim() === 'مياه' ? WATER_INGREDIENT_VALUE : '')
+                                                                }
                                                                 onChange={(e) => handleMaterialSelect(index, e.target.value)}
                                                                 className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded focus:ring-1 focus:ring-primary-500 dark:bg-gray-700 dark:text-white text-sm"
                                                             >
                                                                 <option value="">-- اختر خامة --</option>
+                                                                <option value={WATER_INGREDIENT_VALUE}>مياه</option>
                                                                 {rawMaterials.map(mat => (
                                                                     <option key={mat.id} value={mat.id}>{mat.name}</option>
                                                                 ))}

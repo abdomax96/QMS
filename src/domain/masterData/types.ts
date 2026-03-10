@@ -89,7 +89,9 @@ export interface RawMaterial {
     // Specifications
     unit: string;                   // وحدة القياس
     specifications?: string;        // المواصفات
-    shelfLife?: number;             // مدة الصلاحية (بالأيام)
+    shelfLife?: number;             // مدة الصلاحية
+    shelfLifeUnit?: ShelfLifeUnit;  // وحدة مدة الصلاحية
+    expirySubtractDays?: number;    // عدد الأيام المخصومة عند حساب الانتهاء بالشهر/السنة
 
     // Storage
     storageCondition?: string;      // ظروف التخزين
@@ -109,6 +111,11 @@ export interface RawMaterial {
 
     // Packaging
     packagingOptions?: string[];    // خيارات التعبئة
+    packagingTypeId?: string;       // نوع التعبئة الرئيسي (لمواد التعبئة)
+    packagingSubtypeId?: string;    // نوع التعبئة الفرعي (لمواد التعبئة)
+    packagingTypeName?: string;     // اسم النوع الرئيسي
+    packagingSubtypeName?: string;  // اسم النوع الفرعي
+    allergens?: string[];           // مسببات الحساسية (حقل legacy مستخدم في الواجهات)
 
     // Status
     active: boolean;
@@ -198,6 +205,14 @@ export type MaterialCategory =
     | 'preservative'        // مواد حافظة
     | 'other';              // أخرى
 
+export type ShelfLifeUnit = 'days' | 'months' | 'years';
+
+export const shelfLifeUnitLabels: Record<ShelfLifeUnit, string> = {
+    days: 'يوم',
+    months: 'شهر',
+    years: 'سنة'
+};
+
 export const materialCategoryLabels: Record<MaterialCategory, string> = {
     ingredient: 'مكون غذائي',
     packaging: 'مواد تعبئة',
@@ -237,6 +252,8 @@ export interface CreateMaterialInput {
     unit: string;
     specifications?: string;
     shelfLife?: number;
+    shelfLifeUnit?: ShelfLifeUnit;
+    expirySubtractDays?: number;
     storageCondition?: string;
     storageTemperature?: string;
     requiresLabTest?: boolean;
@@ -244,7 +261,31 @@ export interface CreateMaterialInput {
     approvedSuppliers?: string[];
     containsAllergens?: string[];   // مسببات الحساسية
     mayContainAllergens?: string[]; // قد يحتوي على
+    allergens?: string[];           // حقل الحفظ الحالي في قاعدة البيانات
+    packagingTypeId?: string;
+    packagingSubtypeId?: string;
     notes?: string;
+}
+
+export interface LabPackagingType {
+    id: string;
+    name: string;
+    sortOrder: number;
+    isActive: boolean;
+    usageCount: number;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface LabPackagingSubtype {
+    id: string;
+    packagingTypeId: string;
+    name: string;
+    sortOrder: number;
+    isActive: boolean;
+    usageCount: number;
+    createdAt: string;
+    updatedAt: string;
 }
 
 // ============ Helper Functions ============

@@ -53,7 +53,7 @@ export const AcceptanceRuleEditor: React.FC<{
   }));
 
   return (
-    <div className="space-y-3" dir="rtl">
+    <div className="space-y-2" dir="rtl">
       <div className="flex items-center justify-between">
         <div className="text-sm font-semibold text-slate-900 dark:text-white">قواعد القبول (Specs)</div>
         <Button type="button" variant="secondary" size="sm" onClick={add} disabled={parameters.length === 0}>
@@ -69,21 +69,21 @@ export const AcceptanceRuleEditor: React.FC<{
         <div className="text-sm text-slate-600 dark:text-slate-400">لا توجد قواعد بعد.</div>
       ) : null}
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         {value.map((r, idx) => {
           const showRange = r.rule_type === 'numeric_range';
           const showAllowed = r.rule_type === 'allowed_values' || r.rule_type === 'multi_select';
 
           return (
-            <div key={r.id || idx} className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 bg-white dark:bg-slate-800">
-              <div className="flex items-center justify-between mb-3">
+            <div key={r.id || idx} className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 bg-white dark:bg-slate-800">
+              <div className="flex items-center justify-between mb-2">
                 <div className="text-sm font-medium text-slate-800 dark:text-slate-200">قاعدة #{idx + 1}</div>
                 <Button type="button" variant="danger" size="sm" onClick={() => remove(idx)}>
                   حذف
                 </Button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                 <Select
                   label="المعامل"
                   options={paramOptions}
@@ -130,7 +130,7 @@ export const AcceptanceRuleEditor: React.FC<{
                 ) : null}
               </div>
 
-              <div className="mt-4">
+              <div className="mt-3">
                 <Input
                   label="ملاحظة"
                   value={r.custom_note ?? ''}
@@ -146,4 +146,3 @@ export const AcceptanceRuleEditor: React.FC<{
 };
 
 export default AcceptanceRuleEditor;
-

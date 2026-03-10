@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from 'react';
 import useStore from '../store';
 import { isSupabaseConfigured } from '../config/supabase';
+import { useAuthStore } from '../store/authStore';
 import { progressiveLoader, type ProgressiveLoadProgress } from '../services/progressiveLoader';
 import { logger } from '../utils/logger';
 
@@ -19,6 +20,8 @@ const ESSENTIAL_LOAD_TIMEOUT_MS = 8000;
 const SESSION_CHECK_TIMEOUT_MS = 5000;
 const INIT_FAILSAFE_TIMEOUT_MS = 10000;
 const FULL_SYNC_TIMEOUT_MS = 45000;
+const AUTH_READY_RETRY_DELAY_MS = 1000;
+const MAX_AUTH_READY_RETRIES = 15;
 
 const withTimeout = async <T>(
     promise: Promise<T>,
@@ -47,6 +50,8 @@ export const useSupabaseSync = () => {
     const [loadingProgress, setLoadingProgress] = useState<ProgressiveLoadProgress | null>(null);
 
     const isInitialLoadRef = useRef(true);
+    const authRetryAttemptsRef = useRef(0);
+    const authRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Progressive loading from Supabase
     useEffect(() => {
@@ -66,9 +71,9 @@ export const useSupabaseSync = () => {
             clearTimeout(initFailsafeTimer);
         };
 
-        const loadProgressively = async () => {
-            if (!isInitialLoadRef.current) return;
-            isInitialLoadRef.current = false;
+            const loadProgressively = async () => {
+                if (!isInitialLoadRef.current) return;
+                isInitialLoadRef.current = false;
 
             // If Supabase is not configured, skip loading and mark as initialized
             if (!isSupabaseConfigured) {
@@ -80,34 +85,73 @@ export const useSupabaseSync = () => {
                 return;
             }
 
-            // Check for auth session FIRST - don't try to load data if not logged in.
-            // Keep this check bounded with timeout to avoid stuck initialization UI.
-            let session: any = null;
-            try {
-                const sessionResult = await withTimeout(
-                    import('../config/supabase').then(m => m.supabase.auth.getSession()),
-                    SESSION_CHECK_TIMEOUT_MS,
-                    'SESSION_CHECK_TIMEOUT'
-                );
-                session = sessionResult?.data?.session ?? null;
-            } catch (sessionError) {
-                logger.warn('[Progressive Loading] Session check timed out/failed. Continuing with initialized app.', sessionError);
-                if (!isCancelled) {
-                    markInitialized();
-                    setSyncError(sessionError instanceof Error ? sessionError.message : 'SESSION_CHECK_FAILED');
-                }
-                return;
-            }
+            // Wait for authStore to finish its own getSession() check instead of
+            // making a redundant second call to Supabase. This halves startup
+            // connection pressure (each user previously made 2 concurrent getSession
+            // calls; now they share one result via the store).
+            // authStore.initialize() sets initialized=true within 8s (getSession timeout).
+            // We wait up to 9s — 1s buffer — so we reliably get the session result
+            // without making a redundant second getSession() call.
+            const AUTH_WAIT_TIMEOUT_MS = 9000;
+            const waitForAuth = (): Promise<boolean> =>
+                new Promise((resolve) => {
+                    // authStore.initialize() is already running from App.tsx useEffect.
+                    // initialized is set right after getSession() resolves (within 8s).
+                    const poll = setInterval(() => {
+                        const { initialized } = useAuthStore.getState();
+                        if (initialized) {
+                            clearInterval(poll);
+                            clearTimeout(giveUp);
+                            resolve(true);
+                        }
+                    }, 100);
+                    const giveUp = setTimeout(() => {
+                        clearInterval(poll);
+                        resolve(false);
+                    }, AUTH_WAIT_TIMEOUT_MS);
+                });
 
-            if (!session?.user) {
-                // User is not authenticated - this is normal on login page
-                logger.debug('[Progressive Loading] No authenticated user - skipping data load');
-                if (!isCancelled) {
-                    markInitialized();
+                const authReady = await waitForAuth();
+                if (isCancelled) return;
+
+                const session = useAuthStore.getState().session;
+
+                if (!authReady) {
+                    authRetryAttemptsRef.current += 1;
+
+                    if (authRetryAttemptsRef.current <= MAX_AUTH_READY_RETRIES) {
+                        logger.warn(
+                            `[Progressive Loading] Auth store not ready yet (attempt ${authRetryAttemptsRef.current}/${MAX_AUTH_READY_RETRIES}). Retrying...`
+                        );
+
+                        isInitialLoadRef.current = true;
+                        authRetryTimerRef.current = setTimeout(() => {
+                            if (!isCancelled) {
+                                void loadProgressively();
+                            }
+                        }, AUTH_READY_RETRY_DELAY_MS);
+                        return;
+                    }
+
+                    logger.warn('[Progressive Loading] Auth store init timed out after retries; unblocking UI without preloading.');
+                    if (!isCancelled) {
+                        markInitialized();
+                        setSyncError('Auth initialization timeout');
+                    }
+                    return;
                 }
-                // Don't set syncError - this is expected behavior, not an error
-                return;
-            }
+
+                authRetryAttemptsRef.current = 0;
+
+                if (!session?.user) {
+                    // User is not authenticated - this is normal on login page
+                    logger.debug('[Progressive Loading] No authenticated user - skipping data load');
+                    if (!isCancelled) {
+                        markInitialized();
+                    }
+                    // Don't set syncError - this is expected behavior, not an error
+                    return;
+                }
 
             // Unblock UI immediately. Remaining data is prefetched in background.
             if (!isCancelled) {
@@ -239,6 +283,10 @@ export const useSupabaseSync = () => {
         return () => {
             isCancelled = true;
             clearTimeout(initFailsafeTimer);
+            if (authRetryTimerRef.current) {
+                clearTimeout(authRetryTimerRef.current);
+                authRetryTimerRef.current = null;
+            }
         };
     }, []);
 

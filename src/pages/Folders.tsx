@@ -115,6 +115,8 @@ const FoldersPage: React.FC = () => {
         archiveFolder,
         archiveFormTemplate,
         archiveFormInstance,
+        fetchAllData,
+        isLoading,
         user,
     } = useStore();
 
@@ -454,12 +456,12 @@ const FoldersPage: React.FC = () => {
 
     // Get children folders (non-archived only) with data isolation
     const childFolders = useMemo(() => {
-        let result = Object.values(folders)
-            .filter(f => f.parent_id === currentFolderId && !f.archived);
+        const allActiveFolders = Object.values(folders).filter(f => !f.archived);
+        let visibleFolders = allActiveFolders;
 
         // Apply data isolation if mode is 'isolated' and user can't see all
         if (isolationMode === 'isolated' && !canSeeAll && userDepartmentIds.length > 0) {
-            result = result.filter(f =>
+            visibleFolders = visibleFolders.filter(f =>
                 // Include folders belonging to user's department
                 (f.department_id && userDepartmentIds.includes(f.department_id)) ||
                 // Also include folders without department_id (system/legacy folders)
@@ -468,12 +470,37 @@ const FoldersPage: React.FC = () => {
             console.log('[Folders] Applied isolation filter:', {
                 isolationMode,
                 userDepartmentIds,
-                filteredCount: result.length
+                filteredCount: visibleFolders.length
             });
         }
 
+        // Root view fallback:
+        // decide root inside the already-visible set so hidden parents do not hide children.
+        const visibleIds = new Set(visibleFolders.map(f => f.id));
+        const result = currentFolderId === null
+            ? visibleFolders.filter(f => !f.parent_id || !visibleIds.has(f.parent_id))
+            : visibleFolders.filter(f => f.parent_id === currentFolderId);
+
         return result;
     }, [folders, currentFolderId, isolationMode, canSeeAll, userDepartmentIds]);
+
+    // Safety fallback: if root opens with no data at all, force one full sync.
+    const rootRefetchTriggeredRef = useRef(false);
+    useEffect(() => {
+        if (currentFolderId !== null) return;
+        if (isLoading) return;
+        if (rootRefetchTriggeredRef.current) return;
+
+        const hasAnyData =
+            Object.keys(folders).length > 0 ||
+            Object.keys(formTemplates).length > 0 ||
+            Object.keys(formInstances).length > 0;
+
+        if (hasAnyData) return;
+
+        rootRefetchTriggeredRef.current = true;
+        void fetchAllData();
+    }, [currentFolderId, isLoading, folders, formTemplates, formInstances, fetchAllData]);
 
     // Check if viewing special views
     const isArchiveView = currentFolderId === '__archive__';
@@ -517,12 +544,34 @@ const FoldersPage: React.FC = () => {
     }, [formInstances, isArchiveView]);
 
     // Get templates and instances for current folder (or special views)
-    const templates = isArchiveView
+    // Fallback: if folder tree fails to load but forms/reports exist in store,
+    // show them at root instead of rendering an empty workspace.
+    const baseTemplates = isArchiveView
         ? archivedTemplates
         : (!isRecycleBinView ? getTemplatesInFolder(currentFolderId) : []);
-    const instances = isArchiveView
+    const baseInstances = isArchiveView
         ? archivedInstances
         : (!isRecycleBinView ? getInstancesInFolder(currentFolderId) : []);
+
+    const hasAnyFolderLoaded = Object.keys(folders).length > 0;
+    const hasAnyTemplateLoaded = Object.keys(formTemplates).length > 0;
+    const hasAnyInstanceLoaded = Object.keys(formInstances).length > 0;
+
+    const shouldUseRootFallback =
+        !isArchiveView &&
+        !isRecycleBinView &&
+        currentFolderId === null &&
+        !hasAnyFolderLoaded &&
+        baseTemplates.length === 0 &&
+        baseInstances.length === 0 &&
+        (hasAnyTemplateLoaded || hasAnyInstanceLoaded);
+
+    const templates = shouldUseRootFallback
+        ? Object.values(formTemplates).filter((t) => !t.archived)
+        : baseTemplates;
+    const instances = shouldUseRootFallback
+        ? Object.values(formInstances).filter((i) => !i.archived)
+        : baseInstances;
 
 
     // Helper function to check if date is within range
@@ -687,6 +736,12 @@ const FoldersPage: React.FC = () => {
     const visibleInstances = showReportsContent ? filteredInstances : [];
     const visibleFolders = showReportsContent ? displayFolders : [];
     const visibleItemsCount = visibleFolders.length + visibleTemplates.length + visibleInstances.length;
+
+    useEffect(() => {
+        if (shouldUseRootFallback) {
+            console.warn('[Folders] Root fallback is active: folders are unavailable, showing templates/reports directly.');
+        }
+    }, [shouldUseRootFallback]);
 
     // Handler for removing individual filters
     const handleRemoveFilter = (type: 'dateRange' | 'status' | 'tag', value?: string) => {
@@ -2884,7 +2939,7 @@ const FoldersPage: React.FC = () => {
                                             const instance = visibleInstances.find(i => i.instance_id === id);
                                             if (instance) {
                                                 const template = formTemplates[instance.template_id];
-                                                const name = template ? `تقرير - ${template.name}` : 'تقرير';
+                                                const name = instance.name || (template ? `تقرير - ${template.name}` : 'تقرير');
                                                 openInstanceForEdit(id, name);
                                             }
                                         }}
@@ -2920,7 +2975,7 @@ const FoldersPage: React.FC = () => {
                                             const instance = visibleInstances.find(i => i.instance_id === id);
                                             if (instance) {
                                                 const template = formTemplates[instance.template_id];
-                                                const name = template ? `تقرير - ${template.name}` : 'تقرير';
+                                                const name = instance.name || (template ? `تقرير - ${template.name}` : 'تقرير');
                                                 openInstanceForEdit(id, name);
                                             }
                                         }}
@@ -3062,7 +3117,7 @@ const FoldersPage: React.FC = () => {
                                                                 }}
                                                                 onDoubleClick={() => {
                                                                     const template = formTemplates[instance.template_id];
-                                                                    const name = template ? `تقرير - ${template.name}` : 'تقرير';
+                                                                    const name = instance.name || (template ? `تقرير - ${template.name}` : 'تقرير');
                                                                     openInstanceForEdit(instance.instance_id, name);
                                                                 }}
                                                                 onContextMenu={(e) => {
@@ -3120,7 +3175,7 @@ const FoldersPage: React.FC = () => {
                                                                     );
                                                                 })()}
                                                                 <span className="text-xs text-center line-clamp-2 text-gray-700 dark:text-gray-200 w-full break-words">
-                                                                    {template?.name || 'تقرير'}
+                                                                    {instance.name || template?.name || 'تقرير'}
                                                                 </span>
                                                                 <span className="text-[10px] text-gray-400">
                                                                     {formatDate(instance.created_at)}

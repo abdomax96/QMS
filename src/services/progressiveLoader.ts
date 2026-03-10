@@ -166,7 +166,7 @@ class ProgressiveLoaderService {
                 .from('unified_folders')
                 .select('*')
                 .is('parent_id', null)
-                .eq('archived', false) // ROOT FIX: Correct column name
+                .not('archived', 'is', true) // Treat NULL as active (not archived)
                 .order('name');
 
             const folders: Record<string, any> = {};
@@ -185,7 +185,7 @@ class ProgressiveLoaderService {
             const { data: templatesData } = await supabase
                 .from('form_templates')
                 .select('id, name, folder_id, unified_folder_id, version, created_at, updated_at, archived')
-                .eq('archived', false) // ROOT FIX: Correct filter
+                .not('archived', 'is', true) // Treat NULL as active (not archived)
                 .order('updated_at', { ascending: false })
                 .limit(10);
 
@@ -207,7 +207,7 @@ class ProgressiveLoaderService {
             const { data: instancesData } = await supabase
                 .from('form_instances')
                 .select('id, template_id, folder_id, unified_folder_id, status, created_at, updated_at, created_by, archived')
-                .eq('archived', false) // ROOT FIX: Correct filter
+                .not('archived', 'is', true) // Treat NULL as active (not archived)
                 .order('updated_at', { ascending: false })
                 .limit(20);
 
@@ -248,7 +248,7 @@ class ProgressiveLoaderService {
                 .from('unified_folders') // ROOT FIX: Use unified_folders
                 .select('*')
                 .eq('parent_id', parentId)
-                .eq('archived', false) // ROOT FIX: Use archived
+                .not('archived', 'is', true) // Treat NULL as active (not archived)
                 .order('name');
 
             return data || [];
@@ -273,7 +273,7 @@ class ProgressiveLoaderService {
             let countQuery = supabase
                 .from('form_templates')
                 .select('*', { count: 'exact', head: true })
-                .eq('archived', false);
+                .not('archived', 'is', true);
 
             if (folderId) {
                 countQuery = countQuery.or(`unified_folder_id.eq.${folderId},folder_id.eq.${folderId}`);
@@ -286,7 +286,7 @@ class ProgressiveLoaderService {
             let pageQuery = supabase
                 .from('form_templates')
                 .select('*')
-                .eq('archived', false) // ROOT FIX: Use archived
+                .not('archived', 'is', true) // Treat NULL as active (not archived)
                 .order('updated_at', { ascending: false })
                 .range(from, to);
 
@@ -324,7 +324,7 @@ class ProgressiveLoaderService {
             let countQuery = supabase
                 .from('form_instances')
                 .select('*', { count: 'exact', head: true })
-                .eq('archived', false);
+                .not('archived', 'is', true);
 
             if (folderId) {
                 countQuery = countQuery.or(`unified_folder_id.eq.${folderId},folder_id.eq.${folderId}`);
@@ -337,7 +337,7 @@ class ProgressiveLoaderService {
             let pageQuery = supabase
                 .from('form_instances')
                 .select('*')
-                .eq('archived', false)
+                .not('archived', 'is', true)
                 .order('updated_at', { ascending: false })
                 .range(from, to);
 
@@ -377,14 +377,14 @@ class ProgressiveLoaderService {
                 .from('form_instances')
                 .select('*', { count: 'exact', head: true })
                 .eq('template_id', templateId)
-                .eq('archived', false); // ROOT FIX: Use archived
+                .not('archived', 'is', true); // Treat NULL as active (not archived)
 
             // جلب الصفحة المطلوبة
             const { data } = await supabase
                 .from('form_instances')
                 .select('*')
                 .eq('template_id', templateId)
-                .eq('archived', false) // ROOT FIX: Use archived
+                .not('archived', 'is', true) // Treat NULL as active (not archived)
                 .order('updated_at', { ascending: false })
                 .range(from, to);
 
@@ -416,14 +416,14 @@ class ProgressiveLoaderService {
                 .from('form_templates')
                 .select('*', { count: 'exact', head: true })
                 .ilike('name', `%${query}%`)
-                .eq('archived', false); // ROOT FIX: Use archived
+                .not('archived', 'is', true); // Treat NULL as active (not archived)
 
             // جلب الصفحة المطلوبة
             const { data } = await supabase
                 .from('form_templates')
                 .select('*')
                 .ilike('name', `%${query}%`)
-                .eq('archived', false) // ROOT FIX: Use archived
+                .not('archived', 'is', true) // Treat NULL as active (not archived)
                 .order('updated_at', { ascending: false })
                 .range(from, to);
 

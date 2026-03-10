@@ -397,6 +397,100 @@ export const templatesService = {
 
 // ==================== FORM INSTANCES ====================
 
+const normalizeReportDateKey = (value: unknown): string => {
+    if (typeof value !== 'string') return '';
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    if (trimmed.includes('T')) {
+        return trimmed.split('T')[0] || '';
+    }
+    return trimmed;
+};
+
+const normalizeShiftKey = (value: unknown): string => {
+    if (typeof value !== 'string') return '';
+    return value.trim().toUpperCase();
+};
+
+const toDisplayDate = (dateKey: string): string => {
+    if (!dateKey) return new Date().toLocaleDateString('ar-EG');
+    const parsed = new Date(`${dateKey}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) {
+        return dateKey;
+    }
+    return parsed.toLocaleDateString('ar-EG');
+};
+
+const buildBaseInstanceName = (instance: FormInstance, template?: FormTemplate): string => {
+    const safeFormData = instance?.form_data && typeof instance.form_data === 'object'
+        ? instance.form_data
+        : {};
+
+    const templateName =
+        typeof template?.name === 'string' && template.name.trim()
+            ? template.name.trim()
+            : 'تقرير';
+    const reportDateKey =
+        normalizeReportDateKey((safeFormData as any).report_date) ||
+        normalizeReportDateKey(instance.created_at);
+    const shiftKey = normalizeShiftKey((safeFormData as any).shift);
+    const dateLabel = toDisplayDate(reportDateKey);
+
+    if (shiftKey) {
+        return `${templateName} - ${dateLabel} - وردية ${shiftKey}`;
+    }
+    return `${templateName} - ${dateLabel}`;
+};
+
+const getNameSuffix = (candidateName: string, baseName: string): number => {
+    if (candidateName === baseName) return 1;
+    const match = candidateName.match(new RegExp(`^${baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\((\\d+)\\)$`));
+    if (!match) return 0;
+    const parsed = Number(match[1]);
+    return Number.isFinite(parsed) && parsed > 1 ? parsed : 0;
+};
+
+const resolveUniqueInstanceName = async (
+    baseName: string,
+    folderId: string | null,
+    excludeInstanceId?: string
+): Promise<string> => {
+    let query = supabase
+        .from('form_instances')
+        .select('id, name');
+
+    if (folderId) {
+        query = query.or(`unified_folder_id.eq.${folderId},folder_id.eq.${folderId}`);
+    } else {
+        query = query.or('unified_folder_id.is.null,folder_id.is.null');
+    }
+
+    if (excludeInstanceId) {
+        query = query.neq('id', excludeInstanceId);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+        console.warn('[instancesService] Failed to resolve unique report name, using base name:', error.message);
+        return baseName;
+    }
+
+    const names = (data || [])
+        .map((row: any) => (typeof row?.name === 'string' ? row.name.trim() : ''))
+        .filter(Boolean);
+
+    if (!names.includes(baseName)) {
+        return baseName;
+    }
+
+    let maxSuffix = 1;
+    for (const candidate of names) {
+        maxSuffix = Math.max(maxSuffix, getNameSuffix(candidate, baseName));
+    }
+
+    return `${baseName} (${maxSuffix + 1})`;
+};
+
 export const instancesService = {
     // Create or update an instance
     // Optional template parameter to ensure template exists before saving instance
@@ -428,10 +522,6 @@ export const instancesService = {
             companyId = profile?.company_id || null;
         }
 
-        // Note: attachments field removed as it doesn't exist in database
-        // Generate a name based on template and date if not provided
-        const instanceName = `تقرير ${new Date(instance.created_at).toLocaleDateString('ar-EG')}`;
-
         // LOGICAL FIX: Map folder_id to unified_folder_id
         const unifiedFolderId = sanitizeUUID(instance.folder_id);
 
@@ -439,7 +529,7 @@ export const instancesService = {
         // This prevents INVALID_TRANSITION errors when Tab Store restores old IDs
         const { data: existingRecord } = await supabase
             .from('form_instances')
-            .select('id, status')
+            .select('id, status, name')
             .eq('id', instance.instance_id)
             .maybeSingle();
 
@@ -448,6 +538,16 @@ export const instancesService = {
             console.warn(`⚠️ [saveInstance] Skipping save: Instance ${instance.instance_id} has status "${existingRecord.status}", cannot save as "${instance.status}"`);
             return; // Don't save - would cause INVALID_TRANSITION
         }
+
+        const requestedName =
+            typeof instance.name === 'string' && instance.name.trim()
+                ? instance.name.trim()
+                : null;
+        const baseName = requestedName || buildBaseInstanceName(instance, template);
+        const instanceName = existingRecord?.name && String(existingRecord.name).trim()
+            ? String(existingRecord.name).trim()
+            : await resolveUniqueInstanceName(baseName, unifiedFolderId, instance.instance_id);
+        instance.name = instanceName;
 
         // DEBUG LOGGING
         console.log('[saveInstance] Saving instance:', {
@@ -545,6 +645,58 @@ export const instancesService = {
         return instances;
     },
 
+    async findDuplicateReportsByDetails(params: {
+        templateId: string;
+        folderId: string | null;
+        reportDate: string;
+        shift: string;
+        excludeInstanceId?: string;
+    }): Promise<Array<{ id: string; name: string | null; status: string | null; created_at: string | null }>> {
+        const normalizedDate = normalizeReportDateKey(params.reportDate);
+        const normalizedShift = normalizeShiftKey(params.shift);
+
+        if (!params.templateId || !normalizedDate) {
+            return [];
+        }
+
+        let query = supabase
+            .from('form_instances')
+            .select('id, name, status, created_at, template_id, form_data, archived')
+            .eq('template_id', params.templateId);
+
+        if (params.folderId) {
+            query = query.or(`unified_folder_id.eq.${params.folderId},folder_id.eq.${params.folderId}`);
+        } else {
+            query = query.or('unified_folder_id.is.null,folder_id.is.null');
+        }
+
+        if (params.excludeInstanceId) {
+            query = query.neq('id', params.excludeInstanceId);
+        }
+
+        const { data, error } = await query;
+        if (error) {
+            console.warn('[instancesService] Duplicate details check failed:', error.message);
+            return [];
+        }
+
+        return (data || [])
+            .filter((row: any) => row?.archived !== true)
+            .filter((row: any) => {
+                const rowFormData = row?.form_data && typeof row.form_data === 'object' ? row.form_data : {};
+                const rowDate = normalizeReportDateKey(rowFormData.report_date);
+                const rowShift = normalizeShiftKey(rowFormData.shift);
+
+                return rowDate === normalizedDate && rowShift === normalizedShift;
+            })
+            .map((row: any) => ({
+                id: row.id,
+                name: row.name ?? null,
+                status: row.status ?? null,
+                created_at: row.created_at ?? null,
+            }));
+    },
+
     // Delete an instance
     // Primary path: hard delete (item is already captured in recycle_bin snapshot).
     // Fallback path: soft archive flags only (without status transition) for strict DB policies.
@@ -627,6 +779,7 @@ export const instancesService = {
         const effectiveFolderId = row.unified_folder_id || row.folder_id;
 
         const instance: FormInstance = {
+            name: row.name || undefined,
             instance_id: row.id,
             template_id: row.template_id,
             template_version: row.template_version || '1.0',
