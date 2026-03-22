@@ -12,7 +12,8 @@ import {
     CubeIcon,
     ClipboardDocumentCheckIcon,
     KeyIcon,
-    UserGroupIcon
+    UserGroupIcon,
+    SparklesIcon
 } from '@heroicons/react/24/outline';
 import { SettingsSkeleton } from '../../components/common/LoadingStates';
 
@@ -21,12 +22,13 @@ const CompaniesPage = lazy(() => import('../lab/CompaniesPage'));
 const ProductsPage = lazy(() => import('../settings/ProductsPage'));
 const AuditLogPage = lazy(() => import('../admin/AuditLogPage'));
 const GeneralSettings = lazy(() => import('../../components/settings/GeneralSettings'));
+const AiAssistantSettings = lazy(() => import('../../components/settings/AiAssistantSettings'));
 const AccessManagement = lazy(() => import('../../components/settings/AccessManagement'));
 const NotificationSettings = lazy(() => import('../../components/settings/NotificationSettings'));
 
-type TabType = 'general' | 'access' | 'companies' | 'products' | 'notifications' | 'audit';
+type TabType = 'general' | 'ai' | 'access' | 'companies' | 'products' | 'notifications' | 'audit';
 
-const validSections: TabType[] = ['general', 'access', 'companies', 'products', 'notifications', 'audit'];
+const validSections: TabType[] = ['general', 'ai', 'access', 'companies', 'products', 'notifications', 'audit'];
 
 const SettingsPage: React.FC = () => {
     const [searchParams, setSearchParams] = useSearchParams();
@@ -62,6 +64,7 @@ const SettingsPage: React.FC = () => {
 
     const tabs = [
         { id: 'general' as TabType, name: 'عام', icon: Cog6ToothIcon },
+        { id: 'ai' as TabType, name: 'الذكاء الاصطناعي', icon: SparklesIcon },
         { id: 'access' as TabType, name: 'إدارة الوصول', icon: KeyIcon },
         { id: 'companies' as TabType, name: 'الشركات والعملاء', icon: BuildingOfficeIcon },
         { id: 'products' as TabType, name: 'المنتجات وخطوط الإنتاج', icon: CubeIcon },
@@ -114,6 +117,7 @@ const SettingsPage: React.FC = () => {
             <div className={`${isFullHeightTab ? 'flex-1 overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800' : 'bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 sm:p-6'}`}>
                 <Suspense fallback={<SettingsSkeleton />}>
                     {activeTab === 'general' && <GeneralSettings />}
+                    {activeTab === 'ai' && <AiAssistantSettings />}
                     {activeTab === 'access' && <AccessManagement />}
                     {activeTab === 'companies' && <CompaniesPage />}
                     {activeTab === 'products' && <ProductsPage />}

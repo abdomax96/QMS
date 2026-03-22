@@ -1,0 +1,43 @@
+﻿--
+-- PostgreSQL database dump
+--
+
+-- Dumped from database version 17.6
+-- Dumped by pg_dump version 17.5
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET transaction_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: task_history; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.task_history (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    task_id uuid NOT NULL,
+    action text NOT NULL,
+    old_value jsonb,
+    new_value jsonb,
+    changed_by uuid,
+    changed_by_name text,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- PostgreSQL database dump complete
+--
+

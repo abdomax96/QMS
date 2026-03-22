@@ -6,6 +6,8 @@ import { fetchSystemSettings } from '../services/ncr/settingsService';
 import { dataCache } from '../services/dataCache';
 import { invalidatePermissionCache } from '../services/permissionService';
 
+export const AUTH_STORE_READY_EVENT = 'qms:auth-store-ready';
+
 export interface AuthProfile {
     uid: string;
     email: string;
@@ -32,6 +34,11 @@ interface AuthState {
     signOut: () => Promise<void>;
     updateProfileLocal: (updates: Partial<AuthProfile>) => void;
     initialize: () => Promise<void>;
+}
+
+function emitAuthStoreReady(): void {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent(AUTH_STORE_READY_EVENT));
 }
 
 // Helper to add timeout to promises
@@ -215,6 +222,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
             // Profile loading below is intentionally decoupled: ProtectedRoute and
             // useSupabaseSync can proceed as soon as they see initialized=true.
             set({ initialized: true });
+            emitAuthStoreReady();
 
             // Load profile in the background (after unblocking waiters).
             if (session?.user) {

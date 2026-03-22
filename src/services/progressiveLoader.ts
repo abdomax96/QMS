@@ -164,7 +164,7 @@ class ProgressiveLoaderService {
             // ROOT FIX: Use unified_folders table and 'archived' column
             const { data: foldersData } = await supabase
                 .from('unified_folders')
-                .select('*')
+                .select('id, name, name_en, type, icon, color, parent_id, path, created_at, created_by, updated_at, stats, is_system, department_id, sort_order, description, tags')
                 .is('parent_id', null)
                 .not('archived', 'is', true) // Treat NULL as active (not archived)
                 .order('name');

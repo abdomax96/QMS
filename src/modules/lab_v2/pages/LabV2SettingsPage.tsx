@@ -605,6 +605,7 @@ const LabV2SettingsPage: React.FC = () => {
             </button>
           </div>
         </div>
+
       </div>
     </div>
   );

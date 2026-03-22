@@ -26,10 +26,19 @@ const STATUS_MAP: Record<string, { label: string; variant: 'green' | 'yellow' | 
 
 const ReportsTab: React.FC = () => {
   const navigate = useNavigate();
-  const { isLoading, fetchAllData } = useStore();
+  const { isLoading, fetchAllData, folders, formTemplates, formInstances } = useStore();
   const { kpis, monthlyReports, statusDistribution, recentReports } = useReportsDashboard();
 
-  React.useEffect(() => { fetchAllData(); }, []);
+  React.useEffect(() => {
+    if (isLoading) return;
+    const hasAnyData =
+      Object.keys(folders).length > 0 ||
+      Object.keys(formTemplates).length > 0 ||
+      Object.keys(formInstances).length > 0;
+    if (!hasAnyData) {
+      void fetchAllData();
+    }
+  }, [isLoading, folders, formTemplates, formInstances, fetchAllData]);
 
   const pendingAlert = recentReports
     .filter(r => r.status === 'draft')

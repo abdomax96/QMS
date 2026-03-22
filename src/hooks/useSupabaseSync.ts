@@ -12,12 +12,10 @@
 import { useEffect, useRef, useState } from 'react';
 import useStore from '../store';
 import { isSupabaseConfigured } from '../config/supabase';
-import { useAuthStore } from '../store/authStore';
+import { AUTH_STORE_READY_EVENT, useAuthStore } from '../store/authStore';
 import { progressiveLoader, type ProgressiveLoadProgress } from '../services/progressiveLoader';
 import { logger } from '../utils/logger';
 
-const ESSENTIAL_LOAD_TIMEOUT_MS = 8000;
-const SESSION_CHECK_TIMEOUT_MS = 5000;
 const INIT_FAILSAFE_TIMEOUT_MS = 10000;
 const FULL_SYNC_TIMEOUT_MS = 45000;
 const AUTH_READY_RETRY_DELAY_MS = 1000;
@@ -52,6 +50,17 @@ export const useSupabaseSync = () => {
     const isInitialLoadRef = useRef(true);
     const authRetryAttemptsRef = useRef(0);
     const authRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const shouldPreloadFormsData = (): boolean => {
+        if (typeof window === 'undefined') return false;
+        const path = window.location.pathname || '';
+        return (
+            path.startsWith('/folders') ||
+            path.startsWith('/forms') ||
+            path.startsWith('/forms&reports') ||
+            path.startsWith('/reports')
+        );
+    };
 
     // Progressive loading from Supabase
     useEffect(() => {
@@ -95,20 +104,30 @@ export const useSupabaseSync = () => {
             const AUTH_WAIT_TIMEOUT_MS = 9000;
             const waitForAuth = (): Promise<boolean> =>
                 new Promise((resolve) => {
-                    // authStore.initialize() is already running from App.tsx useEffect.
-                    // initialized is set right after getSession() resolves (within 8s).
-                    const poll = setInterval(() => {
-                        const { initialized } = useAuthStore.getState();
-                        if (initialized) {
-                            clearInterval(poll);
-                            clearTimeout(giveUp);
-                            resolve(true);
-                        }
-                    }, 100);
+                    if (useAuthStore.getState().initialized) {
+                        resolve(true);
+                        return;
+                    }
+
+                    let settled = false;
+                    const cleanup = () => {
+                        window.removeEventListener(AUTH_STORE_READY_EVENT, handleReady);
+                        clearTimeout(giveUp);
+                    };
+                    const finish = (value: boolean) => {
+                        if (settled) return;
+                        settled = true;
+                        cleanup();
+                        resolve(value);
+                    };
+                    const handleReady = () => {
+                        finish(true);
+                    };
                     const giveUp = setTimeout(() => {
-                        clearInterval(poll);
-                        resolve(false);
+                        finish(useAuthStore.getState().initialized);
                     }, AUTH_WAIT_TIMEOUT_MS);
+
+                    window.addEventListener(AUTH_STORE_READY_EVENT, handleReady, { once: true });
                 });
 
                 const authReady = await waitForAuth();
@@ -164,84 +183,82 @@ export const useSupabaseSync = () => {
                 logger.info('🚀 [Progressive Loading] Starting optimized data load...');
 
                 // ==================== STAGE 1: ESSENTIAL DATA ====================
-                logger.info('📦 [Stage 1/3] Loading essential data (user, permissions)...');
-
-                const essentialsStartTime = performance.now();
-                await withTimeout(
-                    progressiveLoader.loadEssentials((progress) => {
-                        if (isCancelled) {
-                            return;
-                        }
-                        setLoadingProgress(progress);
-                        logger.debug(`Progress: ${progress.progress}% - ${progress.message}`);
-                    }),
-                    ESSENTIAL_LOAD_TIMEOUT_MS,
-                    'ESSENTIAL_LOAD_TIMEOUT'
-                );
-
-                const essentialsTime = performance.now() - essentialsStartTime;
-                logger.info(`✅ [Stage 1/3] Essential data loaded in ${essentialsTime.toFixed(0)}ms`);
-
-                // Keep store warm for quick first navigation.
-                useStore.setState(() => ({
-                    // User profile itself is hydrated from auth store.
-                }));
-                logger.info('🎉 [Progressive Loading] Essentials ready, continuing background prefetch.');
-
-                // ==================== STAGE 2: SECONDARY DATA ====================
-                logger.info('📦 [Stage 2/3] Loading secondary data (folders, recent items)...');
-
-                const secondaryStartTime = performance.now();
-                const secondary = await progressiveLoader.loadSecondary((progress) => {
-                    if (!isCancelled) {
-                        setLoadingProgress(progress);
-                    }
-                });
-
-                const secondaryTime = performance.now() - secondaryStartTime;
-                logger.info(`✅ [Stage 2/3] Secondary data loaded in ${secondaryTime.toFixed(0)}ms`);
-
+                logger.info('📦 [Stage 1/3] Preparing startup context...');
                 if (!isCancelled) {
-                    useStore.setState(() => ({
-                        folders: secondary.folders,
-                        formTemplates: secondary.recentTemplates,
-                        formInstances: secondary.recentInstances
-                    }));
-
-                    logger.info('📊 Loaded data summary:', {
-                        folders: Object.keys(secondary.folders).length,
-                        templates: Object.keys(secondary.recentTemplates).length,
-                        instances: Object.keys(secondary.recentInstances).length
-                    });
-
-                    // ==================== STAGE 3: LAZY LOADING ====================
-                    logger.info('✅ [Stage 3/3] Lazy loading configured - data will load on demand');
                     setLoadingProgress({
-                        stage: 'complete',
+                        stage: 'essential',
                         progress: 100,
-                        message: 'جاري مزامنة باقي البيانات...'
+                        message: 'تم تجهيز بيانات المستخدم'
                     });
                 }
+                logger.info('✅ [Stage 1/3] Startup context ready (reused auth-store state)');
 
-                // Final full sync in background: ensures all templates/reports are available.
-                try {
-                    logger.info('📦 [Stage 4/4] Running full background sync...');
-                    await withTimeout(
-                        useStore.getState().fetchAllData(),
-                        FULL_SYNC_TIMEOUT_MS,
-                        'FULL_SYNC_TIMEOUT'
-                    );
+                const preloadFormsData = shouldPreloadFormsData();
+
+                // ==================== STAGE 2: SECONDARY DATA ====================
+                if (preloadFormsData) {
+                    logger.info('📦 [Stage 2/3] Loading secondary data (folders, recent items)...');
+
+                    const secondaryStartTime = performance.now();
+                    const secondary = await progressiveLoader.loadSecondary((progress) => {
+                        if (!isCancelled) {
+                            setLoadingProgress(progress);
+                        }
+                    });
+
+                    const secondaryTime = performance.now() - secondaryStartTime;
+                    logger.info(`✅ [Stage 2/3] Secondary data loaded in ${secondaryTime.toFixed(0)}ms`);
 
                     if (!isCancelled) {
+                        useStore.setState(() => ({
+                            folders: secondary.folders,
+                            formTemplates: secondary.recentTemplates,
+                            formInstances: secondary.recentInstances
+                        }));
+
+                        logger.info('📊 Loaded data summary:', {
+                            folders: Object.keys(secondary.folders).length,
+                            templates: Object.keys(secondary.recentTemplates).length,
+                            instances: Object.keys(secondary.recentInstances).length
+                        });
+
+                        // ==================== STAGE 3: LAZY LOADING ====================
+                        logger.info('✅ [Stage 3/3] Lazy loading configured - data will load on demand');
                         setLoadingProgress({
                             stage: 'complete',
                             progress: 100,
-                            message: 'تم تحديث جميع البيانات'
+                            message: 'جاري مزامنة باقي البيانات...'
                         });
                     }
-                    logger.info('✅ [Stage 4/4] Full background sync completed');
-                } catch (fullSyncError) {
-                    logger.warn('⚠️ Full background sync failed (keeping partial data):', fullSyncError);
+                } else {
+                    logger.info('⏭️ [Stage 2/3] Skipped secondary forms preload for non-forms route');
+                }
+
+                // Full sync is expensive; run only when startup route actually needs
+                // the complete forms/reports dataset. Other modules should stay lightweight.
+                if (preloadFormsData) {
+                    void (async () => {
+                        try {
+                            logger.info('📦 [Stage 4/4] Running full background sync (forms/reports route)...');
+                            await withTimeout(
+                                useStore.getState().fetchAllData(),
+                                FULL_SYNC_TIMEOUT_MS,
+                                'FULL_SYNC_TIMEOUT'
+                            );
+                            if (!isCancelled) {
+                                setLoadingProgress({
+                                    stage: 'complete',
+                                    progress: 100,
+                                    message: 'تم تحديث جميع البيانات'
+                                });
+                            }
+                            logger.info('✅ [Stage 4/4] Full background sync completed');
+                        } catch (fullSyncError) {
+                            logger.warn('⚠️ Full background sync failed (keeping partial data):', fullSyncError);
+                        }
+                    })();
+                } else {
+                    logger.info('⏭️ [Stage 4/4] Skipped full sync at startup for non-forms route');
                 }
 
             } catch (error) {
@@ -254,22 +271,26 @@ export const useSupabaseSync = () => {
                 }
 
                 // Best effort fallback: try full sync once even if staged preload failed.
-                try {
-                    await withTimeout(
-                        useStore.getState().fetchAllData(),
-                        FULL_SYNC_TIMEOUT_MS,
-                        'FULL_SYNC_TIMEOUT_AFTER_PRELOAD_ERROR'
-                    );
-                    if (!isCancelled) {
-                        setLoadingProgress({
-                            stage: 'complete',
-                            progress: 100,
-                            message: 'تم تحديث البيانات بعد إعادة المحاولة'
-                        });
+                if (shouldPreloadFormsData()) {
+                    try {
+                        await withTimeout(
+                            useStore.getState().fetchAllData(),
+                            FULL_SYNC_TIMEOUT_MS,
+                            'FULL_SYNC_TIMEOUT_AFTER_PRELOAD_ERROR'
+                        );
+                        if (!isCancelled) {
+                            setLoadingProgress({
+                                stage: 'complete',
+                                progress: 100,
+                                message: 'تم تحديث البيانات بعد إعادة المحاولة'
+                            });
+                        }
+                        logger.info('✅ Full sync fallback succeeded after preload error');
+                    } catch (fallbackError) {
+                        logger.warn('⚠️ Full sync fallback failed after preload error:', fallbackError);
                     }
-                    logger.info('✅ Full sync fallback succeeded after preload error');
-                } catch (fallbackError) {
-                    logger.warn('⚠️ Full sync fallback failed after preload error:', fallbackError);
+                } else {
+                    logger.info('⏭️ Skipped full sync fallback for non-forms route');
                 }
             } finally {
                 if (!isCancelled) {

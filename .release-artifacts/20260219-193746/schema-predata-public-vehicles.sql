@@ -1,0 +1,49 @@
+﻿--
+-- PostgreSQL database dump
+--
+
+-- Dumped from database version 17.6
+-- Dumped by pg_dump version 17.5
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET transaction_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: vehicles; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.vehicles (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    company_id uuid NOT NULL,
+    vehicle_number text NOT NULL,
+    vehicle_type text,
+    max_capacity_pallets integer,
+    max_capacity_cartons integer,
+    driver_name text,
+    driver_phone text,
+    driver_license text,
+    status text DEFAULT 'registered'::text,
+    registered_at timestamp with time zone DEFAULT now(),
+    dispatched_at timestamp with time zone,
+    CONSTRAINT vehicles_status_check CHECK ((status = ANY (ARRAY['registered'::text, 'inspected'::text, 'loading'::text, 'loaded'::text, 'dispatched'::text]))),
+    CONSTRAINT vehicles_vehicle_type_check CHECK ((vehicle_type = ANY (ARRAY['refrigerated'::text, 'non_refrigerated'::text])))
+);
+
+
+--
+-- PostgreSQL database dump complete
+--
+

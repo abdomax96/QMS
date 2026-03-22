@@ -7,7 +7,7 @@ export interface LabV2Context {
   department_id: string | null;
 }
 
-const LAB_V2_CONTEXT_CACHE_TTL_MS = 60 * 1000;
+const LAB_V2_CONTEXT_CACHE_TTL_MS = 5 * 60 * 1000;
 
 let cachedContext: LabV2Context | null = null;
 let cachedContextAt = 0;
@@ -54,19 +54,24 @@ async function fetchLabV2Context(): Promise<LabV2Context> {
   let department_id: string | null = null;
   let company_id: string | null = null;
 
-  if (user_id) {
-    const { data: profile } = await supabase
+  const profilePromise = user_id
+    ? supabase
       .from('users')
       .select('name, display_name, department_id, company_id')
       .eq('id', user_id)
-      .maybeSingle();
+      .maybeSingle()
+    : Promise.resolve({ data: null } as any);
 
-    user_name = (profile as any)?.display_name || (profile as any)?.name || null;
-    department_id = (profile as any)?.department_id || null;
-    company_id = (profile as any)?.company_id || null;
-  }
+  const [profileResponse, settingsCompany] = await Promise.all([
+    profilePromise,
+    getCompanyIdFromSettings(),
+  ]);
 
-  const settingsCompany = await getCompanyIdFromSettings();
+  const profile = profileResponse?.data as any;
+  user_name = profile?.display_name || profile?.name || null;
+  department_id = profile?.department_id || null;
+  company_id = profile?.company_id || null;
+
   if (settingsCompany) company_id = settingsCompany;
 
   if (!company_id) {

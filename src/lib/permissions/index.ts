@@ -9,7 +9,7 @@ export { useDataIsolation, useFormsDataIsolation, useTasksDataIsolation, useLabD
 
 // ==================== Components ====================
 export { default as PermissionGate, NcrStageGate, PermissionButton, withPermission } from '../../components/common/PermissionGate';
-export { default as ModuleRoute, ModuleAccessDenied, FormsReportsRoute, TasksRoute, LabRoute, NcrRoute, withModulePermission } from '../../components/auth/ModuleRoute';
+export { default as ModuleRoute, ModuleAccessDenied, FormsReportsRoute, TasksRoute, LabRoute, NcrRoute, ChatRoute, withModulePermission } from '../../components/auth/ModuleRoute';
 export { default as ShareButton } from '../../components/common/ShareButton';
 export { default as NcrPermissionActions, NcrActionButton, NcrStageInfo } from '../../components/ncr/NcrPermissionActions';
 
@@ -28,6 +28,7 @@ export const MODULE_CODES = {
     LAB: 'lab',
     NCR: 'ncr',
     CHAT: 'chat',
+    AI_ASSISTANT: 'ai_assistant',
 } as const;
 
 export const PERMISSION_ACTIONS = {

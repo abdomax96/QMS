@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"setLoading\\\\|setIsLoading\" src/**/*.tsx src/**/*.ts)",
+      "Bash(xargs grep -l \"useEffect.*\\\\[\\\\]\")",
+      "Bash(xargs grep -l \"createContext\\\\|Provider\")"
+    ]
+  }
+}

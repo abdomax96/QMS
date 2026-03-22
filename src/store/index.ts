@@ -12,6 +12,39 @@ import type {
 import supabaseService from '../services/supabaseService';
 import { useToastStore } from './toastStore';
 
+const FULL_DATA_SYNC_COOLDOWN_MS = 15000;
+let inFlightFullDataSync: Promise<void> | null = null;
+let lastFullDataSyncAt = 0;
+
+function getEntityVersion(entity: any): string {
+  if (!entity || typeof entity !== 'object') return '';
+  return String(
+    entity.updated_at ??
+    entity.updatedAt ??
+    entity.modified_at ??
+    entity.modifiedAt ??
+    entity.created_at ??
+    entity.createdAt ??
+    ''
+  );
+}
+
+function shouldSkipRealtimeEntityUpdate(existing: any, incoming: any): boolean {
+  if (!existing || !incoming) return false;
+  if (existing === incoming) return true;
+
+  const existingVersion = getEntityVersion(existing);
+  const incomingVersion = getEntityVersion(incoming);
+  if (!existingVersion || !incomingVersion || existingVersion !== incomingVersion) {
+    return false;
+  }
+
+  return (
+    (existing.status ?? null) === (incoming.status ?? null) &&
+    (existing.archived ?? null) === (incoming.archived ?? null)
+  );
+}
+
 interface StoreState extends AppState {
   // Folders (Unified)
   folders: Record<string, Folder>;
@@ -981,11 +1014,10 @@ const useStore = create<StoreState>()(
           .sort((a, b) => a.created_at.localeCompare(b.created_at));
       },
 
-      // Realtime Sync Actions - with equality check to prevent infinite loops
+      // Realtime Sync Actions - fast version checks to prevent expensive deep compares
       syncFolder: (folder) => set((state) => {
-        // Skip update if folder data hasn't changed
         const existing = state.folders[folder.id];
-        if (existing && JSON.stringify(existing) === JSON.stringify(folder)) {
+        if (shouldSkipRealtimeEntityUpdate(existing, folder)) {
           return state;
         }
         return { folders: { ...state.folders, [folder.id]: folder } };
@@ -998,9 +1030,8 @@ const useStore = create<StoreState>()(
       }),
 
       syncTemplate: (template) => set((state) => {
-        // Skip update if template data hasn't changed
         const existing = state.formTemplates[template.id];
-        if (existing && JSON.stringify(existing) === JSON.stringify(template)) {
+        if (shouldSkipRealtimeEntityUpdate(existing, template)) {
           return state;
         }
         return { formTemplates: { ...state.formTemplates, [template.id]: template } };
@@ -1013,12 +1044,14 @@ const useStore = create<StoreState>()(
       }),
 
       syncInstance: (instance) => set((state) => {
-        // Skip update if instance data hasn't changed
-        const existing = state.formInstances[instance.instance_id];
-        if (existing && JSON.stringify(existing) === JSON.stringify(instance)) {
+        const incomingId = (instance as any).instance_id || (instance as any).id;
+        if (!incomingId) return state;
+
+        const existing = state.formInstances[incomingId];
+        if (shouldSkipRealtimeEntityUpdate(existing, instance)) {
           return state;
         }
-        return { formInstances: { ...state.formInstances, [instance.instance_id]: instance } };
+        return { formInstances: { ...state.formInstances, [incomingId]: instance } };
       }),
 
       syncDeleteInstance: (id) => set((state) => {
@@ -1029,19 +1062,33 @@ const useStore = create<StoreState>()(
 
       // Data Fetching
       fetchAllData: async () => {
-        set({ isLoading: true });
-        try {
-          const { folders, templates, instances } = await supabaseService.batch.loadAllData();
-          set({
-            folders,
-            formTemplates: templates,
-            formInstances: instances,
-            isLoading: false
-          });
-        } catch (error) {
-          console.error('Error fetching data:', error);
-          set({ isLoading: false });
+        const now = Date.now();
+        if (inFlightFullDataSync) {
+          return inFlightFullDataSync;
         }
+        if (now - lastFullDataSyncAt < FULL_DATA_SYNC_COOLDOWN_MS) {
+          return Promise.resolve();
+        }
+
+        set({ isLoading: true });
+        inFlightFullDataSync = (async () => {
+          try {
+            const { folders, templates, instances } = await supabaseService.batch.loadAllData();
+            set({
+              folders,
+              formTemplates: templates,
+              formInstances: instances
+            });
+            lastFullDataSyncAt = Date.now();
+          } catch (error) {
+            console.error('Error fetching data:', error);
+          } finally {
+            set({ isLoading: false });
+            inFlightFullDataSync = null;
+          }
+        })();
+
+        return inFlightFullDataSync;
       }
     }),
     {

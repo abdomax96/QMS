@@ -14,8 +14,10 @@ import {
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { useSearchParams } from 'react-router-dom';
 import { useSupabaseAuth } from '../../hooks/useSupabaseAuth';
+import { useModulePermissions } from '../../hooks/useModulePermissions';
 import { useToastStore } from '../../store/toastStore';
 import chatService from '../../services/chatService';
+import AiAssistantPanel from '../../components/chat/AiAssistantPanel';
 import type { ChatConversationSummary, ChatDepartment, ChatMessage, ChatUser } from '../../types/chat';
 
 type ChatCreationMode = 'direct' | 'department' | 'group';
@@ -60,6 +62,7 @@ const getUserDisplayName = (user?: { name?: string | null; email?: string | null
 
 const ChatPage: React.FC = () => {
     const { profile } = useSupabaseAuth();
+    const { canAccess, canPerform } = useModulePermissions();
     const [searchParams, setSearchParams] = useSearchParams();
     const showSuccess = useToastStore(state => state.success);
     const showError = useToastStore(state => state.error);
@@ -85,6 +88,7 @@ const ChatPage: React.FC = () => {
     const [selectedGroupUserIds, setSelectedGroupUserIds] = useState<string[]>([]);
     const [pageError, setPageError] = useState<string | null>(null);
     const [archivingConversation, setArchivingConversation] = useState(false);
+    const [activeWorkspace, setActiveWorkspace] = useState<'chat' | 'ai'>('chat');
     const [showMentions, setShowMentions] = useState(false);
     const [mentionQuery, setMentionQuery] = useState('');
     const [mentionRange, setMentionRange] = useState<{ start: number; end: number } | null>(null);
@@ -102,6 +106,13 @@ const ChatPage: React.FC = () => {
 
     const currentUserId = profile?.uid || null;
     const requestedConversationId = searchParams.get('conversation');
+    const requestedWorkspace = searchParams.get('mode');
+    const hasChatAccess =
+        canAccess('chat')
+        && (canPerform('chat', 'view_conversations') || canPerform('chat', 'view'));
+    const hasAiAccess =
+        canAccess('ai_assistant')
+        && (canPerform('ai_assistant', 'view') || canPerform('ai_assistant', 'send_message'));
 
     const activeConversation = useMemo(
         () => conversations.find(conversation => conversation.id === activeConversationId) || null,
@@ -130,6 +141,35 @@ const ChatPage: React.FC = () => {
         document.addEventListener('click', handleClick);
         return () => document.removeEventListener('click', handleClick);
     }, [messageMenuId]);
+
+    useEffect(() => {
+        if (requestedWorkspace === 'ai' && hasAiAccess) {
+            setActiveWorkspace('ai');
+            return;
+        }
+
+        if (!hasChatAccess && hasAiAccess) {
+            setActiveWorkspace('ai');
+            return;
+        }
+
+        if (!hasAiAccess && activeWorkspace === 'ai') {
+            setActiveWorkspace('chat');
+        }
+    }, [requestedWorkspace, hasAiAccess, hasChatAccess, activeWorkspace]);
+
+    const handleWorkspaceChange = useCallback((nextWorkspace: 'chat' | 'ai') => {
+        if (nextWorkspace === 'ai' && !hasAiAccess) return;
+
+        setActiveWorkspace(nextWorkspace);
+        const nextParams = new URLSearchParams(searchParams);
+        if (nextWorkspace === 'ai') {
+            nextParams.set('mode', 'ai');
+        } else {
+            nextParams.delete('mode');
+        }
+        setSearchParams(nextParams, { replace: true });
+    }, [hasAiAccess, searchParams, setSearchParams]);
 
     const availableUsers = useMemo(() => {
         if (!currentUserId) return [];
@@ -246,24 +286,26 @@ const ChatPage: React.FC = () => {
 
     useEffect(() => {
         setPageError(null);
-        if (!currentUserId) return;
+        if (!currentUserId || !hasChatAccess || activeWorkspace !== 'chat') {
+            return;
+        }
 
         void Promise.all([
             loadConversations(),
             loadUsers()
         ]);
-    }, [currentUserId, loadConversations, loadUsers]);
+    }, [currentUserId, hasChatAccess, activeWorkspace, loadConversations, loadUsers]);
 
     useEffect(() => {
-        if (!activeConversationId) {
+        if (!hasChatAccess || activeWorkspace !== 'chat' || !activeConversationId) {
             setMessages([]);
             return;
         }
         void loadMessages(activeConversationId);
-    }, [activeConversationId, loadMessages]);
+    }, [hasChatAccess, activeWorkspace, activeConversationId, loadMessages]);
 
     useEffect(() => {
-        if (!currentUserId) return;
+        if (!currentUserId || !hasChatAccess || activeWorkspace !== 'chat') return;
         chatService.removeSubscription(conversationFeedChannelRef.current);
 
         conversationFeedChannelRef.current = chatService.subscribeConversationFeed(() => {
@@ -274,11 +316,11 @@ const ChatPage: React.FC = () => {
             chatService.removeSubscription(conversationFeedChannelRef.current);
             conversationFeedChannelRef.current = null;
         };
-    }, [currentUserId, loadConversations]);
+    }, [currentUserId, hasChatAccess, activeWorkspace, loadConversations]);
 
     useEffect(() => {
         chatService.removeSubscription(messagesFeedChannelRef.current);
-        if (!activeConversationId) return;
+        if (!hasChatAccess || activeWorkspace !== 'chat' || !activeConversationId) return;
 
         messagesFeedChannelRef.current = chatService.subscribeConversationMessages(activeConversationId, () => {
             void loadMessages(activeConversationId, false);
@@ -289,7 +331,7 @@ const ChatPage: React.FC = () => {
             chatService.removeSubscription(messagesFeedChannelRef.current);
             messagesFeedChannelRef.current = null;
         };
-    }, [activeConversationId, loadMessages, loadConversations]);
+    }, [hasChatAccess, activeWorkspace, activeConversationId, loadMessages, loadConversations]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -655,20 +697,61 @@ const ChatPage: React.FC = () => {
 
     return (
         <div className="h-full box-border p-4 md:p-6 flex flex-col overflow-hidden">
-            <div className="mb-4">
-                <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">الدردشة الداخلية</h1>
-                <p className="text-sm text-slate-600 dark:text-slate-400">
-                    محادثات مباشرة/أقسام/مجموعات مع مرفقات وتحديث لحظي. اكتب
-                    {' '}<span dir="ltr" className="font-medium">@</span> لعرض المستخدمين والبحث بالاسم.
-                </p>
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+                        {activeWorkspace === 'ai' ? 'المساعد الذكي' : 'الدردشة الداخلية'}
+                    </h1>
+                    <p className="text-sm text-slate-600 dark:text-slate-400">
+                        {activeWorkspace === 'ai'
+                            ? 'محادثة ذكية مع اقتراحات إجراءات محفوظة بالتدقيق. التنفيذ المباشر غير مفعّل في هذه النسخة.'
+                            : <>محادثات مباشرة/أقسام/مجموعات مع مرفقات وتحديث لحظي. اكتب {' '}<span dir="ltr" className="font-medium">@</span> لعرض المستخدمين والبحث بالاسم.</>}
+                    </p>
+                </div>
+
+                {hasAiAccess && (
+                    <div className="inline-flex rounded-corporate border border-slate-300 bg-white p-1 text-xs dark:border-slate-600 dark:bg-slate-800">
+                        <button
+                            type="button"
+                            onClick={() => handleWorkspaceChange('chat')}
+                            disabled={!hasChatAccess}
+                            className={`rounded-corporate px-3 py-1.5 font-medium transition ${
+                                activeWorkspace === 'chat'
+                                    ? 'bg-primary-600 text-white'
+                                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700'
+                            } ${!hasChatAccess ? 'cursor-not-allowed opacity-50' : ''}`}
+                        >
+                            الدردشة
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => handleWorkspaceChange('ai')}
+                            className={`rounded-corporate px-3 py-1.5 font-medium transition ${
+                                activeWorkspace === 'ai'
+                                    ? 'bg-primary-600 text-white'
+                                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700'
+                            }`}
+                        >
+                            AI Assistant
+                        </button>
+                    </div>
+                )}
             </div>
 
-            {pageError && (
+            {activeWorkspace === 'chat' && pageError && (
                 <div className="mb-4 rounded-corporate border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-300">
                     {pageError}
                 </div>
             )}
 
+            {activeWorkspace === 'ai' ? (
+                <AiAssistantPanel />
+            ) : !hasChatAccess ? (
+                <div className="rounded-corporate-lg border border-slate-200 bg-white p-6 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                    لا تملك صلاحية استخدام الدردشة الداخلية. يمكنك استخدام تبويب المساعد الذكي فقط.
+                </div>
+            ) : (
+            <>
             <div className="grid flex-1 min-h-0 grid-cols-1 overflow-hidden rounded-corporate-lg border border-slate-200 bg-white shadow-soft dark:border-slate-700 dark:bg-slate-800 lg:grid-cols-[320px_1fr]">
                 <aside className="border-b border-slate-200 dark:border-slate-700 lg:border-b-0 lg:border-l flex flex-col min-h-0">
                     <div className="flex items-center justify-between border-b border-slate-200 px-3 py-3 dark:border-slate-700">
@@ -1187,6 +1270,8 @@ const ChatPage: React.FC = () => {
                         </div>
                     </div>
                 </div>
+            )}
+            </>
             )}
         </div>
     );

@@ -1,0 +1,146 @@
+[
+  {
+    "name": "Amiri-Bold.ttf",
+    "path": "ofl/amiri/Amiri-Bold.ttf",
+    "sha": "017afa9adb8ce417b08796d22d9204569ad211c7",
+    "size": 413480,
+    "url": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/Amiri-Bold.ttf?ref=main",
+    "html_url": "https://github.com/google/fonts/blob/main/ofl/amiri/Amiri-Bold.ttf",
+    "git_url": "https://api.github.com/repos/google/fonts/git/blobs/017afa9adb8ce417b08796d22d9204569ad211c7",
+    "download_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/amiri/Amiri-Bold.ttf",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/Amiri-Bold.ttf?ref=main",
+      "git": "https://api.github.com/repos/google/fonts/git/blobs/017afa9adb8ce417b08796d22d9204569ad211c7",
+      "html": "https://github.com/google/fonts/blob/main/ofl/amiri/Amiri-Bold.ttf"
+    }
+  },
+  {
+    "name": "Amiri-BoldItalic.ttf",
+    "path": "ofl/amiri/Amiri-BoldItalic.ttf",
+    "sha": "9ddad061cf954ec089fe45f386c772fc16c297dc",
+    "size": 409692,
+    "url": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/Amiri-BoldItalic.ttf?ref=main",
+    "html_url": "https://github.com/google/fonts/blob/main/ofl/amiri/Amiri-BoldItalic.ttf",
+    "git_url": "https://api.github.com/repos/google/fonts/git/blobs/9ddad061cf954ec089fe45f386c772fc16c297dc",
+    "download_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/amiri/Amiri-BoldItalic.ttf",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/Amiri-BoldItalic.ttf?ref=main",
+      "git": "https://api.github.com/repos/google/fonts/git/blobs/9ddad061cf954ec089fe45f386c772fc16c297dc",
+      "html": "https://github.com/google/fonts/blob/main/ofl/amiri/Amiri-BoldItalic.ttf"
+    }
+  },
+  {
+    "name": "Amiri-Italic.ttf",
+    "path": "ofl/amiri/Amiri-Italic.ttf",
+    "sha": "df72bf385ad8229c4e5c9103603d148358e76f32",
+    "size": 428532,
+    "url": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/Amiri-Italic.ttf?ref=main",
+    "html_url": "https://github.com/google/fonts/blob/main/ofl/amiri/Amiri-Italic.ttf",
+    "git_url": "https://api.github.com/repos/google/fonts/git/blobs/df72bf385ad8229c4e5c9103603d148358e76f32",
+    "download_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/amiri/Amiri-Italic.ttf",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/Amiri-Italic.ttf?ref=main",
+      "git": "https://api.github.com/repos/google/fonts/git/blobs/df72bf385ad8229c4e5c9103603d148358e76f32",
+      "html": "https://github.com/google/fonts/blob/main/ofl/amiri/Amiri-Italic.ttf"
+    }
+  },
+  {
+    "name": "Amiri-Regular.ttf",
+    "path": "ofl/amiri/Amiri-Regular.ttf",
+    "sha": "14dfa0d6c80db50460d23daa306a7ac92e74676f",
+    "size": 431116,
+    "url": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/Amiri-Regular.ttf?ref=main",
+    "html_url": "https://github.com/google/fonts/blob/main/ofl/amiri/Amiri-Regular.ttf",
+    "git_url": "https://api.github.com/repos/google/fonts/git/blobs/14dfa0d6c80db50460d23daa306a7ac92e74676f",
+    "download_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/amiri/Amiri-Regular.ttf",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/Amiri-Regular.ttf?ref=main",
+      "git": "https://api.github.com/repos/google/fonts/git/blobs/14dfa0d6c80db50460d23daa306a7ac92e74676f",
+      "html": "https://github.com/google/fonts/blob/main/ofl/amiri/Amiri-Regular.ttf"
+    }
+  },
+  {
+    "name": "DESCRIPTION.en_us.html",
+    "path": "ofl/amiri/DESCRIPTION.en_us.html",
+    "sha": "158216860f697bd04cfb88d6216f6a0c8971b4a4",
+    "size": 481,
+    "url": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/DESCRIPTION.en_us.html?ref=main",
+    "html_url": "https://github.com/google/fonts/blob/main/ofl/amiri/DESCRIPTION.en_us.html",
+    "git_url": "https://api.github.com/repos/google/fonts/git/blobs/158216860f697bd04cfb88d6216f6a0c8971b4a4",
+    "download_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/amiri/DESCRIPTION.en_us.html",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/DESCRIPTION.en_us.html?ref=main",
+      "git": "https://api.github.com/repos/google/fonts/git/blobs/158216860f697bd04cfb88d6216f6a0c8971b4a4",
+      "html": "https://github.com/google/fonts/blob/main/ofl/amiri/DESCRIPTION.en_us.html"
+    }
+  },
+  {
+    "name": "METADATA.pb",
+    "path": "ofl/amiri/METADATA.pb",
+    "sha": "b16ef87c3d6f2916f035bdcd86c1b2f7daef979f",
+    "size": 1857,
+    "url": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/METADATA.pb?ref=main",
+    "html_url": "https://github.com/google/fonts/blob/main/ofl/amiri/METADATA.pb",
+    "git_url": "https://api.github.com/repos/google/fonts/git/blobs/b16ef87c3d6f2916f035bdcd86c1b2f7daef979f",
+    "download_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/amiri/METADATA.pb",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/METADATA.pb?ref=main",
+      "git": "https://api.github.com/repos/google/fonts/git/blobs/b16ef87c3d6f2916f035bdcd86c1b2f7daef979f",
+      "html": "https://github.com/google/fonts/blob/main/ofl/amiri/METADATA.pb"
+    }
+  },
+  {
+    "name": "OFL.txt",
+    "path": "ofl/amiri/OFL.txt",
+    "sha": "a6051797e5f1910347b586dc06d4c1130f00da28",
+    "size": 4389,
+    "url": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/OFL.txt?ref=main",
+    "html_url": "https://github.com/google/fonts/blob/main/ofl/amiri/OFL.txt",
+    "git_url": "https://api.github.com/repos/google/fonts/git/blobs/a6051797e5f1910347b586dc06d4c1130f00da28",
+    "download_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/amiri/OFL.txt",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/OFL.txt?ref=main",
+      "git": "https://api.github.com/repos/google/fonts/git/blobs/a6051797e5f1910347b586dc06d4c1130f00da28",
+      "html": "https://github.com/google/fonts/blob/main/ofl/amiri/OFL.txt"
+    }
+  },
+  {
+    "name": "config.yaml",
+    "path": "ofl/amiri/config.yaml",
+    "sha": "f704b3b38464b1127fd491e43e1dd51b73d9cc98",
+    "size": 93,
+    "url": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/config.yaml?ref=main",
+    "html_url": "https://github.com/google/fonts/blob/main/ofl/amiri/config.yaml",
+    "git_url": "https://api.github.com/repos/google/fonts/git/blobs/f704b3b38464b1127fd491e43e1dd51b73d9cc98",
+    "download_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/amiri/config.yaml",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/config.yaml?ref=main",
+      "git": "https://api.github.com/repos/google/fonts/git/blobs/f704b3b38464b1127fd491e43e1dd51b73d9cc98",
+      "html": "https://github.com/google/fonts/blob/main/ofl/amiri/config.yaml"
+    }
+  },
+  {
+    "name": "upstream_info.md",
+    "path": "ofl/amiri/upstream_info.md",
+    "sha": "80ec4f5a7ca3881dd04a4d6b5206bc768716fdda",
+    "size": 1208,
+    "url": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/upstream_info.md?ref=main",
+    "html_url": "https://github.com/google/fonts/blob/main/ofl/amiri/upstream_info.md",
+    "git_url": "https://api.github.com/repos/google/fonts/git/blobs/80ec4f5a7ca3881dd04a4d6b5206bc768716fdda",
+    "download_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/amiri/upstream_info.md",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/google/fonts/contents/ofl/amiri/upstream_info.md?ref=main",
+      "git": "https://api.github.com/repos/google/fonts/git/blobs/80ec4f5a7ca3881dd04a4d6b5206bc768716fdda",
+      "html": "https://github.com/google/fonts/blob/main/ofl/amiri/upstream_info.md"
+    }
+  }
+]

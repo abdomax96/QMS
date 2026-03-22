@@ -1,0 +1,82 @@
+[
+  {
+    "name": "DESCRIPTION.en_us.html",
+    "path": "ofl/notonaskharabic/DESCRIPTION.en_us.html",
+    "sha": "6876f6345708b3f98522b8e9fe20007c490aa59a",
+    "size": 305,
+    "url": "https://api.github.com/repos/google/fonts/contents/ofl/notonaskharabic/DESCRIPTION.en_us.html?ref=main",
+    "html_url": "https://github.com/google/fonts/blob/main/ofl/notonaskharabic/DESCRIPTION.en_us.html",
+    "git_url": "https://api.github.com/repos/google/fonts/git/blobs/6876f6345708b3f98522b8e9fe20007c490aa59a",
+    "download_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notonaskharabic/DESCRIPTION.en_us.html",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/google/fonts/contents/ofl/notonaskharabic/DESCRIPTION.en_us.html?ref=main",
+      "git": "https://api.github.com/repos/google/fonts/git/blobs/6876f6345708b3f98522b8e9fe20007c490aa59a",
+      "html": "https://github.com/google/fonts/blob/main/ofl/notonaskharabic/DESCRIPTION.en_us.html"
+    }
+  },
+  {
+    "name": "METADATA.pb",
+    "path": "ofl/notonaskharabic/METADATA.pb",
+    "sha": "37dc7d09fcbf15c9f92f70bb6296b13c4ef27452",
+    "size": 4340,
+    "url": "https://api.github.com/repos/google/fonts/contents/ofl/notonaskharabic/METADATA.pb?ref=main",
+    "html_url": "https://github.com/google/fonts/blob/main/ofl/notonaskharabic/METADATA.pb",
+    "git_url": "https://api.github.com/repos/google/fonts/git/blobs/37dc7d09fcbf15c9f92f70bb6296b13c4ef27452",
+    "download_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notonaskharabic/METADATA.pb",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/google/fonts/contents/ofl/notonaskharabic/METADATA.pb?ref=main",
+      "git": "https://api.github.com/repos/google/fonts/git/blobs/37dc7d09fcbf15c9f92f70bb6296b13c4ef27452",
+      "html": "https://github.com/google/fonts/blob/main/ofl/notonaskharabic/METADATA.pb"
+    }
+  },
+  {
+    "name": "NotoNaskhArabic[wght].ttf",
+    "path": "ofl/notonaskharabic/NotoNaskhArabic[wght].ttf",
+    "sha": "a8d2867262dc7bb28492ad746de5d56235735c8b",
+    "size": 307592,
+    "url": "https://api.github.com/repos/google/fonts/contents/ofl/notonaskharabic/NotoNaskhArabic[wght].ttf?ref=main",
+    "html_url": "https://github.com/google/fonts/blob/main/ofl/notonaskharabic/NotoNaskhArabic[wght].ttf",
+    "git_url": "https://api.github.com/repos/google/fonts/git/blobs/a8d2867262dc7bb28492ad746de5d56235735c8b",
+    "download_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notonaskharabic/NotoNaskhArabic%5Bwght%5D.ttf",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/google/fonts/contents/ofl/notonaskharabic/NotoNaskhArabic[wght].ttf?ref=main",
+      "git": "https://api.github.com/repos/google/fonts/git/blobs/a8d2867262dc7bb28492ad746de5d56235735c8b",
+      "html": "https://github.com/google/fonts/blob/main/ofl/notonaskharabic/NotoNaskhArabic[wght].ttf"
+    }
+  },
+  {
+    "name": "OFL.txt",
+    "path": "ofl/notonaskharabic/OFL.txt",
+    "sha": "d4e170557fc8bcf8d1dcb317d9f1accaf8acf223",
+    "size": 4382,
+    "url": "https://api.github.com/repos/google/fonts/contents/ofl/notonaskharabic/OFL.txt?ref=main",
+    "html_url": "https://github.com/google/fonts/blob/main/ofl/notonaskharabic/OFL.txt",
+    "git_url": "https://api.github.com/repos/google/fonts/git/blobs/d4e170557fc8bcf8d1dcb317d9f1accaf8acf223",
+    "download_url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notonaskharabic/OFL.txt",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/google/fonts/contents/ofl/notonaskharabic/OFL.txt?ref=main",
+      "git": "https://api.github.com/repos/google/fonts/git/blobs/d4e170557fc8bcf8d1dcb317d9f1accaf8acf223",
+      "html": "https://github.com/google/fonts/blob/main/ofl/notonaskharabic/OFL.txt"
+    }
+  },
+  {
+    "name": "article",
+    "path": "ofl/notonaskharabic/article",
+    "sha": "1df1b3029fd5a4fb37c5d77039a845bfc436a068",
+    "size": 0,
+    "url": "https://api.github.com/repos/google/fonts/contents/ofl/notonaskharabic/article?ref=main",
+    "html_url": "https://github.com/google/fonts/tree/main/ofl/notonaskharabic/article",
+    "git_url": "https://api.github.com/repos/google/fonts/git/trees/1df1b3029fd5a4fb37c5d77039a845bfc436a068",
+    "download_url": null,
+    "type": "dir",
+    "_links": {
+      "self": "https://api.github.com/repos/google/fonts/contents/ofl/notonaskharabic/article?ref=main",
+      "git": "https://api.github.com/repos/google/fonts/git/trees/1df1b3029fd5a4fb37c5d77039a845bfc436a068",
+      "html": "https://github.com/google/fonts/tree/main/ofl/notonaskharabic/article"
+    }
+  }
+]

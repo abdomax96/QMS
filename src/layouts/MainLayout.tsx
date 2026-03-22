@@ -17,13 +17,16 @@ import {
   FolderOpenIcon,
   ChartBarIcon,
   ChartPieIcon,
-  PresentationChartLineIcon
+  PresentationChartLineIcon,
+  SparklesIcon,
+  XMarkIcon
 } from '@heroicons/react/24/outline';
 import { Link, Outlet, useLocation, useNavigate, ScrollRestoration } from 'react-router-dom';
 import useStore from '../store';
 import { cn } from '../utils';
 import { NotificationCenter } from '../components/notifications';
 import ChatDrawer from '../components/chat/ChatDrawer';
+import AiAssistantPanel from '../components/chat/AiAssistantPanel';
 import { useSupabaseAuth } from '../hooks/useSupabaseAuth';
 import { useLanguageStore } from '../store/languageStore';
 import { useAppSettingsStore } from '../store/appSettingsStore';
@@ -98,6 +101,7 @@ const MainLayout: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [aiOverlayOpen, setAiOverlayOpen] = useState(false);
 
   // Tabs Logic
   const { tabs, getTab, closeTab: closeTabStore, updateTabState, markDirty } = useTabsStore();
@@ -105,6 +109,12 @@ const MainLayout: React.FC = () => {
 
   // taskbarMinimized state removed - Taskbar no longer used
   const [confirmDialog, setConfirmDialog] = useState<{ isOpen: boolean; tabId: string; title: string } | null>(null);
+
+  // Module permissions hook
+  const { canAccess, canPerform, loading: permissionsLoading, permissions } = useModulePermissions();
+  const hasAiAssistantAccess =
+    canAccess('ai_assistant') &&
+    (canPerform('ai_assistant', 'view') || canPerform('ai_assistant', 'send_message'));
 
   // Handle tab close request
   const handleTabClose = useCallback(async (tabId: string, isDirty: boolean): Promise<boolean> => {
@@ -204,15 +214,37 @@ const MainLayout: React.FC = () => {
     };
   }, [isMobileViewport, mobileSidebarOpen]);
 
+  useEffect(() => {
+    if (!hasAiAssistantAccess && aiOverlayOpen) {
+      setAiOverlayOpen(false);
+    }
+  }, [hasAiAssistantAccess, aiOverlayOpen]);
+
+  useEffect(() => {
+    if (!aiOverlayOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setAiOverlayOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [aiOverlayOpen]);
+
   const effectiveSidebarCollapsed = isMobileViewport ? false : sidebarCollapsed;
   const iconSize = effectiveSidebarCollapsed ? "w-6 h-6" : "w-5 h-5";
 
   // Proactive session health check on navigation
   // This prevents infinite loading by validating session before navigation attempts
   useSessionHealth({ debug: import.meta.env.DEV });
-
-  // Module permissions hook
-  const { canAccess, loading: permissionsLoading, permissions } = useModulePermissions();
 
   // Debug: Log permissions
   useEffect(() => {
@@ -317,11 +349,14 @@ const MainLayout: React.FC = () => {
 
   // Filter nav items based on module permissions (recursively for groups)
   const filterNavItems = (items: NavItem[]): NavItem[] => {
+    const canAccessChatEntry = () => canAccess('chat') || canAccess('ai_assistant');
+
     return items.map(item => {
       if (item.isGroup && item.children) {
         const filteredChildren = item.children.filter(child => {
           if (!child.requiresPermission) return true;
           if (permissionsLoading) return false;
+          if (child.path === '/chat') return canAccessChatEntry();
           if (child.moduleCode) return canAccess(child.moduleCode);
           return true;
         });
@@ -332,6 +367,7 @@ const MainLayout: React.FC = () => {
       // Regular item
       if (!item.requiresPermission) return item;
       if (permissionsLoading) return null;
+      if (item.path === '/chat') return canAccessChatEntry() ? item : null;
       if (item.moduleCode && !canAccess(item.moduleCode)) return null;
       return item;
     }).filter((item): item is NavItem => item !== null);
@@ -604,6 +640,18 @@ const MainLayout: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-1 sm:gap-2">
+            {hasAiAssistantAccess && (
+              <button
+                type="button"
+                onClick={() => setAiOverlayOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-corporate border border-primary-200 bg-primary-50 px-2.5 py-2 text-primary-700 transition-all duration-200 hover:bg-primary-100 dark:border-primary-800/70 dark:bg-primary-900/30 dark:text-primary-300 dark:hover:bg-primary-900/50"
+                title="المساعد الذكي"
+              >
+                <SparklesIcon className="h-5 w-5" />
+                <span className="hidden lg:inline text-xs font-semibold">AI</span>
+              </button>
+            )}
+
             {/* Theme Toggle */}
             <button
               onClick={toggleTheme}
@@ -768,6 +816,38 @@ const MainLayout: React.FC = () => {
       )}
 
       {chatProvider !== 'mattermost' && !isReportPreviewRoute && <ChatDrawer />}
+
+      {aiOverlayOpen && hasAiAssistantAccess && !isReportPreviewRoute && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center p-2 sm:p-4">
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/45 backdrop-blur-[1px]"
+            aria-label="إغلاق المساعد الذكي"
+            onClick={() => setAiOverlayOpen(false)}
+          />
+
+          <div className="relative z-[91] flex h-[95vh] w-full max-w-[1280px] flex-col overflow-hidden rounded-corporate-xl border border-slate-200 bg-white shadow-soft-lg dark:border-slate-700 dark:bg-slate-800">
+            <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2.5 dark:border-slate-700">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
+                <SparklesIcon className="h-4 w-4 text-primary-600 dark:text-primary-400" />
+                المساعد الذكي
+              </h3>
+              <button
+                type="button"
+                onClick={() => setAiOverlayOpen(false)}
+                className="rounded-corporate p-1.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+                aria-label="إغلاق"
+              >
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 p-2 sm:p-3">
+              <AiAssistantPanel />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

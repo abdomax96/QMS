@@ -43,6 +43,7 @@ export const ModuleAccessDenied: React.FC<AccessDeniedProps> = ({ module, action
         lab: 'المختبر',
         ncr: 'NCR والمحتجزات',
         chat: 'الدردشة',
+        ai_assistant: 'المساعد الذكي',
     };
 
     const actionNames: Record<string, string> = {
@@ -61,6 +62,13 @@ export const ModuleAccessDenied: React.FC<AccessDeniedProps> = ({ module, action
         manage_conversation: 'إدارة المحادثة',
         manage_department_chat: 'إدارة دردشة القسم',
         moderate_chat: 'إدارة الإشراف',
+        create_thread: 'إنشاء جلسة AI',
+        view_history: 'عرض سجل المساعد',
+        manage_threads: 'إدارة جلسات المساعد',
+        execute_low_risk: 'تنفيذ منخفض الخطورة',
+        execute_medium_risk: 'تنفيذ متوسط الخطورة',
+        execute_high_risk: 'تنفيذ عالي الخطورة',
+        manage_settings: 'إدارة إعدادات المساعد',
     };
 
     const moduleName = moduleNames[module] || module;
@@ -256,6 +264,28 @@ export const NcrRoute: React.FC<{ children: React.ReactNode; action?: string | s
         {children}
     </ModuleRoute>
 );
+
+export const ChatRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+    const { canAccess, canPerform, loading } = useModulePermissions();
+
+    if (loading) {
+        return <DefaultLoadingFallback />;
+    }
+
+    const hasChatAccess =
+        canAccess('chat') &&
+        (canPerform('chat', 'view_conversations') || canPerform('chat', 'view'));
+
+    const hasAiAccess =
+        canAccess('ai_assistant') &&
+        (canPerform('ai_assistant', 'view') || canPerform('ai_assistant', 'send_message'));
+
+    if (!hasChatAccess && !hasAiAccess) {
+        return <ModuleAccessDenied module="ai_assistant" action="view" />;
+    }
+
+    return <>{children}</>;
+};
 
 export default ModuleRoute;
 

@@ -7,6 +7,8 @@ import { supabase } from '../config/supabase';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import type { Folder, FormTemplate, FormInstance } from '../types';
 
+const SUPABASE_PAGE_SIZE = 300;
+
 // ==================== FOLDERS ====================
 
 export const foldersService = {
@@ -59,26 +61,41 @@ export const foldersService = {
         console.log('[Supabase] Fetching folders via REST API...', departmentIds ? `(filtered by ${departmentIds.length} departments)` : '(no filter)');
         const startTime = Date.now();
 
-        // Removed metadata and permissions from select, added tags
-        let query = supabase.from('unified_folders').select('id, name, name_en, type, icon, color, parent_id, path, created_at, created_by, updated_at, stats, is_system, department_id, sort_order, description, tags');
+        const rows: any[] = [];
+        let offset = 0;
 
-        // Apply department filter if provided
-        if (departmentIds && departmentIds.length > 0) {
-            query = query.in('department_id', departmentIds);
+        while (true) {
+            let pageQuery = supabase
+                .from('unified_folders')
+                .select('id, name, name_en, type, icon, color, parent_id, path, created_at, created_by, updated_at, stats, is_system, department_id, sort_order, description, tags')
+                .order('id', { ascending: true })
+                .range(offset, offset + SUPABASE_PAGE_SIZE - 1);
+
+            if (departmentIds && departmentIds.length > 0) {
+                pageQuery = pageQuery.in('department_id', departmentIds);
+            }
+
+            const { data: pageRows, error } = await pageQuery;
+            if (error) {
+                console.warn('[Supabase] Error fetching folders:', error.message);
+                return {};
+            }
+
+            const currentPage = pageRows || [];
+            rows.push(...currentPage);
+
+            if (currentPage.length < SUPABASE_PAGE_SIZE) {
+                break;
+            }
+
+            offset += SUPABASE_PAGE_SIZE;
         }
-
-        const { data, error } = await query;
 
         console.log(`[Supabase] Folders query took ${Date.now() - startTime}ms`);
+        console.log(`[Supabase] Fetched ${rows.length} folders`);
 
-        if (error) {
-            console.warn('[Supabase] Error fetching folders:', error.message);
-            return {};
-        }
-
-        console.log(`[Supabase] Fetched ${data?.length || 0} folders`);
         const folders: Record<string, Folder> = {};
-        data?.forEach((row: any) => {
+        rows.forEach((row: any) => {
             folders[row.id] = this.mapToFolder(row);
         });
         return folders;
@@ -283,21 +300,34 @@ export const templatesService = {
         console.log('[Supabase] Fetching templates via authenticated client...');
         const startTime = Date.now();
 
-        // Using standard client to ensure user session (JWT) is sent for RLS
-        const { data, error } = await supabase
-            .from('form_templates')
-            .select('id, name, name_en, version, created_at, type, folder_id, unified_folder_id, template_type_config, custom_properties, basic_info, document_control, batch_configuration, custom_variables, sections, quality_criteria, notes, signatures, recipe, archived, archived_at, archived_by');
+        const rows: any[] = [];
+        let offset = 0;
 
-        console.log(`[Supabase] Templates query took ${Date.now() - startTime}ms`);
+        while (true) {
+            const { data, error } = await supabase
+                .from('form_templates')
+                .select('id, name, name_en, version, created_at, type, folder_id, unified_folder_id, template_type_config, custom_properties, basic_info, document_control, batch_configuration, custom_variables, sections, quality_criteria, notes, signatures, recipe, archived, archived_at, archived_by')
+                .order('id', { ascending: true })
+                .range(offset, offset + SUPABASE_PAGE_SIZE - 1);
 
-        if (error) {
-            console.warn('[Supabase] Error fetching templates:', error.message);
-            return {};
+            if (error) {
+                console.warn('[Supabase] Error fetching templates:', error.message);
+                return {};
+            }
+
+            const pageRows = data || [];
+            if (pageRows.length === 0) break;
+
+            rows.push(...pageRows);
+            if (pageRows.length < SUPABASE_PAGE_SIZE) break;
+
+            offset += SUPABASE_PAGE_SIZE;
         }
 
-        console.log(`[Supabase] Fetched ${data?.length || 0} templates`);
+        console.log(`[Supabase] Templates query took ${Date.now() - startTime}ms`);
+        console.log(`[Supabase] Fetched ${rows.length || 0} templates`);
         const templates: Record<string, FormTemplate> = {};
-        data?.forEach((row: any) => {
+        rows.forEach((row: any) => {
             templates[row.id] = this.mapToTemplate(row);
         });
         return templates;
@@ -625,21 +655,34 @@ export const instancesService = {
         console.log('[Supabase] Fetching instances via authenticated client...');
         const startTime = Date.now();
 
-        // Using standard client to ensure user session (JWT) is sent for RLS
-        const { data, error } = await supabase
-            .from('form_instances')
-            .select('id, name, template_id, template_version, folder_id, unified_folder_id, status, created_at, created_by, submitted_at, submitted_by, form_data, calculations, signatures, workflow, company_id, archived, archived_at, archived_by');
+        const rows: any[] = [];
+        let offset = 0;
 
-        console.log(`[Supabase] Instances query took ${Date.now() - startTime}ms`);
+        while (true) {
+            const { data, error } = await supabase
+                .from('form_instances')
+                .select('id, name, template_id, template_version, folder_id, unified_folder_id, status, created_at, created_by, submitted_at, submitted_by, form_data, calculations, signatures, workflow, company_id, archived, archived_at, archived_by')
+                .order('id', { ascending: true })
+                .range(offset, offset + SUPABASE_PAGE_SIZE - 1);
 
-        if (error) {
-            console.warn('[Supabase] Error fetching instances:', error.message);
-            return {};
+            if (error) {
+                console.warn('[Supabase] Error fetching instances:', error.message);
+                return {};
+            }
+
+            const pageRows = data || [];
+            if (pageRows.length === 0) break;
+
+            rows.push(...pageRows);
+            if (pageRows.length < SUPABASE_PAGE_SIZE) break;
+
+            offset += SUPABASE_PAGE_SIZE;
         }
 
-        console.log(`[Supabase] Fetched ${data?.length || 0} instances`);
+        console.log(`[Supabase] Instances query took ${Date.now() - startTime}ms`);
+        console.log(`[Supabase] Fetched ${rows.length || 0} instances`);
         const instances: Record<string, FormInstance> = {};
-        data?.forEach((row: any) => {
+        rows.forEach((row: any) => {
             instances[row.id] = this.mapToInstance(row);
         });
         return instances;

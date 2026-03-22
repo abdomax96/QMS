@@ -238,8 +238,14 @@ export async function getMaterialBatches(
         productionDate?: string;
         status?: 'accepted' | 'approved' | 'all';
         companyId?: string;
+        limit?: number;
     }
 ): Promise<MaterialBatch[]> {
+    const requestedLimit = Number(options?.limit);
+    const batchLimit = Number.isFinite(requestedLimit) && requestedLimit > 0
+        ? Math.min(requestedLimit, 1000)
+        : 200;
+
     const applyStatusFilter = (query: any) => {
         if (options?.status === 'accepted') return query.eq('status', 'accepted');
         if (options?.status === 'approved') return query.eq('status', 'approved');
@@ -294,7 +300,8 @@ export async function getMaterialBatches(
             `)
             .eq('raw_material_id', rawMaterialId)
             .eq('is_available_for_issue', true)
-            .order('received_at', { ascending: false });
+            .order('received_at', { ascending: false })
+            .limit(batchLimit);
 
         query = applyStatusFilter(query);
 
@@ -353,7 +360,8 @@ export async function getMaterialBatches(
                 status
             `)
             .eq('raw_material_id', rawMaterialId)
-            .order('received_at', { ascending: false });
+            .order('received_at', { ascending: false })
+            .limit(batchLimit);
 
         query = applyStatusFilter(query);
 
@@ -554,6 +562,21 @@ export async function getMaterialReceivings(
  * جلب استلام مادة واحد
  */
 export async function getMaterialReceivingById(id: string): Promise<MaterialReceiving | null> {
+    if (shouldUseInventoryView()) {
+        const { data: inventoryRow, error: inventoryError } = await supabase
+            .from('v_material_receiving_inventory')
+            .select('*')
+            .eq('id', id)
+            .maybeSingle();
+
+        if (!inventoryError && inventoryRow) {
+            markInventoryViewAvailable();
+            return normalizeMaterialReceiving(inventoryRow);
+        } else {
+            handleInventoryViewError(inventoryError);
+        }
+    }
+
     const { data, error } = await supabase
         .from('material_receiving')
         .select(`
@@ -569,26 +592,8 @@ export async function getMaterialReceivingById(id: string): Promise<MaterialRece
         console.error('Error fetching material receiving:', error);
         return null;
     }
-    let inventoryData: any = null;
-    if (shouldUseInventoryView()) {
-        const { data: inventoryRow, error: inventoryError } = await supabase
-            .from('v_material_receiving_inventory')
-            .select('consumed_quantity, remaining_quantity, is_manually_depleted, manual_depletion_reason, manual_depleted_at')
-            .eq('id', id)
-            .maybeSingle();
 
-        if (!inventoryError) {
-            markInventoryViewAvailable();
-            inventoryData = inventoryRow;
-        } else {
-            handleInventoryViewError(inventoryError);
-        }
-    }
-
-    return normalizeMaterialReceiving({
-        ...data,
-        ...(inventoryData || {}),
-    });
+    return normalizeMaterialReceiving(data);
 }
 
 /**
@@ -1141,39 +1146,56 @@ export async function getLabDashboardStats(companyId?: string): Promise<{
     pendingTests: number;
     completedTestsToday: number;
 }> {
-    const today = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+    const todayStartIso = todayStart.toISOString();
+    const tomorrowStartIso = tomorrowStart.toISOString();
 
-    // Get receivings count
-    let receivingsQuery = supabase
-        .from('material_receiving')
-        .select('id, status', { count: 'exact' });
+    const baseReceivingsCount = () => {
+        let query = supabase.from('material_receiving').select('id', { count: 'exact', head: true });
+        if (companyId) query = query.eq('company_id', companyId);
+        return query;
+    };
 
-    if (companyId) {
-        receivingsQuery = receivingsQuery.eq('company_id', companyId);
+    const baseTestsCount = () => {
+        let query = supabase.from('lab_tests').select('id', { count: 'exact', head: true });
+        if (companyId) query = query.eq('company_id', companyId);
+        return query;
+    };
+
+    const [
+        { count: totalReceivings, error: totalReceivingsError },
+        { count: pendingReceivings, error: pendingReceivingsError },
+        { count: pendingTests, error: pendingTestsError },
+        { count: completedTestsToday, error: completedTodayError },
+    ] = await Promise.all([
+        baseReceivingsCount(),
+        baseReceivingsCount().eq('status', 'pending'),
+        baseTestsCount().in('status', ['pending', 'in_progress']),
+        baseTestsCount()
+            .eq('status', 'completed')
+            .gte('completed_at', todayStartIso)
+            .lt('completed_at', tomorrowStartIso),
+    ]);
+
+    if (totalReceivingsError) {
+        console.warn('Error fetching total receivings count:', totalReceivingsError);
     }
-
-    const { data: receivings, count: totalReceivings } = await receivingsQuery;
-    const pendingReceivings = (receivings || []).filter(r => r.status === 'pending').length;
-
-    // Get tests count
-    let testsQuery = supabase
-        .from('lab_tests')
-        .select('id, status, completed_at', { count: 'exact' });
-
-    if (companyId) {
-        testsQuery = testsQuery.eq('company_id', companyId);
+    if (pendingReceivingsError) {
+        console.warn('Error fetching pending receivings count:', pendingReceivingsError);
     }
-
-    const { data: tests } = await testsQuery;
-    const pendingTests = (tests || []).filter(t => ['pending', 'in_progress'].includes(t.status)).length;
-    const completedTestsToday = (tests || []).filter(t =>
-        t.status === 'completed' && t.completed_at?.startsWith(today)
-    ).length;
+    if (pendingTestsError) {
+        console.warn('Error fetching pending tests count:', pendingTestsError);
+    }
+    if (completedTodayError) {
+        console.warn('Error fetching completed tests today count:', completedTodayError);
+    }
 
     return {
         totalReceivings: totalReceivings || 0,
-        pendingReceivings,
-        pendingTests,
-        completedTestsToday
+        pendingReceivings: pendingReceivings || 0,
+        pendingTests: pendingTests || 0,
+        completedTestsToday: completedTestsToday || 0
     };
 }

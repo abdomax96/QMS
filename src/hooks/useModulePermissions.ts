@@ -60,189 +60,234 @@ export interface UseModulePermissionsReturn {
     refresh: () => Promise<void>;
 }
 
-// ==================== Default Modules ====================
-const DEFAULT_MODULES = ['forms_reports', 'tasks', 'lab', 'ncr', 'chat'];
+interface PermissionsBundle {
+    userId: string;
+    permissions: ModulePermission[];
+    ncrPermissions: NcrStagePermission[];
+    taskPermissions: TaskStagePermission[];
+    taskStagePermissionsMissing: boolean;
+    fetchedAt: number;
+}
 
-// ==================== Hook ====================
-export function useModulePermissions(): UseModulePermissionsReturn {
-    const { profile } = useSupabaseAuth();
-    const [permissions, setPermissions] = useState<ModulePermission[]>([]);
-    const [ncrPermissions, setNcrPermissions] = useState<NcrStagePermission[]>([]);
-    const [taskPermissions, setTaskPermissions] = useState<TaskStagePermission[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+const PERMISSIONS_CACHE_TTL_MS = 10 * 60 * 1000;
+const LOAD_TIMEOUT_MS = 12000;
 
-    // AbortController ref to cancel in-flight requests on timeout or unmount
-    const abortControllerRef = useRef<AbortController | null>(null);
-    // Monotonic request id to prevent stale requests from updating state.
-    const requestIdRef = useRef(0);
-    // If task_stage_permissions table is missing, stop retrying the same failing query each render.
-    const taskStagePermissionsMissingRef = useRef(false);
+let globalTaskStagePermissionsMissing = false;
+let permissionsBundleCache: PermissionsBundle | null = null;
+let permissionsBundleInFlight: Promise<PermissionsBundle> | null = null;
+let permissionsBundleInFlightUserId: string | null = null;
 
-    // Helper to add timeout to promises
-    const withTimeout = <T>(promise: Promise<T>, timeoutMs: number = 10000): Promise<T> => {
-        return Promise.race([
-            promise,
-            new Promise<T>((_, reject) => setTimeout(() => reject(new Error('Request timed out')), timeoutMs))
-        ]);
-    };
+const withTimeout = <T>(promise: Promise<T>, timeoutMs: number = 10000): Promise<T> => {
+    return Promise.race([
+        promise,
+        new Promise<T>((_, reject) => setTimeout(() => reject(new Error('Request timed out')), timeoutMs))
+    ]);
+};
 
-    const isAbortError = (err: unknown): boolean => {
-        const e = err as { name?: string; message?: string } | null;
-        const name = (e?.name || '').toLowerCase();
-        const message = (e?.message || '').toLowerCase();
-        return name === 'aborterror' || message.includes('aborted');
-    };
+const isMissingTableError = (err: unknown, tableName: string): boolean => {
+    const e = err as { code?: string; message?: string; details?: string } | null;
+    const code = (e?.code || '').toUpperCase();
+    const message = (e?.message || '').toLowerCase();
+    const details = (e?.details || '').toLowerCase();
+    const table = tableName.toLowerCase();
 
-    const isMissingTableError = (err: unknown, tableName: string): boolean => {
-        const e = err as { code?: string; message?: string; details?: string } | null;
-        const code = (e?.code || '').toUpperCase();
-        const message = (e?.message || '').toLowerCase();
-        const details = (e?.details || '').toLowerCase();
-        const table = tableName.toLowerCase();
+    return (
+        code === 'PGRST205' ||
+        (message.includes(table) && message.includes('schema cache')) ||
+        details.includes('schema cache')
+    );
+};
 
-        return (
-            code === 'PGRST205' ||
-            (message.includes(table) && message.includes('schema cache')) ||
-            details.includes('schema cache')
-        );
-    };
+function aggregateStagePermissions(rows: Array<{
+    stage_code: string | null;
+    allowed_actions: string[] | null;
+    can_advance: boolean | null;
+    can_return: boolean | null;
+}>): NcrStagePermission[] {
+    const map = new Map<string, NcrStagePermission>();
 
-    // Maximum time to wait for permission loading before forcing completion
-    const LOAD_TIMEOUT_MS = 12000;
+    rows.forEach((row) => {
+        const stageCode = (row.stage_code || '').trim();
+        if (!stageCode) return;
 
-    // Load permissions using unified RPC (Phase 3 migration)
-    const loadPermissions = useCallback(async () => {
-        if (!profile?.uid) {
-            setPermissions([]);
-            setNcrPermissions([]);
-            setTaskPermissions([]);
-            setLoading(false);
-            return;
+        const allowedActions = Array.from(new Set((row.allowed_actions || []).filter(Boolean)));
+        const canAdvance = Boolean(row.can_advance);
+        const canReturn = Boolean(row.can_return);
+
+        if (!allowedActions.includes('view')) {
+            allowedActions.unshift('view');
         }
 
-        // Abort any previous in-flight request
-        if (abortControllerRef.current) {
-            abortControllerRef.current.abort();
+        const existing = map.get(stageCode);
+        if (existing) {
+            existing.allowed_actions = Array.from(new Set([...existing.allowed_actions, ...allowedActions]));
+            existing.can_advance = existing.can_advance || canAdvance;
+            existing.can_return = existing.can_return || canReturn;
+        } else {
+            map.set(stageCode, {
+                stage_code: stageCode,
+                allowed_actions: allowedActions,
+                can_advance: canAdvance,
+                can_return: canReturn,
+            });
+        }
+    });
+
+    return Array.from(map.values());
+}
+
+function aggregateTaskPermissions(rows: Array<{
+    stage_code: string | null;
+    allowed_actions: string[] | null;
+    can_advance: boolean | null;
+    can_return: boolean | null;
+}>): TaskStagePermission[] {
+    const map = new Map<string, TaskStagePermission>();
+
+    rows.forEach((row) => {
+        const stageCode = (row.stage_code || '').trim();
+        if (!stageCode) return;
+
+        const allowedActions = Array.from(new Set((row.allowed_actions || []).filter(Boolean)));
+        const canAdvance = Boolean(row.can_advance);
+        const canReturn = Boolean(row.can_return);
+
+        if (!allowedActions.includes('view')) {
+            allowedActions.unshift('view');
         }
 
-        // Create new AbortController for this request
-        const abortController = new AbortController();
-        abortControllerRef.current = abortController;
-        const requestId = ++requestIdRef.current;
-        const isCurrentRequest = () =>
-            requestId === requestIdRef.current && !abortController.signal.aborted;
+        const existing = map.get(stageCode);
+        if (existing) {
+            existing.allowed_actions = Array.from(new Set([...existing.allowed_actions, ...allowedActions]));
+            existing.can_advance = existing.can_advance || canAdvance;
+            existing.can_return = existing.can_return || canReturn;
+        } else {
+            map.set(stageCode, {
+                stage_code: stageCode,
+                allowed_actions: allowedActions,
+                can_advance: canAdvance,
+                can_return: canReturn,
+            });
+        }
+    });
 
-        setLoading(true);
-        setError(null);
+    return Array.from(map.values());
+}
 
-        // Safety timeout - ensures loading ALWAYS resolves, preventing infinite loading
-        const safetyTimeoutId = setTimeout(() => {
-            if (requestId !== requestIdRef.current) return;
-            console.warn('[Permissions] ⚠️ Load timeout reached after', LOAD_TIMEOUT_MS, 'ms - forcing completion');
-            abortController.abort(); // Cancel the request on timeout
-            setError('انتهت مهلة تحميل الصلاحيات');
-            setLoading(false);
-        }, LOAD_TIMEOUT_MS);
+function mergeNcrModuleActions(
+    baseModulePermissions: ModulePermission[],
+    stagePermissions: NcrStagePermission[]
+): ModulePermission[] {
+    const ncrModuleActions = Array.from(new Set(
+        stagePermissions.flatMap((stagePerm) => [
+            ...stagePerm.allowed_actions,
+            ...(stagePerm.can_advance ? ['workflow.progress'] : []),
+            ...(stagePerm.can_return ? ['workflow.return'] : []),
+        ])
+    )).sort();
 
-        try {
-            // Check if already aborted before starting
-            if (abortController.signal.aborted) {
-                clearTimeout(safetyTimeoutId);
-                return;
+    const mergedPermissions = [...baseModulePermissions];
+    const ncrPermission = mergedPermissions.find((perm) => perm.module_code === 'ncr');
+
+    if (ncrModuleActions.length > 0) {
+        if (ncrPermission) {
+            ncrPermission.granted_actions = Array.from(new Set([
+                ...ncrPermission.granted_actions,
+                ...ncrModuleActions,
+            ])).sort();
+        } else {
+            mergedPermissions.push({
+                module_code: 'ncr',
+                granted_actions: ncrModuleActions,
+                data_isolation_mode: 'hybrid',
+                can_see_all_departments: false,
+            });
+        }
+    }
+
+    return mergedPermissions;
+}
+
+async function fetchPermissionsBundle(
+    userId: string,
+    options?: { forceRefresh?: boolean }
+): Promise<PermissionsBundle> {
+    const forceRefresh = options?.forceRefresh === true;
+    const now = Date.now();
+
+    if (!forceRefresh && permissionsBundleCache && permissionsBundleCache.userId === userId) {
+        if (now - permissionsBundleCache.fetchedAt < PERMISSIONS_CACHE_TTL_MS) {
+            return permissionsBundleCache;
+        }
+    }
+
+    if (permissionsBundleInFlight && permissionsBundleInFlightUserId === userId) {
+        return permissionsBundleInFlight;
+    }
+
+    if (forceRefresh && permissionsBundleCache?.userId === userId) {
+        permissionsBundleCache = null;
+    }
+
+    const loadPromise = (async (): Promise<PermissionsBundle> => {
+        let baseModulePermissions: ModulePermission[] = [];
+
+        // Primary permissions source (optimized RPC).
+        const { data: rpcData, error: rpcError } = await supabase
+            .rpc('get_user_module_permissions', { user_uuid: userId }) as any;
+
+        // Resolve role IDs once; used by fallback + stage permissions.
+        const { data: userRolesRows, error: userRolesRowsError } = await supabase
+            .from('user_roles')
+            .select('role_id')
+            .eq('user_id', userId);
+
+        if (userRolesRowsError) {
+            console.warn('[Permissions] Error fetching user roles:', userRolesRowsError.message);
+        }
+        const roleIds = (userRolesRows || []).map((row: any) => row.role_id).filter(Boolean);
+
+        if (!rpcError && Array.isArray(rpcData) && rpcData.length > 0) {
+            baseModulePermissions = rpcData
+                .map((item: any) => {
+                    const cleanedActions = (item.granted_actions || [])
+                        .filter((action: any) => action != null && action !== '');
+
+                    return {
+                        module_code: item.module_code,
+                        granted_actions: cleanedActions,
+                        data_isolation_mode: item.data_isolation_mode || 'shared',
+                        can_see_all_departments: item.can_see_all_departments || false
+                    } as ModulePermission;
+                })
+                .filter((perm: ModulePermission) => perm.granted_actions.length > 0);
+        } else {
+            if (rpcError) {
+                console.warn('[Permissions] RPC not available, using role_module_permissions fallback. Error:', rpcError?.message);
             }
 
-            let baseModulePermissions: ModulePermission[] = [];
-
-            // ==================== PRIMARY PATH: Use new optimized RPC ====================
-            // Using get_user_module_permissions from migration 20260103_create_permissions_rpc.sql
-            const { data: rpcData, error: rpcError } = await supabase
-                .rpc('get_user_module_permissions', { user_uuid: profile.uid })
-                .abortSignal(abortController.signal) as any;
-
-            if (!rpcError && rpcData && rpcData.length > 0) {
-                // RPC succeeded - convert to ModulePermission format
-                console.log('[Permissions] ✅ Raw RPC data:', rpcData);
-
-                // Filter out modules with no actual permissions (null or empty granted_actions)
-                // Also filter out entries where granted_actions only contains null values
-                const modulePerms: ModulePermission[] = rpcData
-                    .map((item: any) => {
-                        // Clean granted_actions: remove nulls and empty strings
-                        const cleanedActions = (item.granted_actions || [])
-                            .filter((action: any) => action != null && action !== '');
-
-                        return {
-                            module_code: item.module_code,
-                            granted_actions: cleanedActions,
-                            data_isolation_mode: item.data_isolation_mode || 'shared',
-                            can_see_all_departments: item.can_see_all_departments || false
-                        };
-                    })
-                    // Only keep modules that have at least one granted action
-                    .filter((perm: ModulePermission) => perm.granted_actions.length > 0);
-
-                console.log('[Permissions] Final filtered permissions from RPC:', modulePerms);
-                baseModulePermissions = modulePerms;
-
+            if (roleIds.length === 0) {
+                console.warn('[Permissions] User has no roles in user_roles table, no permissions granted');
             } else {
-                // ==================== FALLBACK: Direct role_module_permissions path ====================
-                // Module visibility derived from role_module_permissions table (same as SimplePermissionMatrix)
-                if (rpcError && isAbortError(rpcError)) {
-                    return;
-                }
-                if (rpcError) {
-                    console.warn('[Permissions] RPC not available, using role_module_permissions fallback. Error:', rpcError?.message);
-                }
-
-                // Always get roles from user_roles table (profile.roles contains role names, not IDs)
-                const { data: userRolesData, error: userRolesError } = await supabase
-                    .from('user_roles')
-                    .select('role_id')
-                    .eq('user_id', profile.uid);
-
-                if (!isCurrentRequest()) return;
-
-                if (userRolesError) {
-                    console.error('[Permissions] Error fetching user_roles:', userRolesError.message);
-                }
-
-                const roleIds = userRolesData?.map(r => r.role_id).filter(Boolean) || [];
-                console.log('[Permissions] User role IDs from user_roles table:', roleIds);
-
-                if (roleIds.length === 0) {
-                    console.warn('[Permissions] User has no roles in user_roles table, no permissions granted');
-                    setPermissions([]);
-                    setLoading(false);
-                    return;
-                }
-
-                // Get permissions from role_module_permissions table (same table SimplePermissionMatrix uses)
                 const { data: roleModulePermsData, error: roleModulePermsError } = await supabase
                     .from('role_module_permissions')
                     .select('module_code, granted_actions, can_see_all_departments')
                     .in('role_id', roleIds);
 
-                if (!isCurrentRequest()) return;
-
                 if (roleModulePermsError) {
                     console.error('[Permissions] Error loading role_module_permissions:', roleModulePermsError);
                 }
 
-                console.log('[Permissions] Raw role_module_permissions data:', roleModulePermsData);
-
-                // Aggregate permissions from all roles
                 const modulePermissions = new Map<string, ModulePermission>();
 
-                roleModulePermsData?.forEach(perm => {
+                (roleModulePermsData || []).forEach((perm: any) => {
                     if (!perm.module_code) return;
 
                     const existing = modulePermissions.get(perm.module_code);
                     const grantedActions = perm.granted_actions || [];
 
                     if (existing) {
-                        // Merge actions from multiple roles
-                        existing.granted_actions = [...new Set([...existing.granted_actions, ...grantedActions])];
+                        existing.granted_actions = Array.from(new Set([...existing.granted_actions, ...grantedActions]));
                         existing.can_see_all_departments = existing.can_see_all_departments || perm.can_see_all_departments || false;
                     } else if (grantedActions.length > 0) {
                         modulePermissions.set(perm.module_code, {
@@ -254,186 +299,141 @@ export function useModulePermissions(): UseModulePermissionsReturn {
                     }
                 });
 
-                const finalPermissions = Array.from(modulePermissions.values());
-                console.log('[Permissions] Final permissions from role_module_permissions:', finalPermissions);
-                baseModulePermissions = finalPermissions;
+                baseModulePermissions = Array.from(modulePermissions.values());
             }
+        }
 
+        // NCR stage permissions.
+        let ncrStageRows: Array<{
+            stage_code: string | null;
+            allowed_actions: string[] | null;
+            can_advance: boolean | null;
+            can_return: boolean | null;
+        }> = [];
 
-            // ==================== NCR Stage Permissions ====================
-            // Role-only source: ncr_stage_permissions (role_id + stage_code).
-            const { data: userRolesRows, error: userRolesRowsError } = await supabase
-                .from('user_roles')
-                .select('role_id')
-                .eq('user_id', profile.uid);
+        if (roleIds.length > 0) {
+            const { data: rows, error } = await supabase
+                .from('ncr_stage_permissions')
+                .select('stage_code, allowed_actions, can_advance, can_return')
+                .eq('is_active', true)
+                .is('department_id', null)
+                .in('role_id', roleIds);
 
+            if (error) {
+                console.warn('[Permissions] Error fetching role-based NCR stage permissions:', error.message);
+            } else if (rows?.length) {
+                ncrStageRows = rows;
+            }
+        }
+
+        const ncrPermissions = aggregateStagePermissions(ncrStageRows);
+
+        // Task stage permissions.
+        let taskStageRows: Array<{
+            stage_code: string | null;
+            allowed_actions: string[] | null;
+            can_advance: boolean | null;
+            can_return: boolean | null;
+        }> = [];
+        let taskStagePermissionsMissing = globalTaskStagePermissionsMissing;
+
+        if (roleIds.length > 0 && !taskStagePermissionsMissing) {
+            const { data: rows, error } = await supabase
+                .from('task_stage_permissions')
+                .select('stage_code, allowed_actions, can_advance, can_return')
+                .eq('is_active', true)
+                .is('department_id', null)
+                .in('role_id', roleIds);
+
+            if (error) {
+                if (isMissingTableError(error, 'task_stage_permissions')) {
+                    taskStagePermissionsMissing = true;
+                    globalTaskStagePermissionsMissing = true;
+                    console.info('[Permissions] task_stage_permissions table is missing in this environment. Apply migration 20260216000000_task_management_v2.sql to enable task workflow permissions.');
+                } else {
+                    console.warn('[Permissions] Error fetching task stage permissions:', error.message);
+                }
+            } else if (rows?.length) {
+                taskStageRows = rows;
+            }
+        }
+
+        const taskPermissions = aggregateTaskPermissions(taskStageRows);
+        const permissions = mergeNcrModuleActions(baseModulePermissions, ncrPermissions);
+
+        const bundle: PermissionsBundle = {
+            userId,
+            permissions,
+            ncrPermissions,
+            taskPermissions,
+            taskStagePermissionsMissing,
+            fetchedAt: Date.now(),
+        };
+
+        permissionsBundleCache = bundle;
+        return bundle;
+    })();
+
+    permissionsBundleInFlight = loadPromise;
+    permissionsBundleInFlightUserId = userId;
+
+    try {
+        return await loadPromise;
+    } finally {
+        if (permissionsBundleInFlight === loadPromise) {
+            permissionsBundleInFlight = null;
+            permissionsBundleInFlightUserId = null;
+        }
+    }
+}
+
+// ==================== Hook ====================
+export function useModulePermissions(): UseModulePermissionsReturn {
+    const { profile } = useSupabaseAuth();
+    const [permissions, setPermissions] = useState<ModulePermission[]>([]);
+    const [ncrPermissions, setNcrPermissions] = useState<NcrStagePermission[]>([]);
+    const [taskPermissions, setTaskPermissions] = useState<TaskStagePermission[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    // Monotonic request id to prevent stale requests from updating state.
+    const requestIdRef = useRef(0);
+
+    const loadPermissions = useCallback(async (options?: { forceRefresh?: boolean }) => {
+        const userId = profile?.uid;
+        if (!userId) {
+            setPermissions([]);
+            setNcrPermissions([]);
+            setTaskPermissions([]);
+            setLoading(false);
+            setError(null);
+            return;
+        }
+
+        const requestId = ++requestIdRef.current;
+        const isCurrentRequest = () => requestId === requestIdRef.current;
+
+        setLoading(true);
+        setError(null);
+
+        try {
+            const bundle = await withTimeout(
+                fetchPermissionsBundle(userId, { forceRefresh: options?.forceRefresh === true }),
+                LOAD_TIMEOUT_MS
+            );
             if (!isCurrentRequest()) return;
 
-            if (userRolesRowsError) {
-                console.warn('[Permissions] Error fetching user roles for NCR stage permissions:', userRolesRowsError.message);
-            }
-
-            const roleIds = (userRolesRows || []).map(row => row.role_id).filter(Boolean);
-
-            let stageRows: {
-                stage_code: string | null;
-                allowed_actions: string[] | null;
-                can_advance: boolean | null;
-                can_return: boolean | null;
-            }[] = [];
-
-            if (roleIds.length > 0) {
-                const { data: nspRows, error: nspRowsError } = await supabase
-                    .from('ncr_stage_permissions')
-                    .select('stage_code, allowed_actions, can_advance, can_return')
-                    .eq('is_active', true)
-                    .is('department_id', null)
-                    .in('role_id', roleIds);
-
-                if (!isCurrentRequest()) return;
-
-                if (nspRowsError) {
-                    console.warn('[Permissions] Error fetching role-based NCR stage permissions:', nspRowsError.message);
-                } else if (nspRows?.length) {
-                    stageRows = nspRows;
-                }
-            }
-
-            const ncrMap = new Map<string, NcrStagePermission>();
-            stageRows.forEach(row => {
-                const stageCode = (row.stage_code || '').trim();
-                if (!stageCode) return;
-
-                const allowedActions = Array.from(new Set((row.allowed_actions || []).filter(Boolean)));
-                const canAdvance = Boolean(row.can_advance);
-                const canReturn = Boolean(row.can_return);
-
-                if (!allowedActions.includes('view')) {
-                    allowedActions.unshift('view');
-                }
-
-                const existing = ncrMap.get(stageCode);
-                if (existing) {
-                    existing.allowed_actions = Array.from(new Set([...existing.allowed_actions, ...allowedActions]));
-                    existing.can_advance = existing.can_advance || canAdvance;
-                    existing.can_return = existing.can_return || canReturn;
-                } else {
-                    ncrMap.set(stageCode, {
-                        stage_code: stageCode,
-                        allowed_actions: allowedActions,
-                        can_advance: canAdvance,
-                        can_return: canReturn,
-                    });
-                }
-            });
-
-            const stagePermissions = Array.from(ncrMap.values());
-            setNcrPermissions(stagePermissions);
-
-            // ==================== Task Stage Permissions ====================
-            // Same pattern as NCR: role-only source from task_stage_permissions table.
-            let taskStageRows: {
-                stage_code: string | null;
-                allowed_actions: string[] | null;
-                can_advance: boolean | null;
-                can_return: boolean | null;
-            }[] = [];
-
-            if (roleIds.length > 0 && !taskStagePermissionsMissingRef.current) {
-                const { data: tspRows, error: tspRowsError } = await supabase
-                    .from('task_stage_permissions')
-                    .select('stage_code, allowed_actions, can_advance, can_return')
-                    .eq('is_active', true)
-                    .is('department_id', null)
-                    .in('role_id', roleIds);
-
-                if (!isCurrentRequest()) return;
-
-                if (tspRowsError) {
-                    if (isMissingTableError(tspRowsError, 'task_stage_permissions')) {
-                        taskStagePermissionsMissingRef.current = true;
-                        console.info('[Permissions] task_stage_permissions table is missing in this environment. Apply migration 20260216000000_task_management_v2.sql to enable task workflow permissions.');
-                    } else {
-                        console.warn('[Permissions] Error fetching task stage permissions:', tspRowsError.message);
-                    }
-                } else if (tspRows?.length) {
-                    taskStageRows = tspRows;
-                }
-            }
-
-            const taskMap = new Map<string, TaskStagePermission>();
-            taskStageRows.forEach(row => {
-                const stageCode = (row.stage_code || '').trim();
-                if (!stageCode) return;
-
-                const allowedActions = Array.from(new Set((row.allowed_actions || []).filter(Boolean)));
-                const canAdvance = Boolean(row.can_advance);
-                const canReturn = Boolean(row.can_return);
-
-                if (!allowedActions.includes('view')) {
-                    allowedActions.unshift('view');
-                }
-
-                const existing = taskMap.get(stageCode);
-                if (existing) {
-                    existing.allowed_actions = Array.from(new Set([...existing.allowed_actions, ...allowedActions]));
-                    existing.can_advance = existing.can_advance || canAdvance;
-                    existing.can_return = existing.can_return || canReturn;
-                } else {
-                    taskMap.set(stageCode, {
-                        stage_code: stageCode,
-                        allowed_actions: allowedActions,
-                        can_advance: canAdvance,
-                        can_return: canReturn,
-                    });
-                }
-            });
-
-            const taskStagePermissions = Array.from(taskMap.values());
-            setTaskPermissions(taskStagePermissions);
-
-            // Derive NCR module visibility/actions strictly from role-stage rows.
-            const ncrModuleActions = Array.from(new Set(
-                stagePermissions.flatMap(stagePerm => [
-                    ...stagePerm.allowed_actions,
-                    ...(stagePerm.can_advance ? ['workflow.progress'] : []),
-                    ...(stagePerm.can_return ? ['workflow.return'] : []),
-                ])
-            )).sort();
-
-            const mergedPermissions = [...baseModulePermissions];
-            const ncrPermission = mergedPermissions.find((perm) => perm.module_code === 'ncr');
-
-            if (ncrModuleActions.length > 0) {
-                if (ncrPermission) {
-                    ncrPermission.granted_actions = Array.from(new Set([
-                        ...ncrPermission.granted_actions,
-                        ...ncrModuleActions,
-                    ])).sort();
-                } else {
-                    mergedPermissions.push({
-                        module_code: 'ncr',
-                        granted_actions: ncrModuleActions,
-                        data_isolation_mode: 'hybrid',
-                        can_see_all_departments: false,
-                    });
-                }
-            }
-            if (!isCurrentRequest()) return;
-            setPermissions(mergedPermissions);
-
+            setPermissions(bundle.permissions);
+            setNcrPermissions(bundle.ncrPermissions);
+            setTaskPermissions(bundle.taskPermissions);
         } catch (err) {
-            if (isAbortError(err) || abortController.signal.aborted) {
-                return;
-            }
+            if (!isCurrentRequest()) return;
             console.error('Error loading permissions:', err);
             setError('فشل في تحميل الصلاحيات');
             setPermissions([]);
             setNcrPermissions([]);
             setTaskPermissions([]);
         } finally {
-            // Clear safety timeout and ensure loading is always set to false
-            clearTimeout(safetyTimeoutId);
             if (isCurrentRequest()) {
                 setLoading(false);
             }
@@ -442,14 +442,14 @@ export function useModulePermissions(): UseModulePermissionsReturn {
 
     // Load on mount and user change
     useEffect(() => {
-        loadPermissions();
+        void loadPermissions();
     }, [loadPermissions]);
 
     // Listen for permission changes from other parts of the app
     useEffect(() => {
         const handlePermissionsChanged = () => {
             console.log('[Permissions] Received permissions-changed event, refreshing...');
-            loadPermissions();
+            void loadPermissions({ forceRefresh: true });
         };
 
         window.addEventListener('permissions-changed', handlePermissionsChanged);
@@ -541,7 +541,7 @@ export function useModulePermissions(): UseModulePermissionsReturn {
         canPerformTaskAction,
         canAdvanceTask,
         canReturnTask,
-        refresh: loadPermissions,
+        refresh: () => loadPermissions({ forceRefresh: true }),
     };
 }
 

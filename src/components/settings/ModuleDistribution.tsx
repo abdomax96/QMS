@@ -20,7 +20,8 @@ import {
     ExclamationTriangleIcon,
     DocumentTextIcon,
     ClipboardDocumentListIcon,
-    BeakerIcon
+    BeakerIcon,
+    SparklesIcon
 } from '@heroicons/react/24/outline';
 import { supabase } from '../../config/supabase';
 import PermissionsDebug from '../debug/PermissionsDebug';
@@ -67,6 +68,7 @@ const ModuleIcons: Record<string, React.ReactNode> = {
     ncr: <ExclamationTriangleIcon className="w-6 h-6" />,
     pallet_management: <CubeIcon className="w-6 h-6" />,
     access_management: <ShieldCheckIcon className="w-6 h-6" />,
+    ai_assistant: <SparklesIcon className="w-6 h-6" />,
 };
 
 // ==================== Action Labels ====================
@@ -94,6 +96,14 @@ const ActionLabels: Record<string, { en: string; ar: string }> = {
     load: { en: 'Load', ar: 'تحميل' },
     dispatch: { en: 'Dispatch', ar: 'شحن' },
     view_audit: { en: 'View Audit', ar: 'سجل التدقيق' },
+    create_thread: { en: 'Create Thread', ar: 'إنشاء جلسة AI' },
+    send_message: { en: 'Send Message', ar: 'إرسال رسالة للمساعد' },
+    view_history: { en: 'View History', ar: 'عرض سجل المساعد' },
+    manage_threads: { en: 'Manage Threads', ar: 'إدارة جلسات AI' },
+    execute_low_risk: { en: 'Execute Low Risk', ar: 'تنفيذ منخفض الخطورة' },
+    execute_medium_risk: { en: 'Execute Medium Risk', ar: 'تنفيذ متوسط الخطورة' },
+    execute_high_risk: { en: 'Execute High Risk', ar: 'تنفيذ عالي الخطورة' },
+    manage_settings: { en: 'Manage Settings', ar: 'إدارة إعدادات AI' },
 };
 
 // ==================== Loading Component ====================
@@ -187,6 +197,30 @@ const ModuleDistribution: React.FC = () => {
                 },
                 {
                     id: '5',
+                    code: 'ai_assistant',
+                    name: 'AI Assistant',
+                    name_ar: 'المساعد الذكي',
+                    description: 'Conversational assistant for system-wide inquiries and guided actions',
+                    description_ar: 'مساعد محادثة للاستفسار واقتراح الإجراءات داخل النظام',
+                    icon: 'Sparkles',
+                    color: '#0F766E',
+                    data_isolation_mode: 'isolated',
+                    supports_sharing: false,
+                    available_actions: [
+                        'view',
+                        'create_thread',
+                        'send_message',
+                        'view_history',
+                        'manage_threads',
+                        'execute_low_risk',
+                        'execute_medium_risk',
+                        'execute_high_risk',
+                        'manage_settings',
+                    ],
+                    display_order: 5,
+                },
+                {
+                    id: '6',
                     code: 'pallet_management',
                     name: 'Pallet Management',
                     name_ar: 'إدارة البالتات',
@@ -208,10 +242,10 @@ const ModuleDistribution: React.FC = () => {
                         'dispatch',
                         'view_audit'
                     ],
-                    display_order: 5,
+                    display_order: 6,
                 },
                 {
-                    id: '6',
+                    id: '7',
                     code: 'access_management',
                     name: 'Access Management',
                     name_ar: 'إدارة الصلاحيات',
@@ -222,7 +256,7 @@ const ModuleDistribution: React.FC = () => {
                     data_isolation_mode: 'shared',
                     supports_sharing: false,
                     available_actions: ['view', 'edit'],
-                    display_order: 6,
+                    display_order: 7,
                 },
             ];
 

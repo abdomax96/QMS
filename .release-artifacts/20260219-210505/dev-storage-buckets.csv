@@ -1,0 +1,5 @@
+id,name,owner,owner_id,public,avif_autodetection,file_size_limit,allowed_mime_types,bucket_type,created_at,updated_at
+chat-attachments,chat-attachments,"","",f,f,52428800,image/jpeg|image/png|image/webp|image/gif|application/pdf|text/plain|application/msword|application/vnd.openxmlformats-officedocument.wordprocessingml.document|application/vnd.ms-excel|application/vnd.openxmlformats-officedocument.spreadsheetml.sheet|application/zip,STANDARD,2026-02-11 15:00:34.239722+00,2026-02-11 15:00:34.239722+00
+documents,documents,"","",t,f,"","",STANDARD,2025-12-26 19:44:52.002486+00,2025-12-26 19:44:52.002486+00
+profiles,profiles,"","",t,f,5242880,image/jpeg|image/png|image/gif|image/webp,STANDARD,2025-12-22 05:29:04.672553+00,2025-12-22 05:29:04.672553+00
+task-attachments,task-attachments,"","",f,f,10485760,image/jpeg|image/png|image/gif|image/webp|application/pdf|application/msword|application/vnd.openxmlformats-officedocument.wordprocessingml.document|application/vnd.ms-excel|application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,STANDARD,2026-02-15 01:40:02.46129+00,2026-02-15 01:40:02.46129+00

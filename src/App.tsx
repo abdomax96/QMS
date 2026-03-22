@@ -5,7 +5,7 @@ import MainLayout from './layouts/MainLayout';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import RouteErrorElement from './components/common/RouteErrorElement';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
-import { ModuleRoute, FormsReportsRoute, TasksRoute, NcrRoute } from './components/auth/ModuleRoute';
+import { ModuleRoute, FormsReportsRoute, TasksRoute, NcrRoute, ChatRoute } from './components/auth/ModuleRoute';
 
 // Unauthorized page
 const UnauthorizedPage = lazy(() => import('./pages/UnauthorizedPage'));
@@ -584,7 +584,7 @@ const router = createBrowserRouter([
       {
         path: "chat",
         element: (
-          <ModuleRoute module="chat" action="view_conversations">
+          <ChatRoute>
             <Suspense fallback={<PageLoader />}>
               {import.meta.env.VITE_CHAT_PROVIDER === 'mattermost' ? (
                 <MattermostPage />
@@ -592,7 +592,7 @@ const router = createBrowserRouter([
                 <ChatPage />
               )}
             </Suspense>
-          </ModuleRoute>
+          </ChatRoute>
         )
       },
       // ==================== Laboratory Module ====================
