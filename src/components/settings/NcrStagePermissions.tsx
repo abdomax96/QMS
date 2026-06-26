@@ -1,47 +1,55 @@
 /**
- * NCR Stage Permissions Component (Role-first view)
- * Source of truth: ncr_stage_permissions (role_id + stage_code).
+ * NCR Stage Permissions Matrix (Role-first, Module → Stage → Actions)
+ * ------------------------------------------------------------------
+ * Source of truth: `ncr_stage_permissions` (role_id + stage_code, department_id IS NULL).
+ *
+ * Hierarchy mirrors the main Role/Module permission matrix but tailored for stages:
+ *
+ *      Role  ->  Module (NCR)  ->  Stage  ->  Allowed Actions (+ Advance / Return)
+ *
+ * State management:
+ *  - `dbPermissions`     : the last-loaded server state (immutable baseline).
+ *  - `pendingChanges`    : an overlay map of unsaved edits, keyed by stage::role.
+ *  - `getEffectivePermission()` is the SINGLE resolver everywhere
+ *    (pending -> db -> preset default), so the UI always reflects the true state.
+ *  - All mutations use functional updaters seeded from the effective permission,
+ *    so rapid clicks never race against stale closures.
+ *  - Saving is an atomic, sequential bulk write through the service layer.
+ *
+ * RLS is untouched: every call uses the standard supabase client via the service.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ArrowPathIcon,
     CheckIcon,
+    ChevronDownIcon,
+    ChevronRightIcon,
+    ExclamationTriangleIcon,
     InformationCircleIcon,
     MagnifyingGlassIcon,
     PencilIcon,
     ShieldCheckIcon,
+    XMarkIcon,
 } from '@heroicons/react/24/outline';
-import { supabase } from '../../config/supabase';
 import { NcrPermissionsSkeleton } from '../common/LoadingStates';
-import { NCR_STAGE_ACTIONS, type NcrStageAction } from '../../constants/ncrStageActions';
+import {
+    broadcastPermissionsChanged,
+    fetchNcrStagePermissionsBundle,
+    getActionColor,
+    getActionLabel,
+    getDefaultPermission,
+    getStageAllowableActions,
+    makePermissionKey,
+    NCR_STAGE_PRESETS,
+    persistNcrStagePermissions,
+    sortNcrActions,
+    type NcrRole,
+    type NcrStageMeta,
+    type NcrStagePermissionRecord,
+} from '../../services/ncrStagePermissionsService';
 
-interface NcrStage {
-    id: string;
-    code: string;
-    name: string;
-    name_ar: string;
-    stage_order: number;
-    color: string;
-}
-
-interface RoleRow {
-    id: string;
-    name: string;
-    name_ar?: string;
-    code: string;
-    color?: string;
-}
-
-interface StagePermission {
-    id?: string;
-    stage_code: string;
-    role_id: string;
-    allowed_actions: string[];
-    can_advance: boolean;
-    can_return: boolean;
-    is_active: boolean;
-}
+// ==================== Matrix filter sync (with the main matrix) ====================
 
 interface MatrixFilterDetail {
     selectedRoleIds?: string[];
@@ -61,279 +69,107 @@ const readStoredArray = (key: string): string[] => {
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) return [];
         return Array.from(
-            new Set(parsed.filter((item): item is string => typeof item === 'string' && item.trim() !== ''))
+            new Set(
+                parsed.filter(
+                    (item): item is string => typeof item === 'string' && item.trim() !== ''
+                )
+            )
         );
     } catch {
         return [];
     }
 };
 
-const FALLBACK_STAGES: NcrStage[] = [
-    ...NCR_STAGE_ACTIONS.map((stage, index) => ({
-        id: `fallback-${stage.stage}`,
-        code: stage.stage,
-        name: stage.nameEn,
-        name_ar: stage.nameAr,
-        stage_order: stage.order,
-        color: ['#2563eb', '#7c3aed', '#0ea5e9', '#10b981', '#f59e0b'][index] || '#2563eb',
-    })),
-];
-
-type StagePreset = {
-    actions: string[];
-    can_advance: boolean;
-    can_return: boolean;
-};
-
-const STAGE_PRESETS: Record<string, StagePreset> = {
-    ...Object.fromEntries(
-        NCR_STAGE_ACTIONS.map((stage) => [
-            stage.stage,
-            {
-                actions: [...stage.allowedActions],
-                can_advance: stage.canAdvance,
-                can_return: stage.canReturn,
-            },
-        ])
-    ),
-};
-
-const ACTION_META: Record<string, { label: string; color: string }> = {
-    view: { label: 'عرض', color: '#4b5563' },
-    create: { label: 'إنشاء', color: '#2563eb' },
-    edit: { label: 'تعديل', color: '#3b82f6' },
-    delete: { label: 'حذف', color: '#ef4444' },
-    assign: { label: 'تعيين', color: '#8b5cf6' },
-    approve: { label: 'موافقة', color: '#10b981' },
-    reopen: { label: 'إعادة فتح', color: '#f59e0b' },
-    export: { label: 'تصدير', color: '#6b7280' },
-    verify_close: { label: 'تحقق وإغلاق', color: '#16a34a' },
-    reject: { label: 'رفض', color: '#ef4444' },
-    'root_cause.propose': { label: 'اقتراح سبب جذري', color: '#06b6d4' },
-    'capa.add': { label: 'إضافة CAPA', color: '#0ea5e9' },
-    'capa.complete': { label: 'إكمال CAPA', color: '#10b981' },
-    release_hold: { label: 'فك الحجز', color: '#10b981' },
-    'workflow.progress': { label: 'التقدم في المسار', color: '#3b82f6' },
-};
-
-const ACTION_ORDER: NcrStageAction[] = [
-    'view',
-    'create',
-    'edit',
-    'delete',
-    'root_cause.propose',
-    'assign',
-    'approve',
-    'release_hold',
-    'reject',
-    'verify_close',
-    'export',
-    'reopen',
-    'capa.add',
-    'capa.complete',
-    'workflow.progress',
-];
-
-const ACTION_ORDER_INDEX = new Map<string, number>(ACTION_ORDER.map((code, i) => [code, i]));
-const CANONICAL_ACTION_SET = new Set<string>(ACTION_ORDER);
-
-const makeKey = (stageCode: string, roleId: string) => `${stageCode}::${roleId}`;
-
-const uniq = (values: string[]): string[] => Array.from(new Set(values.filter(Boolean)));
-
-const sortActions = (actions: string[]): string[] =>
-    uniq(actions).sort((a, b) => {
-        const aIndex = ACTION_ORDER_INDEX.get(a);
-        const bIndex = ACTION_ORDER_INDEX.get(b);
-        if (aIndex !== undefined && bIndex !== undefined) return aIndex - bIndex;
-        if (aIndex !== undefined) return -1;
-        if (bIndex !== undefined) return 1;
-        return a.localeCompare(b);
-    });
-
-const ensureView = (actions: string[]): string[] => {
-    const cleaned = uniq(actions).filter(action => CANONICAL_ACTION_SET.has(action));
-    if (!cleaned.includes('view')) {
-        cleaned.unshift('view');
-    }
-    return sortActions(cleaned);
-};
-
-const getActionLabel = (actionCode: string): string =>
-    ACTION_META[actionCode]?.label || actionCode;
-
-const getActionColor = (actionCode: string): string =>
-    ACTION_META[actionCode]?.color || '#6b7280';
-
-const getDefaultPermission = (stageCode: string, roleId: string): StagePermission => {
-    const preset = STAGE_PRESETS[stageCode];
-    return {
-        stage_code: stageCode,
-        role_id: roleId,
-        allowed_actions: ensureView(preset?.actions || ['view']),
-        can_advance: preset?.can_advance ?? false,
-        can_return: preset?.can_return ?? false,
-        is_active: true,
-    };
-};
-
-const mapRowToPermission = (row: {
-    id: string;
-    role_id: string | null;
-    stage_code: string;
-    allowed_actions: string[] | null;
-    can_advance: boolean | null;
-    can_return: boolean | null;
-    is_active: boolean | null;
-}): StagePermission | null => {
-    if (!row.role_id) return null;
-    return {
-        id: row.id,
-        role_id: row.role_id,
-        stage_code: row.stage_code,
-        allowed_actions: ensureView(row.allowed_actions || []),
-        can_advance: Boolean(row.can_advance),
-        can_return: Boolean(row.can_return),
-        is_active: row.is_active ?? true,
-    };
-};
+// ==================== Component ====================
 
 const NcrStagePermissions: React.FC = () => {
-    const [stages, setStages] = useState<NcrStage[]>(FALLBACK_STAGES);
-    const [selectedStageCode, setSelectedStageCode] = useState(FALLBACK_STAGES[0].code);
-    const [roles, setRoles] = useState<RoleRow[]>([]);
-    const [dbPermissions, setDbPermissions] = useState<Map<string, StagePermission>>(new Map());
-    const [pendingChanges, setPendingChanges] = useState<Map<string, StagePermission>>(new Map());
+    // Data
+    const [stages, setStages] = useState<NcrStageMeta[]>([]);
+    const [roles, setRoles] = useState<NcrRole[]>([]);
+    const [dbPermissions, setDbPermissions] = useState<Map<string, NcrStagePermissionRecord>>(
+        new Map()
+    );
+    const [pendingChanges, setPendingChanges] = useState<Map<string, NcrStagePermissionRecord>>(
+        new Map()
+    );
+
+    // UI state
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [isEditing, setIsEditing] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [successMsg, setSuccessMsg] = useState<string | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
-    const [linkedRoleIds, setLinkedRoleIds] = useState<string[]>(() => readStoredArray(STORAGE_KEYS.roleIds));
-    const [linkedModuleCodes, setLinkedModuleCodes] = useState<string[]>(() => readStoredArray(STORAGE_KEYS.moduleCodes));
+    const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
 
-    useEffect(() => {
-        void loadData();
-    }, []);
+    // Linked filters (broadcast from the main matrix)
+    const [linkedRoleIds, setLinkedRoleIds] = useState<string[]>(() =>
+        readStoredArray(STORAGE_KEYS.roleIds)
+    );
+    const [linkedModuleCodes, setLinkedModuleCodes] = useState<string[]>(() =>
+        readStoredArray(STORAGE_KEYS.moduleCodes)
+    );
 
-    useEffect(() => {
-        const handleMatrixFilterChange = (event: Event) => {
-            const detail = (event as CustomEvent<MatrixFilterDetail>).detail || {};
-            setLinkedRoleIds(Array.isArray(detail.selectedRoleIds) ? detail.selectedRoleIds : []);
-            setLinkedModuleCodes(Array.isArray(detail.selectedModuleCodes) ? detail.selectedModuleCodes : []);
-        };
+    // ---------- Data loading ----------
 
-        window.addEventListener('permission-matrix-filter-changed', handleMatrixFilterChange as EventListener);
-        return () => {
-            window.removeEventListener('permission-matrix-filter-changed', handleMatrixFilterChange as EventListener);
-        };
-    }, []);
-
-    const isNcrModuleSelected = useMemo(() => {
-        if (linkedModuleCodes.length === 0) return true;
-        return linkedModuleCodes.includes('ncr');
-    }, [linkedModuleCodes]);
-
-    const loadData = async () => {
+    const loadData = useCallback(async () => {
         setLoading(true);
+        setError(null);
         try {
-            const [stagesRes, rolesRes, permsRes] = await Promise.all([
-                supabase
-                    .from('ncr_workflow_stages')
-                    .select('id, code, name, name_ar, stage_order, color, is_active')
-                    .eq('is_active', true)
-                    .order('stage_order'),
-                supabase
-                    .from('roles')
-                    .select('id, name, name_ar, code, color, is_active, priority')
-                    .eq('is_active', true)
-                    .order('priority'),
-                supabase
-                    .from('ncr_stage_permissions')
-                    .select('id, role_id, stage_code, allowed_actions, can_advance, can_return, is_active')
-                    .is('department_id', null),
-            ]);
-
-            if (!stagesRes.error && stagesRes.data?.length) {
-                const mappedStages: NcrStage[] = stagesRes.data.map(row => ({
-                    id: row.id,
-                    code: row.code,
-                    name: row.name,
-                    name_ar: row.name_ar,
-                    stage_order: row.stage_order,
-                    color: row.color || '#6b7280',
-                }));
-                setStages(mappedStages);
-                if (!mappedStages.some(stage => stage.code === selectedStageCode)) {
-                    setSelectedStageCode(mappedStages[0].code);
-                }
-            } else {
-                setStages(FALLBACK_STAGES);
-                if (!FALLBACK_STAGES.some(stage => stage.code === selectedStageCode)) {
-                    setSelectedStageCode(FALLBACK_STAGES[0].code);
-                }
-            }
-
-            if (rolesRes.error) {
-                console.error('Failed to load roles:', rolesRes.error);
-                setRoles([]);
-            } else {
-                setRoles((rolesRes.data || []).map(row => ({
-                    id: row.id,
-                    name: row.name,
-                    name_ar: row.name_ar || undefined,
-                    code: row.code,
-                    color: row.color || undefined,
-                })));
-            }
-
-            if (permsRes.error) {
-                console.error('Failed to load role stage permissions:', permsRes.error);
-                setDbPermissions(new Map());
-            } else {
-                const next = new Map<string, StagePermission>();
-                for (const row of permsRes.data || []) {
-                    const mapped = mapRowToPermission(row);
-                    if (!mapped) continue;
-                    const key = makeKey(mapped.stage_code, mapped.role_id);
-                    if (next.has(key)) continue;
-                    next.set(key, mapped);
-                }
-                setDbPermissions(next);
-            }
-
+            const bundle = await fetchNcrStagePermissionsBundle();
+            setStages(bundle.stages);
+            setRoles(bundle.roles);
+            setDbPermissions(bundle.permissions);
             setPendingChanges(new Map());
             setIsEditing(false);
-        } catch (error) {
-            console.error('Error loading NCR role stage permissions:', error);
+        } catch (err: any) {
+            console.error('Error loading NCR stage permissions:', err);
+            setError(err?.message || 'حدث خطأ أثناء تحميل صلاحيات المراحل');
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
-    const resolvePermission = (stageCode: string, roleId: string): StagePermission => {
-        const key = makeKey(stageCode, roleId);
-        return pendingChanges.get(key) || dbPermissions.get(key) || getDefaultPermission(stageCode, roleId);
-    };
+    useEffect(() => {
+        void loadData();
+    }, [loadData]);
 
-    const selectedStage = useMemo(
-        () => stages.find(stage => stage.code === selectedStageCode) || stages[0],
-        [stages, selectedStageCode]
+    // Stay in sync with the general matrix's role/module filter selection.
+    useEffect(() => {
+        const handleFilterChange = (event: Event) => {
+            const detail = (event as CustomEvent<MatrixFilterDetail>).detail || {};
+            setLinkedRoleIds(Array.isArray(detail.selectedRoleIds) ? detail.selectedRoleIds : []);
+            setLinkedModuleCodes(
+                Array.isArray(detail.selectedModuleCodes) ? detail.selectedModuleCodes : []
+            );
+        };
+        window.addEventListener('permission-matrix-filter-changed', handleFilterChange as EventListener);
+        return () =>
+            window.removeEventListener(
+                'permission-matrix-filter-changed',
+                handleFilterChange as EventListener
+            );
+    }, []);
+
+    // ---------- Derived state ----------
+
+    const isNcrModuleSelected = useMemo(() => {
+        if (linkedModuleCodes.length === 0) return true; // "all" => NCR included
+        return linkedModuleCodes.includes('ncr');
+    }, [linkedModuleCodes]);
+
+    const orderedStages = useMemo(
+        () => [...stages].sort((a, b) => a.stage_order - b.stage_order),
+        [stages]
     );
 
-    const selectedStageActions = useMemo(() => {
-        const fromPreset = STAGE_PRESETS[selectedStageCode]?.actions || ['view'];
-        return sortActions(ensureView(fromPreset));
-    }, [selectedStageCode]);
-
     const filteredRoles = useMemo(() => {
-        if (!isNcrModuleSelected) {
-            return [];
-        }
+        if (!isNcrModuleSelected) return [];
 
         const q = searchTerm.trim().toLowerCase();
         const roleFilter = linkedRoleIds.length > 0 ? new Set(linkedRoleIds) : null;
 
-        return roles.filter(role => {
+        return roles.filter((role) => {
             if (roleFilter && !roleFilter.has(role.id)) return false;
             if (!q) return true;
             return (
@@ -344,77 +180,163 @@ const NcrStagePermissions: React.FC = () => {
         });
     }, [roles, searchTerm, linkedRoleIds, isNcrModuleSelected]);
 
-    const setPermissionChange = (permission: StagePermission) => {
-        const key = makeKey(permission.stage_code, permission.role_id);
-        setPendingChanges(prev => {
-            const next = new Map(prev);
-            next.set(key, permission);
+    /**
+     * THE single resolver. Everything (rendering + mutations) goes through here so the
+     * checkbox state can never diverge from the data model.
+     */
+    const getEffectivePermission = useCallback(
+        (stageCode: string, roleId: string): NcrStagePermissionRecord => {
+            const key = makePermissionKey(stageCode, roleId);
+            return (
+                pendingChanges.get(key) ||
+                dbPermissions.get(key) ||
+                getDefaultPermission(stageCode, roleId)
+            );
+        },
+        [pendingChanges, dbPermissions]
+    );
+
+    /**
+     * Whether a stage/role record currently differs from the saved DB baseline.
+     * Used to badge the role chips and to short-circuit no-op saves.
+     */
+    const dirtyCount = pendingChanges.size;
+
+    // ---------- Mutations (functional, race-safe) ----------
+
+    /**
+     * Apply a mutation to a single stage/role permission. The `mutator` always receives
+     * the most up-to-date effective record (pending -> db -> default) computed *inside*
+     * the state updater, eliminating stale-closure races on rapid clicks.
+     */
+    const mutatePermission = useCallback(
+        (
+            stageCode: string,
+            roleId: string,
+            mutator: (current: NcrStagePermissionRecord) => NcrStagePermissionRecord
+        ) => {
+            const key = makePermissionKey(stageCode, roleId);
+            setPendingChanges((prev) => {
+                const base =
+                    prev.get(key) ||
+                    dbPermissions.get(key) ||
+                    getDefaultPermission(stageCode, roleId);
+                const next = new Map(prev);
+                next.set(key, { ...mutator(base), is_active: true });
+                return next;
+            });
+        },
+        [dbPermissions]
+    );
+
+    const toggleAction = useCallback(
+        (stageCode: string, roleId: string, actionCode: string) => {
+            if (!isEditing || actionCode === 'view') return; // view is mandatory
+            mutatePermission(stageCode, roleId, (current) => {
+                const set = new Set(current.allowed_actions);
+                if (set.has(actionCode)) set.delete(actionCode);
+                else set.add(actionCode);
+                set.add('view');
+                return { ...current, allowed_actions: sortNcrActions(Array.from(set)) };
+            });
+        },
+        [isEditing, mutatePermission]
+    );
+
+    const toggleAllActions = useCallback(
+        (stageCode: string, roleId: string, grant: boolean) => {
+            if (!isEditing) return;
+            const allowable = getStageAllowableActions(stageCode);
+            mutatePermission(stageCode, roleId, (current) => ({
+                ...current,
+                allowed_actions: grant ? allowable : ['view'],
+            }));
+        },
+        [isEditing, mutatePermission]
+    );
+
+    const toggleAdvance = useCallback(
+        (stageCode: string, roleId: string) => {
+            if (!isEditing) return;
+            mutatePermission(stageCode, roleId, (current) => ({
+                ...current,
+                can_advance: !current.can_advance,
+            }));
+        },
+        [isEditing, mutatePermission]
+    );
+
+    const toggleReturn = useCallback(
+        (stageCode: string, roleId: string) => {
+            if (!isEditing) return;
+            mutatePermission(stageCode, roleId, (current) => ({
+                ...current,
+                can_return: !current.can_return,
+            }));
+        },
+        [isEditing, mutatePermission]
+    );
+
+    /** Reset every visible stage of a role back to the canonical stage preset. */
+    const applyPresetForRole = useCallback(
+        (roleId: string) => {
+            if (!isEditing) return;
+            setPendingChanges((prev) => {
+                const next = new Map(prev);
+                for (const stage of orderedStages) {
+                    const preset = NCR_STAGE_PRESETS[stage.code];
+                    if (!preset) continue;
+                    const key = makePermissionKey(stage.code, roleId);
+                    const base =
+                        prev.get(key) ||
+                        dbPermissions.get(key) ||
+                        getDefaultPermission(stage.code, roleId);
+                    next.set(key, {
+                        ...base,
+                        allowed_actions: sortNcrActions(preset.actions),
+                        can_advance: preset.can_advance,
+                        can_return: preset.can_return,
+                        is_active: true,
+                    });
+                }
+                return next;
+            });
+        },
+        [isEditing, orderedStages, dbPermissions]
+    );
+
+    // ---------- Expansion ----------
+
+    const toggleExpand = useCallback((key: string) => {
+        setExpandedKeys((prev) => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
             return next;
         });
-    };
+    }, []);
 
-    const toggleAction = (roleId: string, actionCode: string) => {
-        if (!isEditing || actionCode === 'view') return;
-
-        const current = resolvePermission(selectedStageCode, roleId);
-        const actionSet = new Set(current.allowed_actions);
-        if (actionSet.has(actionCode)) {
-            actionSet.delete(actionCode);
-        } else {
-            actionSet.add(actionCode);
-        }
-        actionSet.add('view');
-
-        setPermissionChange({
-            ...current,
-            allowed_actions: sortActions(Array.from(actionSet)),
-            is_active: true,
+    // Auto-expand the first visible role for convenience on first paint.
+    useEffect(() => {
+        if (loading || filteredRoles.length === 0) return;
+        setExpandedKeys((prev) => {
+            if (prev.size > 0) return prev;
+            return new Set([filteredRoles[0].id]);
         });
-    };
+    }, [loading, filteredRoles]);
 
-    const toggleAdvance = (roleId: string) => {
-        if (!isEditing) return;
-        const current = resolvePermission(selectedStageCode, roleId);
-        setPermissionChange({
-            ...current,
-            can_advance: !current.can_advance,
-            is_active: true,
-        });
-    };
+    // ---------- Save / discard ----------
 
-    const toggleReturn = (roleId: string) => {
-        if (!isEditing) return;
-        const current = resolvePermission(selectedStageCode, roleId);
-        setPermissionChange({
-            ...current,
-            can_return: !current.can_return,
-            is_active: true,
-        });
-    };
-
-    const applyStageDefaultForAllRoles = () => {
-        if (!isEditing) return;
-        const preset = STAGE_PRESETS[selectedStageCode];
-        if (!preset) return;
-
-        const next = new Map(pendingChanges);
-        for (const role of filteredRoles) {
-            const key = makeKey(selectedStageCode, role.id);
-            const current = resolvePermission(selectedStageCode, role.id);
-            next.set(key, {
-                ...current,
-                allowed_actions: sortActions(preset.actions),
-                can_advance: preset.can_advance,
-                can_return: preset.can_return,
-                is_active: true,
-            });
-        }
-        setPendingChanges(next);
+    const startEditing = () => {
+        setError(null);
+        setSuccessMsg(null);
+        setIsEditing(true);
     };
 
     const discardChanges = () => {
         setPendingChanges(new Map());
         setIsEditing(false);
+        setError(null);
     };
 
     const saveChanges = async () => {
@@ -422,83 +344,64 @@ const NcrStagePermissions: React.FC = () => {
             setIsEditing(false);
             return;
         }
-
         setSaving(true);
+        setError(null);
+        setSuccessMsg(null);
         try {
-            for (const permission of pendingChanges.values()) {
-                const payload = {
-                    stage_code: permission.stage_code,
-                    role_id: permission.role_id,
-                    department_id: null,
-                    allowed_actions: ensureView(permission.allowed_actions),
-                    can_advance: permission.can_advance,
-                    can_return: permission.can_return,
-                    is_active: true,
-                };
-
-                let rowId = permission.id;
-                if (!rowId) {
-                    const { data: existingRow, error: lookupError } = await supabase
-                        .from('ncr_stage_permissions')
-                        .select('id')
-                        .eq('stage_code', permission.stage_code)
-                        .eq('role_id', permission.role_id)
-                        .is('department_id', null)
-                        .maybeSingle();
-
-                    if (lookupError) throw lookupError;
-                    rowId = existingRow?.id;
-                }
-
-                if (rowId) {
-                    const { error: updateError } = await supabase
-                        .from('ncr_stage_permissions')
-                        .update(payload)
-                        .eq('id', rowId);
-                    if (updateError) throw updateError;
-                } else {
-                    const { error: insertError } = await supabase
-                        .from('ncr_stage_permissions')
-                        .insert(payload);
-                    if (insertError) throw insertError;
-                }
-            }
-
-            setPendingChanges(new Map());
-            setIsEditing(false);
+            await persistNcrStagePermissions(Array.from(pendingChanges.values()));
             await loadData();
-            window.dispatchEvent(new Event('permissions-changed'));
-        } catch (error: any) {
-            console.error('Failed to save role stage permissions:', error);
-            alert(error?.message || 'حدث خطأ أثناء حفظ صلاحيات الأدوار');
+            broadcastPermissionsChanged();
+            setSuccessMsg('تم حفظ صلاحيات المراحل بنجاح');
+            setTimeout(() => setSuccessMsg(null), 3500);
+        } catch (err: any) {
+            console.error('Failed to save NCR stage permissions:', err);
+            if (
+                err?.code === '42501' ||
+                err?.message?.includes('permission') ||
+                err?.message?.includes('policy')
+            ) {
+                setError(
+                    'ليس لديك صلاحية لتعديل صلاحيات المراحل. تحتاج صلاحية "تعديل" في موديول إدارة الصلاحيات.'
+                );
+            } else {
+                setError(err?.message || 'حدث خطأ أثناء حفظ صلاحيات المراحل');
+            }
         } finally {
             setSaving(false);
         }
     };
+
+    // ---------- Render ----------
 
     if (loading) {
         return <NcrPermissionsSkeleton />;
     }
 
     return (
-        <div className="h-full flex flex-col bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden" dir="rtl">
+        <div
+            className="h-full flex flex-col bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden"
+            dir="rtl"
+        >
+            {/* Header */}
             <div className="flex-shrink-0 flex items-center justify-between gap-4 px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gradient-to-l from-red-50 to-white dark:from-gray-800 dark:to-gray-900">
                 <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
                         <ShieldCheckIcon className="w-5 h-5 text-red-600" />
                     </div>
                     <div>
-                        <h2 className="text-lg font-bold text-gray-900 dark:text-white">صلاحيات NCR حسب الدور والمرحلة</h2>
-                        <p className="text-sm text-gray-500">كل دور له صلاحيات مستقلة داخل المرحلة المختارة</p>
+                        <h2 className="text-lg font-bold text-gray-900 dark:text-white">
+                            صلاحيات NCR حسب الدور والمرحلة
+                        </h2>
+                        <p className="text-sm text-gray-500">
+                            الدور ← الموديول (NCR) ← المرحلة ← الأكشنات المسموحة
+                        </p>
                     </div>
                 </div>
 
                 <div className="flex items-center gap-2">
                     {!isEditing ? (
                         <button
-                            onClick={() => {
-                                setIsEditing(true);
-                            }}
+                            onClick={startEditing}
                             className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 text-sm"
                         >
                             <PencilIcon className="w-4 h-4" />
@@ -508,23 +411,29 @@ const NcrStagePermissions: React.FC = () => {
                         <>
                             <button
                                 onClick={discardChanges}
-                                className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+                                disabled={saving}
+                                className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-60"
                             >
                                 إلغاء
                             </button>
                             <button
                                 onClick={saveChanges}
-                                disabled={saving || pendingChanges.size === 0}
+                                disabled={saving || dirtyCount === 0}
                                 className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm disabled:opacity-60"
                             >
-                                {saving ? <ArrowPathIcon className="w-4 h-4 animate-spin" /> : <CheckIcon className="w-4 h-4" />}
-                                حفظ ({pendingChanges.size})
+                                {saving ? (
+                                    <ArrowPathIcon className="w-4 h-4 animate-spin" />
+                                ) : (
+                                    <CheckIcon className="w-4 h-4" />
+                                )}
+                                حفظ ({dirtyCount})
                             </button>
                         </>
                     )}
                 </div>
             </div>
 
+            {/* Linked filter status */}
             <div className="flex-shrink-0 px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 text-xs text-gray-600 dark:text-gray-300">
                 <div className="flex flex-wrap items-center gap-2">
                     <span className="font-semibold">فلتر مرتبط بالمصفوفة العامة:</span>
@@ -534,170 +443,291 @@ const NcrStagePermissions: React.FC = () => {
                     <span className="px-2 py-1 rounded bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700">
                         الموديولز: {linkedModuleCodes.length ? linkedModuleCodes.length : 'الكل'}
                     </span>
-                    <span className={`px-2 py-1 rounded border ${isNcrModuleSelected
-                        ? 'bg-green-50 text-green-700 border-green-200'
-                        : 'bg-amber-50 text-amber-700 border-amber-200'
-                        }`}>
+                    <span
+                        className={`px-2 py-1 rounded border ${
+                            isNcrModuleSelected
+                                ? 'bg-green-50 text-green-700 border-green-200'
+                                : 'bg-amber-50 text-amber-700 border-amber-200'
+                        }`}
+                    >
                         NCR: {isNcrModuleSelected ? 'مفعل' : 'غير محدد'}
                     </span>
                 </div>
             </div>
 
-            {isEditing && (
-                <div className="flex-shrink-0 px-4 py-2 border-b border-amber-200 bg-amber-50 dark:bg-amber-900/20 flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-2 text-amber-700 dark:text-amber-300 text-sm">
-                        <InformationCircleIcon className="w-4 h-4" />
-                        وضع التعديل مفعل. الأكشن `عرض` إلزامي دائمًا.
-                    </div>
-                    <button
-                        onClick={applyStageDefaultForAllRoles}
-                        className="text-xs px-3 py-1.5 rounded-md border border-amber-300 text-amber-700 hover:bg-amber-100"
-                    >
-                        استرجاع افتراضي المرحلة لكل الأدوار
-                    </button>
+            {/* Error / Success banners */}
+            {error && (
+                <div className="flex-shrink-0 mx-4 mt-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-red-700 dark:text-red-300 text-sm flex items-center gap-2">
+                    <ExclamationTriangleIcon className="w-4 h-4 shrink-0" />
+                    <span>{error}</span>
+                </div>
+            )}
+            {successMsg && (
+                <div className="flex-shrink-0 mx-4 mt-3 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg text-green-700 dark:text-green-300 text-sm flex items-center gap-2">
+                    <CheckIcon className="w-4 h-4 shrink-0" />
+                    <span>{successMsg}</span>
                 </div>
             )}
 
-            <div className="flex-shrink-0 p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40">
-                <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                    {stages.map(stage => {
-                        const isActive = stage.code === selectedStageCode;
-                        return (
-                            <button
-                                key={stage.code}
-                                onClick={() => setSelectedStageCode(stage.code)}
-                                className={`px-3 py-2 rounded-lg border text-sm whitespace-nowrap transition-all ${isActive
-                                    ? 'text-white shadow-sm'
-                                    : 'bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:border-gray-300'
-                                    }`}
-                                style={isActive ? { backgroundColor: stage.color, borderColor: stage.color } : undefined}
-                            >
-                                {stage.name_ar}
-                            </button>
-                        );
-                    })}
+            {/* Edit-mode hint */}
+            {isEditing && (
+                <div className="flex-shrink-0 px-4 py-2 mt-2 border-y border-amber-200 bg-amber-50 dark:bg-amber-900/20 flex items-center gap-2 text-amber-700 dark:text-amber-300 text-sm">
+                    <InformationCircleIcon className="w-4 h-4 shrink-0" />
+                    وضع التعديل مفعل. الأكشن «عرض» إلزامي دائمًا. استخدم «استرجاع الافتراضي» لإعادة ضبط دور كامل.
                 </div>
-            </div>
+            )}
 
+            {/* Search */}
             <div className="flex-shrink-0 p-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
                 <div className="relative w-full max-w-md">
                     <MagnifyingGlassIcon className="w-4 h-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2" />
                     <input
                         type="text"
                         value={searchTerm}
-                        onChange={e => setSearchTerm(e.target.value)}
+                        onChange={(e) => setSearchTerm(e.target.value)}
                         placeholder="بحث عن دور..."
                         className="w-full pr-9 pl-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
                     />
                 </div>
                 <div className="text-xs text-gray-500 whitespace-nowrap">
-                    {selectedStage?.name_ar} - {filteredRoles.length} دور
+                    {filteredRoles.length} دور × {orderedStages.length} مرحلة
                 </div>
             </div>
 
-            <div className="flex-1 overflow-auto">
-                <>
-                    <table className="w-full text-sm">
-                            <thead className="sticky top-0 z-10 bg-gray-100 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-                                <tr>
-                                    <th className="px-3 py-2 text-right font-semibold min-w-[220px]">الدور</th>
-                                    <th className="px-3 py-2 text-center font-semibold min-w-[90px]">تقدم</th>
-                                    <th className="px-3 py-2 text-center font-semibold min-w-[90px]">إرجاع</th>
-                                    <th className="px-3 py-2 text-right font-semibold">الأكشنات المتاحة</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                                {filteredRoles.map(role => {
-                                    const permission = resolvePermission(selectedStageCode, role.id);
-                                    return (
-                                        <tr key={role.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/40">
-                                            <td className="px-3 py-3 align-top">
-                                                <div className="flex items-center gap-2">
-                                                    <div
-                                                        className="w-6 h-6 rounded flex items-center justify-center text-white text-xs font-bold"
-                                                        style={{ backgroundColor: role.color || '#6b7280' }}
-                                                    >
-                                                        {(role.name_ar || role.name || '?').charAt(0)}
-                                                    </div>
-                                                    <div>
-                                                        <div className="font-medium text-gray-900 dark:text-gray-100">
-                                                            {role.name_ar || role.name}
+            {/* Body */}
+            <div className="flex-1 overflow-auto p-3 space-y-3">
+                {!isNcrModuleSelected && (
+                    <div className="py-10 text-center text-gray-500">
+                        الموديول «NCR» غير محدد في فلتر المصفوفة العامة. اختر «NCR» من قائمة الموديولز لعرض الأدوار هنا.
+                    </div>
+                )}
+
+                {isNcrModuleSelected && filteredRoles.length === 0 && (
+                    <div className="py-10 text-center text-gray-500">لا توجد أدوار مطابقة للبحث/الفلتر.</div>
+                )}
+
+                {isNcrModuleSelected &&
+                    filteredRoles.map((role) => {
+                        const roleExpanded = expandedKeys.has(role.id);
+
+                        // How many of this role's stage records are unsaved?
+                        const roleDirty = orderedStages.reduce((acc, stage) => {
+                            return acc +
+                                (pendingChanges.has(makePermissionKey(stage.code, role.id)) ? 1 : 0);
+                        }, 0);
+
+                        return (
+                            <div
+                                key={role.id}
+                                className="rounded-xl border-2 border-gray-200 dark:border-gray-700 overflow-hidden"
+                            >
+                                {/* Role header (level 1) */}
+                                <div
+                                    className="px-4 py-3 bg-gray-50 dark:bg-gray-800 flex items-center justify-between cursor-pointer select-none"
+                                    onClick={() => toggleExpand(role.id)}
+                                >
+                                    <div className="flex items-center gap-3">
+                                        {roleExpanded ? (
+                                            <ChevronDownIcon className="w-4 h-4 text-gray-500" />
+                                        ) : (
+                                            <ChevronRightIcon className="w-4 h-4 text-gray-500" />
+                                        )}
+                                        <div
+                                            className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold"
+                                            style={{ backgroundColor: role.color || '#6b7280' }}
+                                        >
+                                            {(role.name_ar || role.name || '?').charAt(0)}
+                                        </div>
+                                        <div>
+                                            <div className="font-semibold text-gray-900 dark:text-white text-sm flex items-center gap-2">
+                                                {role.name_ar || role.name}
+                                                {roleDirty > 0 && (
+                                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                                                        {roleDirty} غير محفوظ
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className="text-[11px] text-gray-500">{role.code}</div>
+                                        </div>
+                                    </div>
+
+                                    {/* NCR module badge + per-role preset reset */}
+                                    <div className="flex items-center gap-2">
+                                        <span className="hidden sm:inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-md bg-red-50 text-red-600 border border-red-200">
+                                            <ExclamationTriangleIcon className="w-3.5 h-3.5" />
+                                            NCR
+                                        </span>
+                                        {isEditing && (
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    applyPresetForRole(role.id);
+                                                }}
+                                                className="text-[11px] px-2.5 py-1 rounded-md border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                                                title="استرجاع الإعداد الافتراضي لكل مراحل هذا الدور"
+                                            >
+                                                استرجاع الافتراضي
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Stages (level 2) */}
+                                {roleExpanded && (
+                                    <div className="divide-y divide-gray-100 dark:divide-gray-800">
+                                        {orderedStages.map((stage) => {
+                                            const permission = getEffectivePermission(stage.code, role.id);
+                                            const allowable = getStageAllowableActions(stage.code);
+                                            const grantedConfigurable = allowable.filter(
+                                                (a) => a !== 'view' && permission.allowed_actions.includes(a)
+                                            ).length;
+                                            const totalConfigurable = allowable.filter(
+                                                (a) => a !== 'view'
+                                            ).length;
+                                            const hasAll =
+                                                totalConfigurable > 0 &&
+                                                grantedConfigurable === totalConfigurable;
+                                            const isDirty = pendingChanges.has(
+                                                makePermissionKey(stage.code, role.id)
+                                            );
+
+                                            return (
+                                                <div
+                                                    key={stage.code}
+                                                    className={`px-4 py-3 ${
+                                                        isDirty ? 'bg-amber-50/40 dark:bg-amber-900/10' : ''
+                                                    }`}
+                                                >
+                                                    {/* Stage header row */}
+                                                    <div className="flex items-center justify-between gap-3 mb-2">
+                                                        <div className="flex items-center gap-2">
+                                                            <span
+                                                                className="w-2.5 h-2.5 rounded-full"
+                                                                style={{ backgroundColor: stage.color }}
+                                                            />
+                                                            <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                                                                {stage.name_ar}
+                                                            </span>
+                                                            <span className="text-[11px] text-gray-400">
+                                                                {stage.name}
+                                                            </span>
+                                                            <span className="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-800 rounded px-1.5 py-0.5">
+                                                                {grantedConfigurable}/{totalConfigurable}
+                                                            </span>
                                                         </div>
-                                                        <div className="text-[11px] text-gray-500">{role.code}</div>
+
+                                                        <div className="flex items-center gap-2">
+                                                            {/* Advance */}
+                                                            <button
+                                                                onClick={() => toggleAdvance(stage.code, role.id)}
+                                                                disabled={!isEditing}
+                                                                className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                                                                    permission.can_advance
+                                                                        ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+                                                                        : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
+                                                                } ${
+                                                                    isEditing
+                                                                        ? 'cursor-pointer hover:opacity-80'
+                                                                        : 'cursor-default'
+                                                                }`}
+                                                                title="السماح بالتقدم للمرحلة التالية (workflow.progress)"
+                                                            >
+                                                                تقدم: {permission.can_advance ? 'نعم' : 'لا'}
+                                                            </button>
+
+                                                            {/* Return */}
+                                                            <button
+                                                                onClick={() => toggleReturn(stage.code, role.id)}
+                                                                disabled={!isEditing}
+                                                                className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                                                                    permission.can_return
+                                                                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                                                                        : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
+                                                                } ${
+                                                                    isEditing
+                                                                        ? 'cursor-pointer hover:opacity-80'
+                                                                        : 'cursor-default'
+                                                                }`}
+                                                                title="السماح بالإرجاع لمرحلة سابقة (workflow.return)"
+                                                            >
+                                                                إرجاع: {permission.can_return ? 'نعم' : 'لا'}
+                                                            </button>
+
+                                                            {/* Grant/Clear all (edit mode only) */}
+                                                            {isEditing && totalConfigurable > 0 && (
+                                                                <button
+                                                                    onClick={() =>
+                                                                        toggleAllActions(stage.code, role.id, !hasAll)
+                                                                    }
+                                                                    className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                                                                        hasAll
+                                                                            ? 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
+                                                                            : 'bg-primary-50 text-primary-700 border-primary-200 hover:bg-primary-100'
+                                                                    }`}
+                                                                >
+                                                                    {hasAll ? 'إلغاء الكل' : 'تفعيل الكل'}
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Action chips (level 3) */}
+                                                    <div className="flex flex-wrap gap-1.5">
+                                                        {allowable.map((actionCode) => {
+                                                            const isGranted =
+                                                                permission.allowed_actions.includes(actionCode);
+                                                            const isView = actionCode === 'view';
+                                                            return (
+                                                                <button
+                                                                    key={`${role.id}-${stage.code}-${actionCode}`}
+                                                                    onClick={() =>
+                                                                        toggleAction(stage.code, role.id, actionCode)
+                                                                    }
+                                                                    disabled={!isEditing || isView}
+                                                                    className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs transition-all ${
+                                                                        isGranted
+                                                                            ? 'text-white'
+                                                                            : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
+                                                                    } ${
+                                                                        isEditing && !isView
+                                                                            ? 'cursor-pointer hover:opacity-85'
+                                                                            : 'cursor-default'
+                                                                    } ${isView ? 'opacity-90' : ''}`}
+                                                                    style={
+                                                                        isGranted
+                                                                            ? { backgroundColor: getActionColor(actionCode) }
+                                                                            : undefined
+                                                                    }
+                                                                    title={actionCode}
+                                                                >
+                                                                    {isGranted ? (
+                                                                        <CheckIcon className="w-3 h-3" />
+                                                                    ) : (
+                                                                        <XMarkIcon className="w-3 h-3" />
+                                                                    )}
+                                                                    {getActionLabel(actionCode)}
+                                                                    {isView && (
+                                                                        <span className="text-[9px] opacity-80">(إلزامي)</span>
+                                                                    )}
+                                                                </button>
+                                                            );
+                                                        })}
                                                     </div>
                                                 </div>
-                                            </td>
-                                            <td className="px-3 py-3 align-top text-center">
-                                                <button
-                                                    onClick={() => toggleAdvance(role.id)}
-                                                    disabled={!isEditing}
-                                                    className={`px-2.5 py-1 text-xs rounded-md transition-colors ${permission.can_advance
-                                                        ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
-                                                        : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
-                                                        } ${isEditing ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}`}
-                                                >
-                                                    {permission.can_advance ? 'نعم' : 'لا'}
-                                                </button>
-                                            </td>
-                                            <td className="px-3 py-3 align-top text-center">
-                                                <button
-                                                    onClick={() => toggleReturn(role.id)}
-                                                    disabled={!isEditing}
-                                                    className={`px-2.5 py-1 text-xs rounded-md transition-colors ${permission.can_return
-                                                        ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
-                                                        : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
-                                                        } ${isEditing ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}`}
-                                                >
-                                                    {permission.can_return ? 'نعم' : 'لا'}
-                                                </button>
-                                            </td>
-                                            <td className="px-3 py-3 align-top">
-                                                <div className="flex flex-wrap gap-1.5">
-                                                    {selectedStageActions.map(actionCode => {
-                                                        const isGranted = permission.allowed_actions.includes(actionCode);
-                                                        const isView = actionCode === 'view';
-                                                        return (
-                                                            <button
-                                                                key={`${role.id}-${actionCode}`}
-                                                                onClick={() => toggleAction(role.id, actionCode)}
-                                                                disabled={!isEditing || isView}
-                                                                className={`px-2 py-1 rounded text-xs transition-all ${isGranted
-                                                                    ? 'text-white'
-                                                                    : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
-                                                                    } ${isEditing && !isView ? 'cursor-pointer hover:opacity-85' : 'cursor-default'}`}
-                                                                style={isGranted ? { backgroundColor: getActionColor(actionCode) } : undefined}
-                                                                title={actionCode}
-                                                            >
-                                                                {getActionLabel(actionCode)}
-                                                            </button>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                    </table>
-
-                    {!isNcrModuleSelected && (
-                        <div className="py-10 text-center text-gray-500">
-                            الموديول `NCR` غير محدد في فلتر المصفوفة العامة. اختر `NCR` من قائمة الموديولز لعرض الأدوار هنا.
-                        </div>
-                    )}
-
-                    {isNcrModuleSelected && filteredRoles.length === 0 && (
-                        <div className="py-10 text-center text-gray-500">
-                            لا توجد أدوار مطابقة للبحث/الفلتر.
-                        </div>
-                    )}
-                </>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
             </div>
 
+            {/* Footer */}
             <div className="flex-shrink-0 border-t border-gray-200 dark:border-gray-700 px-4 py-2 text-xs text-gray-500 flex items-center justify-between">
-                <div>مصدر البيانات: `ncr_stage_permissions` (role_id + stage_code)</div>
+                <div>مصدر البيانات: ncr_stage_permissions (role_id + stage_code)</div>
                 <button
-                    onClick={loadData}
+                    onClick={() => void loadData()}
                     className="flex items-center gap-1 text-primary-600 hover:text-primary-700"
                 >
                     <ArrowPathIcon className="w-3.5 h-3.5" />
@@ -709,5 +739,3 @@ const NcrStagePermissions: React.FC = () => {
 };
 
 export default NcrStagePermissions;
-
-
