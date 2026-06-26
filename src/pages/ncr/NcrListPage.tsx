@@ -317,9 +317,11 @@ const NcrListPage = () => {
                 ) : filtered.length === 0 ? (
                     <div className="p-8 text-center">
                         <p className="text-gray-500">لا توجد تقارير مطابقة للفلتر.</p>
-                        <Link to="/ncr/new" className="text-primary-600 hover:underline mt-2 inline-block">
-                            إنشاء تقرير جديد
-                        </Link>
+                        {can('ncr', 'create') && (
+                            <Link to="/ncr/new" className="text-primary-600 hover:underline mt-2 inline-block">
+                                إنشاء تقرير جديد
+                            </Link>
+                        )}
                     </div>
                 ) : (
                     <div className="overflow-x-auto">

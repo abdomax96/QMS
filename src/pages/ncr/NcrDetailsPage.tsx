@@ -144,7 +144,7 @@ const NcrDetailsPage = () => {
     const { selectedCompanyId } = useEnsureCompaniesLoaded();
     const { deleteNcr } = useNcrs(selectedCompanyId);
     const { profile } = useAuth();
-    const { loading: permissionsLoading, canPerformNcrAction } = useModulePermissions();
+    const { loading: permissionsLoading, canPerform, canPerformNcrAction } = useModulePermissions();
     const { isAdmin, isSuperAdmin } = useNcrPermissions();
     const [ncr, setNcr] = useState<NcrRecord | null>(null);
     const [loading, setLoading] = useState(true);
@@ -268,7 +268,8 @@ const NcrDetailsPage = () => {
     };
 
     const handleDelete = async () => {
-        if (ncr && !(isAdmin || isSuperAdmin || canPerformNcrAction(ncr.currentStage, 'delete'))) {
+        // Base CRUD (delete): authorised by the Main Module Matrix, not stage perms.
+        if (ncr && !(isAdmin || isSuperAdmin || canPerform('ncr', 'delete'))) {
             alert('ليس لديك صلاحية حذف هذا التقرير.');
             return;
         }
@@ -304,9 +305,13 @@ const NcrDetailsPage = () => {
     const progress = ((ncr.completedStages?.length || 0) / 5) * 100;
     const hasNcrStageAction = (action: string) =>
         isAdmin || isSuperAdmin || canPerformNcrAction(ncr.currentStage, action);
-    const canViewNcr = hasNcrStageAction('view');
-    const canDeleteNcr = hasNcrStageAction('delete');
-    const canExportNcr = hasNcrStageAction('export');
+    // Base CRUD (view/delete/export) -> Main Module Matrix (role_module_permissions).
+    const hasNcrModuleAction = (action: string) =>
+        isAdmin || isSuperAdmin || canPerform('ncr', action);
+    const canViewNcr = hasNcrModuleAction('view');
+    const canDeleteNcr = hasNcrModuleAction('delete');
+    const canExportNcr = hasNcrModuleAction('export');
+    // Workflow action (release_hold) stays stage-scoped.
     const canManageHoldLogs =
         hasNcrStageAction('release_hold');
     const reservedQty = Number(ncr.reservedQty || 0);

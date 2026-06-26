@@ -1,7 +1,7 @@
 import { supabase } from '../../config/supabase';
 import type { CapaAction, NcrAttachment, NcrRecord, NcrStatus, NcrVerification } from '../../types/ncr';
 import { getUserNameByEmail } from '../../utils/ncr/userUtils';
-import { checkNcrStagePermission, requireNcrStagePermission } from '../unifiedPermissionService';
+import { checkNcrStagePermission, requireNcrStagePermission, requirePermission } from '../unifiedPermissionService';
 
 export interface CreateNcrPayload {
     date: string;
@@ -137,24 +137,6 @@ async function calculateNcrHoldRemainingQty(
 function formatDate(date: string): { year: number } {
     const d = new Date(date);
     return { year: d.getFullYear() };
-}
-
-async function getNcrStageForPermission(id: string, companyId?: string | null): Promise<NcrRecord['currentStage']> {
-    let query = supabase
-        .from(NCR_TABLE)
-        .select('current_stage')
-        .eq('id', id);
-
-    if (companyId) {
-        query = query.eq('company_id', companyId);
-    }
-
-    const { data, error } = await query.single();
-    if (error || !data?.current_stage) {
-        throw error || new Error('NCR not found');
-    }
-
-    return data.current_stage as NcrRecord['currentStage'];
 }
 
 async function requireAnyNcrStagePermission(
@@ -313,7 +295,9 @@ export async function createNcr(payload: CreateNcrPayload): Promise<NcrRecord> {
     if (!companyId) {
         throw new Error('يجب اختيار الشركة قبل إنشاء تقرير عدم المطابقة');
     }
-    await requireNcrStagePermission('initial_report', 'create');
+    // Base CRUD: authorised by the Main Module Matrix (role_module_permissions),
+    // NOT by stage permissions. See migration 20260626120000.
+    await requirePermission('ncr', 'create');
 
     const ncrNumber = await generateNextNcrNumber(payload.date);
     const ncrId = crypto.randomUUID();
@@ -431,8 +415,8 @@ export async function fetchNcrs(companyId?: string | null): Promise<NcrRecord[]>
 }
 
 export async function updateNcr(payload: UpdateNcrPayload) {
-    const currentStage = await getNcrStageForPermission(payload.id, payload.companyId);
-    await requireNcrStagePermission(currentStage, 'edit');
+    // Base CRUD (edit): authorised by the Main Module Matrix, not stage perms.
+    await requirePermission('ncr', 'edit');
 
     const updates: Record<string, unknown> = {
         updated_at: new Date().toISOString()
@@ -492,8 +476,8 @@ export async function updateNcr(payload: UpdateNcrPayload) {
 
 export async function appendAttachments(id: string, files: File[], companyId?: string | null) {
     if (!files.length) return await getNcrById(id, companyId);
-    const currentStage = await getNcrStageForPermission(id, companyId);
-    await requireNcrStagePermission(currentStage, 'edit');
+    // Base CRUD (edit): authorised by the Main Module Matrix, not stage perms.
+    await requirePermission('ncr', 'edit');
 
     const ncr = await getNcrById(id, companyId);
     if (!ncr) throw new Error('NCR not found');
@@ -515,8 +499,8 @@ export async function appendAttachments(id: string, files: File[], companyId?: s
 }
 
 export async function deleteNcr(id: string, companyId?: string | null) {
-    const currentStage = await getNcrStageForPermission(id, companyId);
-    await requireNcrStagePermission(currentStage, 'delete');
+    // Base CRUD (delete): authorised by the Main Module Matrix, not stage perms.
+    await requirePermission('ncr', 'delete');
 
     let query = supabase.from(NCR_TABLE).delete().eq('id', id);
     if (companyId) {

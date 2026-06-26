@@ -174,13 +174,29 @@ function aggregateTaskPermissions(rows: Array<{
     return Array.from(map.values());
 }
 
+// Base CRUD actions are authoritatively controlled by the Main Module Matrix
+// (role_module_permissions), NOT by NCR stage permissions. They must never be
+// promoted from ncr_stage_permissions into the module-level grants, otherwise
+// a role configured in the NCR Stage matrix would silently gain create/edit/
+// delete/etc. that bypass the module matrix (the Phase 2 enforcement bug).
+const NCR_BASE_CRUD_ACTIONS = new Set<string>([
+    'view',
+    'create',
+    'edit',
+    'delete',
+    'export',
+]);
+
 function mergeNcrModuleActions(
     baseModulePermissions: ModulePermission[],
     stagePermissions: NcrStagePermission[]
 ): ModulePermission[] {
+    // Only workflow-specific actions may be surfaced at the module level from
+    // stage permissions (for module-access/visibility purposes). Base CRUD is
+    // excluded so the Main Module Matrix stays the single source of truth.
     const ncrModuleActions = Array.from(new Set(
         stagePermissions.flatMap((stagePerm) => [
-            ...stagePerm.allowed_actions,
+            ...stagePerm.allowed_actions.filter((action) => !NCR_BASE_CRUD_ACTIONS.has(action)),
             ...(stagePerm.can_advance ? ['workflow.progress'] : []),
             ...(stagePerm.can_return ? ['workflow.return'] : []),
         ])
