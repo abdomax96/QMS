@@ -12,6 +12,7 @@ export type NcrDbStage = typeof NCR_DB_STAGES[number];
 
 export type NcrStageAction =
   | 'view'
+  | 'create'
   | 'edit'
   | 'delete'
   | 'root_cause.propose'
@@ -43,7 +44,7 @@ export const NCR_STAGE_ACTIONS: StageActionConfig[] = [
     nameAr: 'التقرير الأولي',
     nameEn: 'Initial Report',
     order: 1,
-    allowedActions: ['view', 'edit', 'delete', 'workflow.progress'],
+    allowedActions: ['view', 'create', 'edit', 'delete', 'workflow.progress'],
     canAdvance: true,
     canReturn: false,
   },
@@ -113,4 +114,3 @@ export const NCR_STAGE_ACTIONS: StageActionConfig[] = [
 export const STAGE_ACTION_MAP = new Map<NcrDbStage, StageActionConfig>(
   NCR_STAGE_ACTIONS.map((cfg) => [cfg.stage, cfg]),
 );
-

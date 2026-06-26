@@ -25,6 +25,8 @@ import NcrWorkflowActions from '../../components/ncr/NcrWorkflowActions';
 import NcrStageHistory from '../../components/ncr/NcrStageHistory';
 import { CommentsSection } from '../../components/comments/CommentsSection';
 import { DetailPageSkeleton } from '../../components/common/LoadingStates';
+import { useModulePermissions } from '../../hooks/useModulePermissions';
+import { usePermissions as useNcrPermissions } from '../../hooks/ncr/usePermissions';
 
 const severityLabels: Record<string, string> = {
     low: 'منخفض',
@@ -65,12 +67,12 @@ function formatShortDate(dateStr: string): string {
 }
 
 // Comments Wrapper Component
-function NcrCommentsWrapper({ ncrId, userInfo, isClosed }: {
+function NcrCommentsWrapper({ ncrId, companyId, userInfo }: {
     ncrId: string;
+    companyId?: string | null;
     userInfo: { id: string; name: string; avatarUrl?: string | null };
-    isClosed: boolean;
 }) {
-    const { comments, loading, addComment, editComment, deleteComment } = useNcrComments(ncrId);
+    const { comments, loading, addComment, editComment, deleteComment } = useNcrComments(ncrId, 'ncr', companyId);
 
     if (loading) {
         return <div className="text-center py-4 text-gray-500">جاري تحميل التعليقات...</div>;
@@ -86,46 +88,52 @@ function NcrCommentsWrapper({ ncrId, userInfo, isClosed }: {
             currentUserAvatar={userInfo.avatarUrl}
             onAddComment={async (input) => {
                 await addComment(input, userInfo.id, userInfo.name, userInfo.avatarUrl);
-                // After successful add, send notifications to department members (excluding author)
-                if (!ncrId) return;
-                const { data: ncrRow } = await supabase
-                    .from('ncr_reports')
-                    .select('department, number')
-                    .eq('id', ncrId)
-                    .single();
+                try {
+                    // Notifications are best-effort; they must not make a saved comment look failed.
+                    if (!ncrId) return;
+                    const { data: ncrRow, error: ncrError } = await supabase
+                        .from('ncr_reports')
+                        .select('department, number')
+                        .eq('id', ncrId)
+                        .single();
 
-                if (!ncrRow?.department) return;
+                    if (ncrError || !ncrRow?.department) return;
 
-                const { data: recipients } = await supabase
-                    .from('users')
-                    .select('id, name')
-                    .eq('department', ncrRow.department)
-                    .eq('is_active', true);
+                    const { data: recipients, error: recipientsError } = await supabase
+                        .from('users')
+                        .select('id, name')
+                        .eq('department', ncrRow.department)
+                        .eq('is_active', true);
 
-                const filteredRecipients = (recipients || []).filter((u: any) => String(u.id) !== String(userInfo.id || ''));
-                if (!filteredRecipients.length) return;
+                    if (recipientsError) return;
 
-                const title = `تعليق جديد على NCR ${ncrRow.number || ''}`.trim();
-                const preview = input.content.slice(0, 120);
+                    const filteredRecipients = (recipients || []).filter((u: any) => String(u.id) !== String(userInfo.id || ''));
+                    if (!filteredRecipients.length) return;
 
-                await Promise.all(filteredRecipients.map((u: any) =>
-                    notificationService.createNotification({
-                        userId: u.id,
-                        title,
-                        message: preview || 'تعليق جديد',
-                        type: 'workflow',
-                        category: 'ncr',
-                        entityType: 'ncr',
-                        entityId: ncrId,
-                        actionUrl: `/ncr/${ncrId}`,
-                        senderId: userInfo.id,
-                        senderName: userInfo.name
-                    })
-                ));
+                    const title = `تعليق جديد على NCR ${ncrRow.number || ''}`.trim();
+                    const preview = input.content.slice(0, 120);
+
+                    await Promise.all(filteredRecipients.map((u: any) =>
+                        notificationService.createNotification({
+                            userId: u.id,
+                            title,
+                            message: preview || 'تعليق جديد',
+                            type: 'workflow',
+                            category: 'ncr',
+                            entityType: 'ncr',
+                            entityId: ncrId,
+                            actionUrl: `/ncr/${ncrId}`,
+                            senderId: userInfo.id,
+                            senderName: userInfo.name
+                        })
+                    ));
+                } catch (notificationError) {
+                    console.warn('NCR comment notification skipped:', notificationError);
+                }
             }}
             onEditComment={editComment}
             onDeleteComment={deleteComment}
-            disabled={isClosed}
+            disabled={false}
         />
     );
 }
@@ -136,6 +144,8 @@ const NcrDetailsPage = () => {
     const { selectedCompanyId } = useEnsureCompaniesLoaded();
     const { deleteNcr } = useNcrs(selectedCompanyId);
     const { profile } = useAuth();
+    const { loading: permissionsLoading, canPerformNcrAction } = useModulePermissions();
+    const { isAdmin, isSuperAdmin } = useNcrPermissions();
     const [ncr, setNcr] = useState<NcrRecord | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -205,7 +215,17 @@ const NcrDetailsPage = () => {
     }, [id, selectedCompanyId]);
 
     const handleAddHoldLog = async () => {
-        if (!ncr || !selectedCompanyId) return;
+        if (!ncr) return;
+        const canManageHoldLogs =
+            isAdmin ||
+            isSuperAdmin ||
+            canPerformNcrAction(ncr.currentStage, 'release_hold');
+        if (!canManageHoldLogs) {
+            setHoldLogError('ليس لديك صلاحية لإدارة الكميات المحجوزة في هذه المرحلة.');
+            return;
+        }
+        const targetCompanyId = ncr.companyId || selectedCompanyId;
+        if (!targetCompanyId) return;
 
         const sortedQty = Number(holdLogForm.sortedQty || 0);
         const destroyedQty = Number(holdLogForm.destroyedQty || 0);
@@ -218,12 +238,16 @@ const NcrDetailsPage = () => {
             setHoldLogError('الكمية المتهلكة يجب أن تكون بين 0 والكمية المفرزة.');
             return;
         }
+        if (sortedQty > remainingQty) {
+            setHoldLogError(`الكمية المفرزة لا يمكن أن تتجاوز المتبقي (${remainingQty} ${ncr.reservedUnit || ''}).`);
+            return;
+        }
 
         setHoldLogError(null);
         try {
             const inserted = await addNcrHoldSortLog({
                 ncrId: ncr.id,
-                companyId: selectedCompanyId,
+                companyId: targetCompanyId,
                 sortedQty,
                 destroyedQty,
                 sortedAt: holdLogForm.sortedAt ? new Date(holdLogForm.sortedAt).toISOString() : new Date().toISOString(),
@@ -239,11 +263,15 @@ const NcrDetailsPage = () => {
             });
         } catch (err) {
             console.error('Failed to add hold log:', err);
-            setHoldLogError('تعذر حفظ سجل الفرز. حاول مرة أخرى.');
+            setHoldLogError((err as { message?: string })?.message || 'تعذر حفظ سجل الفرز. حاول مرة أخرى.');
         }
     };
 
     const handleDelete = async () => {
+        if (ncr && !(isAdmin || isSuperAdmin || canPerformNcrAction(ncr.currentStage, 'delete'))) {
+            alert('ليس لديك صلاحية حذف هذا التقرير.');
+            return;
+        }
         if (!id || !confirm('هل أنت متأكد من حذف هذا التقرير؟')) return;
         try {
             await deleteNcr(id);
@@ -274,6 +302,13 @@ const NcrDetailsPage = () => {
     const isClosed = !!ncr.closedAt;
     const currentStage = WORKFLOW_STAGES[ncr.currentStage];
     const progress = ((ncr.completedStages?.length || 0) / 5) * 100;
+    const hasNcrStageAction = (action: string) =>
+        isAdmin || isSuperAdmin || canPerformNcrAction(ncr.currentStage, action);
+    const canViewNcr = hasNcrStageAction('view');
+    const canDeleteNcr = hasNcrStageAction('delete');
+    const canExportNcr = hasNcrStageAction('export');
+    const canManageHoldLogs =
+        hasNcrStageAction('release_hold');
     const reservedQty = Number(ncr.reservedQty || 0);
     const totalSortedQty = holdLogs.reduce((sum, row) => sum + Number(row.sortedQty || 0), 0);
     const totalDestroyedQty = holdLogs.reduce((sum, row) => sum + Number(row.destroyedQty || 0), 0);
@@ -299,14 +334,16 @@ const NcrDetailsPage = () => {
                     </p>
                 </div>
                 <div className="flex gap-2">
-                    <button
-                        onClick={() => void printNcrReport(ncr)}
-                        className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors print:hidden"
-                        title="طباعة التقرير"
-                    >
-                        <PrinterIcon className="w-5 h-5" />
-                        <span className="hidden sm:inline">طباعة</span>
-                    </button>
+                    {canExportNcr && (
+                        <button
+                            onClick={() => void printNcrReport(ncr)}
+                            className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50 transition-colors print:hidden"
+                            title="طباعة التقرير"
+                        >
+                            <PrinterIcon className="w-5 h-5" />
+                            <span className="hidden sm:inline">طباعة</span>
+                        </button>
+                    )}
                     <button
                         onClick={() => {
                             setLoading(true);
@@ -317,13 +354,15 @@ const NcrDetailsPage = () => {
                     >
                         <ArrowPathIcon className="w-5 h-5" />
                     </button>
-                    <button
-                        onClick={handleDelete}
-                        className="inline-flex items-center gap-2 px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition-colors print:hidden"
-                    >
-                        <TrashIcon className="w-5 h-5" />
-                        <span className="hidden sm:inline">حذف</span>
-                    </button>
+                    {canDeleteNcr && (
+                        <button
+                            onClick={handleDelete}
+                            className="inline-flex items-center gap-2 px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition-colors print:hidden"
+                        >
+                            <TrashIcon className="w-5 h-5" />
+                            <span className="hidden sm:inline">حذف</span>
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -488,7 +527,7 @@ const NcrDetailsPage = () => {
                     </div>
                 </div>
 
-                {!isClosed && (
+                {!isClosed && canManageHoldLogs && (
                     <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-3">
                         <h3 className="text-sm font-semibold text-gray-900 dark:text-white">إضافة عملية فرز جديدة</h3>
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
@@ -546,6 +585,12 @@ const NcrDetailsPage = () => {
                             />
                         </div>
                         {holdLogError && <p className="text-sm text-rose-600">{holdLogError}</p>}
+                    </div>
+                )}
+
+                {!permissionsLoading && !isClosed && !canManageHoldLogs && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                        إدارة الكميات المحجوزة متاحة فقط لمن يملك صلاحية فك الحجز في هذه المرحلة.
                     </div>
                 )}
 
@@ -654,7 +699,15 @@ const NcrDetailsPage = () => {
                     <ChatBubbleLeftRightIcon className="w-5 h-5 text-primary-600" />
                     التعليقات والمناقشات
                 </h2>
-                <NcrCommentsWrapper ncrId={ncr.id} userInfo={userInfo} isClosed={!!ncr.closedAt} />
+                {permissionsLoading ? (
+                    <div className="text-center py-4 text-gray-500">جاري تحميل صلاحيات التعليقات...</div>
+                ) : canViewNcr ? (
+                    <NcrCommentsWrapper ncrId={ncr.id} companyId={ncr.companyId} userInfo={userInfo} />
+                ) : (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                        لا تملك صلاحية عرض/تعليق على هذه الحالة.
+                    </div>
+                )}
             </div>
         </div>
     );

@@ -41,6 +41,8 @@ export const ModuleAccessDenied: React.FC<AccessDeniedProps> = ({ module, action
         forms_reports: 'النماذج والتقارير',
         tasks: 'المهام',
         lab: 'المختبر',
+        production: 'الإنتاج',
+        hr: 'الموارد البشرية',
         ncr: 'NCR والمحتجزات',
         chat: 'الدردشة',
         ai_assistant: 'المساعد الذكي',
@@ -54,6 +56,14 @@ export const ModuleAccessDenied: React.FC<AccessDeniedProps> = ({ module, action
         approve: 'موافقة',
         export: 'تصدير',
         print: 'طباعة',
+        review: 'مراجعة',
+        configure: 'إعداد',
+        calculate: 'احتساب',
+        close: 'إغلاق',
+        publish: 'نشر',
+        'attendance.capture': 'تسجيل الحضور',
+        'attendance.adjust': 'تسوية الحضور',
+        'attendance.review': 'مراجعة الحضور',
         share: 'مشاركة',
         view_conversations: 'عرض المحادثات',
         create_conversation: 'إنشاء محادثة',
@@ -261,6 +271,15 @@ export const NcrRoute: React.FC<{ children: React.ReactNode; action?: string | s
     action = 'view',
 }) => (
     <ModuleRoute module="ncr" action={action}>
+        {children}
+    </ModuleRoute>
+);
+
+export const HrRoute: React.FC<{ children: React.ReactNode; action?: string | string[] }> = ({
+    children,
+    action = 'view',
+}) => (
+    <ModuleRoute module="hr" action={action}>
         {children}
     </ModuleRoute>
 );

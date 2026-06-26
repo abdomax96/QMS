@@ -96,7 +96,23 @@ const DEFAULT_MODULES: AppModule[] = [
         name_ar: 'NCR والمحتجزات',
         color: '#EF4444',
         icon: 'ExclamationTriangle',
-        available_actions: ['view', 'create', 'edit', 'review', 'investigate', 'decide', 'close', 'hold_add', 'hold_release', 'export', 'print'],
+        available_actions: [
+            'view',
+            'create',
+            'edit',
+            'delete',
+            'root_cause.propose',
+            'assign',
+            'approve',
+            'release_hold',
+            'reject',
+            'verify_close',
+            'export',
+            'reopen',
+            'capa.add',
+            'capa.complete',
+            'workflow.progress',
+        ],
         data_isolation_mode: 'hybrid',
     },
     {
@@ -223,10 +239,14 @@ const ActionLabels: Record<string, { en: string; ar: string; color: string }> = 
     investigate: { en: 'Investigate', ar: 'تحقيق', color: '#8B5CF6' },
     decide: { en: 'Decide', ar: 'قرار', color: '#EC4899' },
     close: { en: 'Close', ar: 'إغلاق', color: '#10B981' },
-    hold_add: { en: 'Add Hold', ar: 'إضافة حجز', color: '#EF4444' },
-    hold_release: { en: 'Release Hold', ar: 'إفراج حجز', color: '#10B981' },
     manage_hold: { en: 'Manage Hold', ar: 'حجز', color: '#F59E0B' },
     release_hold: { en: 'Release Hold', ar: 'رفع الحجز', color: '#10B981' },
+    'root_cause.propose': { en: 'Propose Root Cause', ar: 'اقتراح سبب جذري', color: '#06B6D4' },
+    'verify_close': { en: 'Verify & Close', ar: 'تحقق وإغلاق', color: '#16A34A' },
+    reject: { en: 'Reject', ar: 'رفض', color: '#EF4444' },
+    'capa.add': { en: 'Add CAPA', ar: 'إضافة CAPA', color: '#0EA5E9' },
+    'capa.complete': { en: 'Complete CAPA', ar: 'إكمال CAPA', color: '#10B981' },
+    'workflow.progress': { en: 'Progress Workflow', ar: 'التقدم في المسار', color: '#3B82F6' },
     dispose: { en: 'Dispose', ar: 'فرز/إتلاف', color: '#EF4444' },
     load: { en: 'Load', ar: 'تحميل', color: '#3B82F6' },
     dispatch: { en: 'Dispatch', ar: 'شحن', color: '#8B5CF6' },
@@ -302,7 +322,7 @@ const SimplePermissionMatrix: React.FC = () => {
             // Check if user has 'edit' permission on 'access_management' module
             const canEdit = canPerform('access_management', 'edit');
             setCanEditMatrix(canEdit);
-            console.log('[PermissionMatrix] User can edit matrix:', canEdit);
+            console.log('[SimplePermissionMatrix] User can edit matrix:', canEdit);
         } catch (err) {
             console.error('Error checking user permissions:', err);
             setCanEditMatrix(false);

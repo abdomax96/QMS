@@ -90,9 +90,9 @@ export default function NcrDashboardPage() {
     const stats = useMemo(() => {
         const filtered = filterDept === 'all' ? ncrs : ncrs.filter(n => n.department === filterDept);
 
-        const openNcrs = filtered.filter(n => n.status === 'open');
-        const closedNcrs = filtered.filter(n => n.status === 'closed');
-        const highSeverity = filtered.filter(n => n.severity === 'high' && n.status === 'open');
+        const openNcrs = filtered.filter(n => !n.closedAt);
+        const closedNcrs = filtered.filter(n => !!n.closedAt);
+        const highSeverity = filtered.filter(n => n.severity === 'high' && !n.closedAt);
 
         // Pending actions - NCRs awaiting action in each stage
         const pendingApproval = filtered.filter(n =>
@@ -134,7 +134,7 @@ export default function NcrDashboardPage() {
     // Recent NCRs
     const recentNcrs = useMemo(() => {
         return ncrs
-            .filter(n => n.status === 'open')
+            .filter(n => !n.closedAt)
             .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
             .slice(0, 5);
     }, [ncrs]);

@@ -216,6 +216,46 @@ describe('ncrStateMachine', () => {
             expect(result.isValid).toBe(true);
         });
 
+        it('should fail for capa_planning without at least one CAPA action', () => {
+            const result = validateTransition({
+                currentStage: 'capa_planning',
+                actions: [],
+            });
+
+            expect(result.isValid).toBe(false);
+            expect(result.missingConditions).toContain('capa_actions');
+        });
+
+        it('should pass for capa_planning when at least one CAPA action exists', () => {
+            const result = validateTransition({
+                currentStage: 'capa_planning',
+                actions: [{ status: 'pending' }],
+            });
+
+            expect(result.isValid).toBe(true);
+            expect(result.to).toBe('capa_execution');
+        });
+
+        it('should fail for capa_execution while any CAPA action is incomplete', () => {
+            const result = validateTransition({
+                currentStage: 'capa_execution',
+                actions: [{ status: 'completed' }, { status: 'in-progress' }],
+            });
+
+            expect(result.isValid).toBe(false);
+            expect(result.missingConditions).toContain('capa_completion');
+        });
+
+        it('should pass for capa_execution only when all CAPA actions are completed', () => {
+            const result = validateTransition({
+                currentStage: 'capa_execution',
+                actions: [{ status: 'completed' }, { status: 'completed' }],
+            });
+
+            expect(result.isValid).toBe(true);
+            expect(result.to).toBe('verification_closure');
+        });
+
         it('should fail for terminal stage', () => {
             const result = validateTransition({
                 currentStage: 'verification_closure',

@@ -68,7 +68,7 @@ interface NavItem {
   path?: string;
   label: string;
   icon: React.ReactNode;
-  section?: 'documents' | 'operations' | 'tasks' | 'system';
+  section?: 'documents' | 'operations' | 'hr' | 'tasks' | 'system';
   moduleCode?: string;
   requiresPermission?: boolean;
   isGroup?: boolean;
@@ -275,7 +275,7 @@ const MainLayout: React.FC = () => {
           requiresPermission: true
         },
         {
-          path: '/forms&reports',
+          path: '/forms&reports-new',
           label: 'النماذج والسجلات',
           icon: <DocumentTextIcon className={iconSize} />,
           moduleCode: 'forms_reports',
@@ -291,6 +291,20 @@ const MainLayout: React.FC = () => {
       isGroup: true,
       defaultExpanded: true,
       children: [
+        {
+          path: '/production',
+          label: 'الإنتاج',
+          icon: <PresentationChartLineIcon className={iconSize} />,
+          moduleCode: 'production',
+          requiresPermission: true
+        },
+        {
+          path: '/production/attendance',
+          label: 'حضور التشغيل',
+          icon: <ChartPieIcon className={iconSize} />,
+          moduleCode: 'production',
+          requiresPermission: true
+        },
         {
           path: '/pallet',
           label: 'نظام تتبع البالتات',
@@ -324,6 +338,78 @@ const MainLayout: React.FC = () => {
           label: 'الدردشة',
           icon: <ChatBubbleLeftRightIcon className={iconSize} />,
           moduleCode: 'chat',
+          requiresPermission: true
+        },
+      ]
+    },
+    {
+      label: 'الموارد البشرية',
+      icon: <UserCircleIcon className={iconSize} />,
+      section: 'hr',
+      isGroup: true,
+      defaultExpanded: true,
+      children: [
+        {
+          path: '/hr/dashboard',
+          label: 'لوحة HR',
+          icon: <ChartBarIcon className={iconSize} />,
+          moduleCode: 'hr',
+          requiresPermission: true
+        },
+        {
+          path: '/hr/employees',
+          label: 'العاملون',
+          icon: <UserCircleIcon className={iconSize} />,
+          moduleCode: 'hr',
+          requiresPermission: true
+        },
+        {
+          path: '/hr/transport',
+          label: 'النقل',
+          icon: <PresentationChartLineIcon className={iconSize} />,
+          moduleCode: 'hr',
+          requiresPermission: true
+        },
+        {
+          path: '/hr/shifts',
+          label: 'الورديات',
+          icon: <ChartPieIcon className={iconSize} />,
+          moduleCode: 'hr',
+          requiresPermission: true
+        },
+        {
+          path: '/hr/requests',
+          label: 'الطلبات',
+          icon: <ClipboardDocumentListIcon className={iconSize} />,
+          moduleCode: 'hr',
+          requiresPermission: true
+        },
+        {
+          path: '/hr/penalties',
+          label: 'الجزاءات',
+          icon: <ExclamationTriangleIcon className={iconSize} />,
+          moduleCode: 'hr',
+          requiresPermission: true
+        },
+        {
+          path: '/hr/payroll',
+          label: 'المرتبات',
+          icon: <DocumentTextIcon className={iconSize} />,
+          moduleCode: 'hr',
+          requiresPermission: true
+        },
+        {
+          path: '/hr/settings',
+          label: 'إعدادات HR',
+          icon: <Cog6ToothIcon className={iconSize} />,
+          moduleCode: 'hr',
+          requiresPermission: true
+        },
+        {
+          path: '/hr/reports',
+          label: 'تقارير HR',
+          icon: <ChartBarIcon className={iconSize} />,
+          moduleCode: 'hr',
           requiresPermission: true
         },
       ]
@@ -390,7 +476,7 @@ const MainLayout: React.FC = () => {
   const [userRoleName, setUserRoleName] = useState<string>('');
 
   // State for collapsible nav groups
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['إدارة الوثائق', 'العمليات']));
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set(['إدارة الوثائق', 'العمليات', 'الموارد البشرية']));
 
   const toggleGroup = (label: string) => {
     setExpandedGroups(prev => {

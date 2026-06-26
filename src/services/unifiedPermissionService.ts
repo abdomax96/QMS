@@ -99,7 +99,24 @@ const ERROR_MESSAGES: Record<PermissionErrorCode, { en: string; ar: string }> = 
 
 // ==================== Write Actions (NO CACHE) ====================
 // These actions are considered "write" operations and should NEVER use cache
-const WRITE_ACTIONS = new Set(['create', 'edit', 'delete', 'approve', 'archive', 'sign', 'release']);
+const WRITE_ACTIONS = new Set([
+    'create',
+    'edit',
+    'delete',
+    'approve',
+    'archive',
+    'sign',
+    'release',
+    'reject',
+    'release_hold',
+    'verify_close',
+    'reopen',
+    'root_cause.propose',
+    'capa.add',
+    'capa.complete',
+    'workflow.progress',
+    'workflow.return',
+]);
 
 // ==================== Cache Configuration ====================
 
@@ -111,17 +128,17 @@ interface CacheEntry {
 const permissionCache = new Map<string, CacheEntry>();
 const CACHE_TTL_MS = 5000; // 5 seconds for read operations
 
-function getCacheKey(userId: string, moduleCode: string, action: string): string {
-    return `${userId}:${moduleCode}:${action}`;
+function getCacheKey(userId: string, moduleCode: string, action: string, stageCode?: string | null): string {
+    return `${userId}:${moduleCode}:${stageCode || '-'}:${action}`;
 }
 
-function getCachedPermission(userId: string, moduleCode: string, action: string): boolean | null {
+function getCachedPermission(userId: string, moduleCode: string, action: string, stageCode?: string | null): boolean | null {
     // NEVER cache write operations
     if (WRITE_ACTIONS.has(action)) {
         return null;
     }
 
-    const key = getCacheKey(userId, moduleCode, action);
+    const key = getCacheKey(userId, moduleCode, action, stageCode);
     const entry = permissionCache.get(key);
 
     if (entry && Date.now() - entry.timestamp < CACHE_TTL_MS) {
@@ -132,13 +149,13 @@ function getCachedPermission(userId: string, moduleCode: string, action: string)
     return null;
 }
 
-function setCachedPermission(userId: string, moduleCode: string, action: string, result: boolean): void {
+function setCachedPermission(userId: string, moduleCode: string, action: string, result: boolean, stageCode?: string | null): void {
     // NEVER cache write operations
     if (WRITE_ACTIONS.has(action)) {
         return;
     }
 
-    const key = getCacheKey(userId, moduleCode, action);
+    const key = getCacheKey(userId, moduleCode, action, stageCode);
     permissionCache.set(key, { result, timestamp: Date.now() });
 }
 
@@ -220,7 +237,7 @@ async function logPermissionAudit(payload: AuditLogPayload): Promise<void> {
 export async function checkPermission(
     moduleCode: string,
     action: string,
-    options?: { userId?: string; skipCache?: boolean; skipAudit?: boolean }
+    options?: { userId?: string; skipCache?: boolean; skipAudit?: boolean; stageCode?: string | null }
 ): Promise<PermissionCheckResult> {
     const requestId = generateRequestId();
     const timestamp = new Date().toISOString();
@@ -242,7 +259,7 @@ export async function checkPermission(
                 details: {
                     request_id: requestId,
                     module_code: moduleCode,
-                    required_permission: `${moduleCode}.${action}`,
+                    required_permission: options?.stageCode ? `${moduleCode}.${options.stageCode}.${action}` : `${moduleCode}.${action}`,
                     timestamp,
                     cached: false,
                 }
@@ -252,14 +269,14 @@ export async function checkPermission(
         // Check cache first (NEVER for write operations)
         const isWriteAction = WRITE_ACTIONS.has(action);
         if (!options?.skipCache && !isWriteAction) {
-            const cached = getCachedPermission(userId, moduleCode, action);
+            const cached = getCachedPermission(userId, moduleCode, action, options?.stageCode);
             if (cached !== null) {
                 return {
                     allowed: cached,
                     details: {
                         request_id: requestId,
                         module_code: moduleCode,
-                        required_permission: `${moduleCode}.${action}`,
+                        required_permission: options?.stageCode ? `${moduleCode}.${options.stageCode}.${action}` : `${moduleCode}.${action}`,
                         timestamp,
                         user_id: userId,
                         cached: true,
@@ -269,10 +286,12 @@ export async function checkPermission(
         }
 
         // Call database RPC
-        const { data, error } = await supabase.rpc('check_user_permission', {
-            user_uuid: userId,
+        const { data, error } = await supabase.rpc('check_matrix_permission', {
+            p_user_id: userId,
             p_module_code: moduleCode,
-            p_permission_code: action
+            p_action: action,
+            p_stage_code: options?.stageCode ?? null,
+            p_entity_department_id: null
         });
 
         if (error) {
@@ -285,7 +304,7 @@ export async function checkPermission(
                 details: {
                     request_id: requestId,
                     module_code: moduleCode,
-                    required_permission: `${moduleCode}.${action}`,
+                    required_permission: options?.stageCode ? `${moduleCode}.${options.stageCode}.${action}` : `${moduleCode}.${action}`,
                     timestamp,
                     user_id: userId,
                     cached: false,
@@ -297,7 +316,7 @@ export async function checkPermission(
 
         // Cache result (but not for write actions)
         if (!isWriteAction) {
-            setCachedPermission(userId, moduleCode, action, allowed);
+            setCachedPermission(userId, moduleCode, action, allowed, options?.stageCode);
         }
 
         // Audit log denials
@@ -322,7 +341,7 @@ export async function checkPermission(
                 details: {
                     request_id: requestId,
                     module_code: moduleCode,
-                    required_permission: `${moduleCode}.${action}`,
+                    required_permission: options?.stageCode ? `${moduleCode}.${options.stageCode}.${action}` : `${moduleCode}.${action}`,
                     timestamp,
                     user_id: userId,
                     cached: false,
@@ -336,7 +355,7 @@ export async function checkPermission(
             details: {
                 request_id: requestId,
                 module_code: moduleCode,
-                required_permission: `${moduleCode}.${action}`,
+                required_permission: options?.stageCode ? `${moduleCode}.${options.stageCode}.${action}` : `${moduleCode}.${action}`,
                 timestamp,
                 user_id: userId,
                 cached: false,
@@ -472,10 +491,33 @@ export class PermissionError extends Error {
 export async function requirePermission(
     moduleCode: string,
     action: string,
-    options?: { userId?: string }
+    options?: { userId?: string; stageCode?: string | null }
 ): Promise<void> {
     // Always skip cache for requirePermission (used in write operations)
     const result = await checkPermission(moduleCode, action, { ...options, skipCache: true });
+    if (!result.allowed) {
+        throw new PermissionError(result);
+    }
+}
+
+export async function checkNcrStagePermission(
+    stageCode: string,
+    action: string,
+    options?: { userId?: string; skipAudit?: boolean }
+): Promise<PermissionCheckResult> {
+    return checkPermission('ncr', action, {
+        ...options,
+        stageCode,
+        skipCache: WRITE_ACTIONS.has(action),
+    });
+}
+
+export async function requireNcrStagePermission(
+    stageCode: string,
+    action: string,
+    options?: { userId?: string }
+): Promise<void> {
+    const result = await checkNcrStagePermission(stageCode, action, { ...options, skipAudit: false });
     if (!result.allowed) {
         throw new PermissionError(result);
     }
@@ -528,6 +570,8 @@ export default {
     checkAnyPermission,
     checkModuleAccess,
     requirePermission,
+    checkNcrStagePermission,
+    requireNcrStagePermission,
     requireAdmin,
     invalidateCache,
     bustPermissionCache,

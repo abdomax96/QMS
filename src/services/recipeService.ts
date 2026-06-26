@@ -10,7 +10,7 @@ import type { Recipe, CreateRecipeInput, UpdateRecipeInput } from '../types/reci
 export async function getRecipesByProduct(productId: string): Promise<Recipe[]> {
     const { data, error } = await supabase
         .from('recipes')
-        .select('id, product_id, name, name_en, version, is_default, is_active, ingredients, notes, permissions, created_by, created_at, updated_at')
+        .select('id, product_id, name, name_en, version, is_default, is_active, ingredients, mixing_steps, notes, permissions, created_by, created_at, updated_at')
         .eq('product_id', productId)
         .order('is_default', { ascending: false })
         .order('name');
@@ -27,7 +27,7 @@ export async function getRecipesByProduct(productId: string): Promise<Recipe[]> 
 export async function getRecipeById(id: string): Promise<Recipe | null> {
     const { data, error } = await supabase
         .from('recipes')
-        .select('id, product_id, name, name_en, version, is_default, is_active, ingredients, notes, permissions, created_by, created_at, updated_at')
+        .select('id, product_id, name, name_en, version, is_default, is_active, ingredients, mixing_steps, notes, permissions, created_by, created_at, updated_at')
         .eq('id', id)
         .single();
 
@@ -142,6 +142,7 @@ export async function duplicateRecipe(id: string, newName?: string): Promise<Rec
         is_active: true,
         is_default: false,
         ingredients: original.ingredients,
+        mixing_steps: original.mixing_steps || [],
         notes: original.notes,
         permissions: original.permissions,
         created_by: user?.user?.id || 'system',
@@ -161,6 +162,74 @@ export async function duplicateRecipe(id: string, newName?: string): Promise<Rec
     }
 
     return data;
+}
+
+/**
+ * Copy a recipe (by id) into another product.
+ * نسخ وصفة من منتج إلى منتج آخر
+ */
+export async function copyRecipeToProduct(
+    sourceRecipeId: string,
+    targetProductId: string,
+    opts?: {
+        name?: string;
+        name_en?: string;
+        is_default?: boolean;
+    }
+): Promise<Recipe | null> {
+    const source = await getRecipeById(sourceRecipeId);
+    if (!source) return null;
+
+    return createRecipe({
+        product_id: targetProductId,
+        name: opts?.name ?? source.name,
+        name_en: opts?.name_en ?? source.name_en,
+        is_default: opts?.is_default ?? false,
+        ingredients: source.ingredients || [],
+        mixing_steps: source.mixing_steps || [],
+        notes: source.notes,
+        permissions: source.permissions
+    });
+}
+
+/**
+ * Copy all recipes from one product to another.
+ * نسخ كل وصفات منتج إلى منتج آخر
+ */
+export async function copyAllRecipesToProduct(
+    sourceProductId: string,
+    targetProductId: string,
+    opts?: {
+        keepDefault?: boolean;
+        mapName?: (sourceName: string, recipe: Recipe) => string;
+    }
+): Promise<{ created: Recipe[]; failed: number }> {
+    const sourceRecipes = await getRecipesByProduct(sourceProductId);
+    const defaultRecipeId = sourceRecipes.find(r => r.is_default)?.id || null;
+
+    const created: Recipe[] = [];
+    let failed = 0;
+
+    for (const r of sourceRecipes) {
+        const createdRecipe = await createRecipe({
+            product_id: targetProductId,
+            name: opts?.mapName ? opts.mapName(r.name, r) : r.name,
+            name_en: r.name_en,
+            is_default: Boolean(opts?.keepDefault && defaultRecipeId && r.id === defaultRecipeId),
+            ingredients: r.ingredients || [],
+            mixing_steps: r.mixing_steps || [],
+            notes: r.notes,
+            permissions: r.permissions
+        });
+
+        if (createdRecipe) {
+            created.push(createdRecipe);
+        } else {
+            failed += 1;
+        }
+    }
+
+    return { created, failed };
 }
 
 // التحقق من صلاحية المستخدم للتعديل

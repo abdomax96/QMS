@@ -6,8 +6,8 @@
 
 import React, { useMemo, useCallback } from 'react';
 import { useModulePermissions } from './useModulePermissions';
-import type { PermissionAction, Module } from '../types/rbac';
-import { SYSTEM_MODULES } from '../constants/rbac';
+import type { PermissionAction, Module } from '../constants/rbac/modules';
+import { SYSTEM_MODULES } from '../constants/rbac/modules';
 
 // Re-export the unified permission service for backend operations
 export { checkPermission, requirePermission, PermissionError } from '../services/unifiedPermissionService';

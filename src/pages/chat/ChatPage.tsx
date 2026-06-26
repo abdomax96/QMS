@@ -18,9 +18,16 @@ import { useModulePermissions } from '../../hooks/useModulePermissions';
 import { useToastStore } from '../../store/toastStore';
 import chatService from '../../services/chatService';
 import AiAssistantPanel from '../../components/chat/AiAssistantPanel';
-import type { ChatConversationSummary, ChatDepartment, ChatMessage, ChatUser } from '../../types/chat';
+import type {
+    ChatAttachment,
+    ChatConversationSummary,
+    ChatDepartment,
+    ChatMessage,
+    ChatUser
+} from '../../types/chat';
 
 type ChatCreationMode = 'direct' | 'department' | 'group';
+const CHAT_PAGE_MESSAGE_LIMIT = 50;
 
 const formatConversationTime = (value: string): string => {
     const date = new Date(value);
@@ -60,6 +67,49 @@ const getUserDisplayName = (user?: { name?: string | null; email?: string | null
     return handle || 'مستخدم';
 };
 
+const sortMessagesAscending = (items: ChatMessage[]): ChatMessage[] => (
+    [...items].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+);
+
+const mergeMessagesAscending = (current: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] => {
+    const byId = new Map<string, ChatMessage>();
+    [...current, ...incoming].forEach((message) => {
+        byId.set(message.id, message);
+    });
+    return sortMessagesAscending(Array.from(byId.values()));
+};
+
+const mergeAttachmentIntoMessages = (
+    current: ChatMessage[],
+    messageId: string,
+    attachment: ChatAttachment
+): ChatMessage[] => current.map((message) => {
+    if (message.id !== messageId) return message;
+    if (message.attachments.some((item) => item.id === attachment.id)) return message;
+
+    return {
+        ...message,
+        attachments: [...message.attachments, attachment].sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        )
+    };
+});
+
+const getConversationPreviewFromMessage = (message: ChatMessage | null): string | null => {
+    if (!message) return null;
+    if (message.message_type === 'attachment') return '[Attachment]';
+    if (message.message_type === 'mixed' && !message.body?.trim()) return '[Attachment]';
+    return message.body?.trim() || '[Message]';
+};
+
+const sortConversationsByActivity = (items: ChatConversationSummary[]): ChatConversationSummary[] => (
+    [...items].sort((a, b) => {
+        const messageDiff = new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime();
+        if (messageDiff !== 0) return messageDiff;
+        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+    })
+);
+
 const ChatPage: React.FC = () => {
     const { profile } = useSupabaseAuth();
     const { canAccess, canPerform } = useModulePermissions();
@@ -76,6 +126,7 @@ const ChatPage: React.FC = () => {
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
     const [loadingConversations, setLoadingConversations] = useState(false);
     const [loadingMessages, setLoadingMessages] = useState(false);
+    const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
     const [sendingMessage, setSendingMessage] = useState(false);
     const [loadingUsers, setLoadingUsers] = useState(false);
     const [loadingDepartments, setLoadingDepartments] = useState(false);
@@ -94,15 +145,23 @@ const ChatPage: React.FC = () => {
     const [mentionRange, setMentionRange] = useState<{ start: number; end: number } | null>(null);
     const [activeMentionIndex, setActiveMentionIndex] = useState(0);
     const [latestReadAt, setLatestReadAt] = useState<string | null>(null);
+    const [latestVisibleMessageId, setLatestVisibleMessageId] = useState<string | null>(null);
+    const [hasMoreMessages, setHasMoreMessages] = useState(false);
+    const [oldestLoadedMessageCreatedAt, setOldestLoadedMessageCreatedAt] = useState<string | null>(null);
     const [pendingMentions, setPendingMentions] = useState<Array<{ userId: string; token: string }>>([]);
     const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
     const [messageMenuId, setMessageMenuId] = useState<string | null>(null);
+    const [usersLoaded, setUsersLoaded] = useState(false);
+    const [departmentsLoaded, setDepartmentsLoaded] = useState(false);
 
     const messagesEndRef = useRef<HTMLDivElement | null>(null);
+    const messagesContainerRef = useRef<HTMLDivElement | null>(null);
+    const messagesRef = useRef<ChatMessage[]>([]);
     const conversationFeedChannelRef = useRef<RealtimeChannel | null>(null);
     const messagesFeedChannelRef = useRef<RealtimeChannel | null>(null);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
+    const readDebounceRef = useRef<number | null>(null);
 
     const currentUserId = profile?.uid || null;
     const requestedConversationId = searchParams.get('conversation');
@@ -114,10 +173,21 @@ const ChatPage: React.FC = () => {
         canAccess('ai_assistant')
         && (canPerform('ai_assistant', 'view') || canPerform('ai_assistant', 'send_message'));
 
+    useEffect(() => {
+        setActiveUsers([]);
+        setUsersLoaded(false);
+        setDepartments([]);
+        setDepartmentsLoaded(false);
+    }, [currentUserId]);
+
     const activeConversation = useMemo(
         () => conversations.find(conversation => conversation.id === activeConversationId) || null,
         [conversations, activeConversationId]
     );
+
+    useEffect(() => {
+        messagesRef.current = messages;
+    }, [messages]);
 
     const lastOutgoingMessageId = useMemo(() => {
         if (!currentUserId || messages.length === 0) return null;
@@ -208,6 +278,49 @@ const ChatPage: React.FC = () => {
         setActiveMentionIndex((current) => Math.min(current, mentionCandidates.length - 1));
     }, [mentionCandidates, showMentions]);
 
+    const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+        requestAnimationFrame(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior });
+        });
+    }, []);
+
+    const refreshReadCursor = useCallback(async (conversationId: string) => {
+        if (!currentUserId) return;
+        try {
+            const readCursor = await chatService.getConversationReadCursor(conversationId, currentUserId);
+            setLatestReadAt(readCursor);
+        } catch (error) {
+            console.error('Failed to refresh read cursor:', error);
+        }
+    }, [currentUserId]);
+
+    const scheduleMarkConversationRead = useCallback((conversationId: string, messageId: string | null) => {
+        if (!currentUserId || !messageId) return;
+        if (readDebounceRef.current) {
+            window.clearTimeout(readDebounceRef.current);
+        }
+
+        readDebounceRef.current = window.setTimeout(() => {
+            void chatService
+                .markConversationRead(conversationId, currentUserId, messageId)
+                .catch((error) => console.error('Failed to mark conversation read:', error));
+            void refreshReadCursor(conversationId);
+        }, 250);
+    }, [currentUserId, refreshReadCursor]);
+
+    const syncConversationSummaryFromMessages = useCallback((conversationId: string, nextMessages: ChatMessage[]) => {
+        setConversations((current) => sortConversationsByActivity(current.map((conversation) => {
+            if (conversation.id !== conversationId) return conversation;
+
+            const latestVisibleMessage = [...nextMessages].reverse().find((message) => !message.deleted_at) || null;
+            return {
+                ...conversation,
+                last_message_at: latestVisibleMessage?.created_at || conversation.created_at,
+                last_message_preview: getConversationPreviewFromMessage(latestVisibleMessage)
+            };
+        })));
+    }, []);
+
     const loadConversations = useCallback(async (showSpinner = true) => {
         if (!currentUserId) return;
 
@@ -219,11 +332,11 @@ const ChatPage: React.FC = () => {
             setActiveConversationId((current) => {
                 if (
                     requestedConversationId &&
-                    nextConversations.some(conversation => conversation.id === requestedConversationId)
+                    nextConversations.some((conversation) => conversation.id === requestedConversationId)
                 ) {
                     return requestedConversationId;
                 }
-                if (current && nextConversations.some(conversation => conversation.id === current)) {
+                if (current && nextConversations.some((conversation) => conversation.id === current)) {
                     return current;
                 }
                 return nextConversations[0]?.id || null;
@@ -237,52 +350,111 @@ const ChatPage: React.FC = () => {
     }, [currentUserId, requestedConversationId]);
 
     const loadUsers = useCallback(async (showSpinner = true) => {
-        if (!currentUserId) return;
+        if (!currentUserId || usersLoaded) return;
         if (showSpinner) setLoadingUsers(true);
 
         try {
             const users = await chatService.listActiveUsers(currentUserId);
             setActiveUsers(users);
+            setUsersLoaded(true);
         } catch (error: any) {
             console.error('Failed to load users:', error);
             setPageError(error?.message || 'فشل تحميل المستخدمين');
         } finally {
             if (showSpinner) setLoadingUsers(false);
         }
-    }, [currentUserId]);
+    }, [currentUserId, usersLoaded]);
 
     const loadDepartments = useCallback(async (showSpinner = true) => {
-        if (!currentUserId) return;
+        if (!currentUserId || departmentsLoaded) return;
         if (showSpinner) setLoadingDepartments(true);
 
         try {
             const nextDepartments = await chatService.listDepartments(currentUserId);
             setDepartments(nextDepartments);
+            setDepartmentsLoaded(true);
         } catch (error: any) {
             console.error('Failed to load departments:', error);
             setPageError(error?.message || 'فشل تحميل الأقسام');
         } finally {
             if (showSpinner) setLoadingDepartments(false);
         }
-    }, [currentUserId]);
+    }, [currentUserId, departmentsLoaded]);
 
-    const loadMessages = useCallback(async (conversationId: string, showSpinner = true) => {
+    const loadMessages = useCallback(async (
+        conversationId: string,
+        mode: 'replace' | 'older' = 'replace',
+        showSpinner = true
+    ) => {
         if (!currentUserId) return;
-        if (showSpinner) setLoadingMessages(true);
+
+        const container = messagesContainerRef.current;
+        const previousScrollHeight = container?.scrollHeight ?? 0;
+        const previousScrollTop = container?.scrollTop ?? 0;
+
+        if (mode === 'replace') {
+            if (showSpinner) setLoadingMessages(true);
+        } else {
+            if (!oldestLoadedMessageCreatedAt) return;
+            if (showSpinner) setLoadingOlderMessages(true);
+        }
 
         try {
-            const nextMessages = await chatService.getMessages(conversationId, 200);
+            const batch = await chatService.getMessages(conversationId, {
+                limit: CHAT_PAGE_MESSAGE_LIMIT,
+                before: mode === 'older' ? oldestLoadedMessageCreatedAt : null
+            });
+
+            const nextMessages = mode === 'older'
+                ? mergeMessagesAscending(messagesRef.current, batch.messages)
+                : batch.messages;
+
+            messagesRef.current = nextMessages;
             setMessages(nextMessages);
-            await chatService.markConversationRead(conversationId, currentUserId);
-            const readCursor = await chatService.getConversationReadCursor(conversationId, currentUserId);
-            setLatestReadAt(readCursor);
+            setHasMoreMessages(batch.hasMore);
+            setOldestLoadedMessageCreatedAt(
+                mode === 'older'
+                    ? (batch.oldestLoadedMessageCreatedAt || oldestLoadedMessageCreatedAt)
+                    : batch.oldestLoadedMessageCreatedAt
+            );
+            setLatestVisibleMessageId(batch.latestVisibleMessageId);
+            scheduleMarkConversationRead(conversationId, batch.latestVisibleMessageId);
+            void refreshReadCursor(conversationId);
+
+            if (mode === 'replace') {
+                scrollToBottom('auto');
+            } else {
+                requestAnimationFrame(() => {
+                    const currentContainer = messagesContainerRef.current;
+                    if (!currentContainer) return;
+                    currentContainer.scrollTop = currentContainer.scrollHeight - previousScrollHeight + previousScrollTop;
+                });
+            }
         } catch (error: any) {
             console.error('Failed to load messages:', error);
             setPageError(error?.message || 'فشل تحميل الرسائل');
         } finally {
-            if (showSpinner) setLoadingMessages(false);
+            if (mode === 'replace') {
+                if (showSpinner) setLoadingMessages(false);
+            } else {
+                if (showSpinner) setLoadingOlderMessages(false);
+            }
         }
-    }, [currentUserId]);
+    }, [
+        currentUserId,
+        oldestLoadedMessageCreatedAt,
+        refreshReadCursor,
+        scheduleMarkConversationRead,
+        scrollToBottom
+    ]);
+
+    useEffect(() => {
+        return () => {
+            if (readDebounceRef.current) {
+                window.clearTimeout(readDebounceRef.current);
+            }
+        };
+    }, []);
 
     useEffect(() => {
         setPageError(null);
@@ -290,18 +462,20 @@ const ChatPage: React.FC = () => {
             return;
         }
 
-        void Promise.all([
-            loadConversations(),
-            loadUsers()
-        ]);
-    }, [currentUserId, hasChatAccess, activeWorkspace, loadConversations, loadUsers]);
+        void loadConversations();
+    }, [currentUserId, hasChatAccess, activeWorkspace, loadConversations]);
 
     useEffect(() => {
         if (!hasChatAccess || activeWorkspace !== 'chat' || !activeConversationId) {
+            messagesRef.current = [];
             setMessages([]);
+            setLatestReadAt(null);
+            setLatestVisibleMessageId(null);
+            setHasMoreMessages(false);
+            setOldestLoadedMessageCreatedAt(null);
             return;
         }
-        void loadMessages(activeConversationId);
+        void loadMessages(activeConversationId, 'replace');
     }, [hasChatAccess, activeWorkspace, activeConversationId, loadMessages]);
 
     useEffect(() => {
@@ -310,32 +484,93 @@ const ChatPage: React.FC = () => {
 
         conversationFeedChannelRef.current = chatService.subscribeConversationFeed(() => {
             void loadConversations(false);
+            if (activeConversationId) {
+                void refreshReadCursor(activeConversationId);
+            }
         });
 
         return () => {
             chatService.removeSubscription(conversationFeedChannelRef.current);
             conversationFeedChannelRef.current = null;
         };
-    }, [currentUserId, hasChatAccess, activeWorkspace, loadConversations]);
+    }, [currentUserId, hasChatAccess, activeWorkspace, loadConversations, activeConversationId, refreshReadCursor]);
 
     useEffect(() => {
         chatService.removeSubscription(messagesFeedChannelRef.current);
         if (!hasChatAccess || activeWorkspace !== 'chat' || !activeConversationId) return;
 
-        messagesFeedChannelRef.current = chatService.subscribeConversationMessages(activeConversationId, () => {
-            void loadMessages(activeConversationId, false);
-            void loadConversations(false);
+        messagesFeedChannelRef.current = chatService.subscribeConversationMessages(activeConversationId, (event) => {
+            if (event.type === 'reload') {
+                void loadMessages(activeConversationId, 'replace', false);
+                return;
+            }
+
+            if (event.type === 'attachment' && event.messageId && event.attachment) {
+                const targetLoaded = messagesRef.current.some((message) => message.id === event.messageId);
+                if (!targetLoaded) return;
+
+                const nextMessages = mergeAttachmentIntoMessages(
+                    messagesRef.current,
+                    event.messageId,
+                    event.attachment
+                );
+                messagesRef.current = nextMessages;
+                setMessages(nextMessages);
+                syncConversationSummaryFromMessages(activeConversationId, nextMessages);
+                if (event.messageId === latestVisibleMessageId) {
+                    scrollToBottom('auto');
+                }
+                return;
+            }
+
+            if (!event.message) {
+                const targetLoaded = event.messageId
+                    ? messagesRef.current.some((message) => message.id === event.messageId)
+                    : true;
+                if (targetLoaded) {
+                    void loadMessages(activeConversationId, 'replace', false);
+                }
+                return;
+            }
+
+            const isLoadedMessage = messagesRef.current.some((message) => message.id === event.message?.id);
+            if (event.type !== 'insert' && !isLoadedMessage) {
+                return;
+            }
+
+            const nextMessages = mergeMessagesAscending(messagesRef.current, [event.message]);
+            messagesRef.current = nextMessages;
+            setMessages(nextMessages);
+            syncConversationSummaryFromMessages(activeConversationId, nextMessages);
+            setLatestVisibleMessageId(nextMessages[nextMessages.length - 1]?.id || null);
+            setOldestLoadedMessageCreatedAt(nextMessages[0]?.created_at || null);
+
+            if (event.type === 'insert') {
+                if (event.message.sender_id !== currentUserId) {
+                    scheduleMarkConversationRead(activeConversationId, event.message.id);
+                }
+                scrollToBottom('smooth');
+            } else {
+                void refreshReadCursor(activeConversationId);
+            }
         });
 
         return () => {
             chatService.removeSubscription(messagesFeedChannelRef.current);
             messagesFeedChannelRef.current = null;
         };
-    }, [hasChatAccess, activeWorkspace, activeConversationId, loadMessages, loadConversations]);
-
-    useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages]);
+    }, [
+        hasChatAccess,
+        activeWorkspace,
+        activeConversationId,
+        currentUserId,
+        latestVisibleMessageId,
+        loadMessages,
+        refreshReadCursor,
+        scheduleMarkConversationRead,
+        scrollToBottom,
+        syncConversationSummaryFromMessages
+    ]);
 
     const renderMessageBody = useCallback((body: string, isMine: boolean) => {
         const parts: React.ReactNode[] = [];
@@ -377,6 +612,10 @@ const ChatPage: React.FC = () => {
     }, [setSearchParams]);
 
     const updateMentionState = useCallback((value: string, cursorPosition: number) => {
+        if (!usersLoaded && !loadingUsers) {
+            void loadUsers(false);
+        }
+
         const slice = value.slice(0, cursorPosition);
         const atIndex = slice.lastIndexOf('@');
         if (atIndex < 0) {
@@ -406,7 +645,7 @@ const ChatPage: React.FC = () => {
         setMentionRange({ start: atIndex, end: cursorPosition });
         setShowMentions(true);
         setActiveMentionIndex(0);
-    }, []);
+    }, [loadingUsers, loadUsers, usersLoaded]);
 
     const insertMention = useCallback((user: ChatUser) => {
         if (!mentionRange) return;
@@ -470,15 +709,18 @@ const ChatPage: React.FC = () => {
         if (!confirmed) return;
         setPageError(null);
         try {
-            await chatService.deleteMessage(message.id, activeConversationId, currentUserId);
+            const deletedMessage = await chatService.deleteMessage(message.id, activeConversationId, currentUserId);
+            const nextMessages = mergeMessagesAscending(messagesRef.current, [deletedMessage]);
+            messagesRef.current = nextMessages;
+            setMessages(nextMessages);
+            syncConversationSummaryFromMessages(activeConversationId, nextMessages);
+            setLatestVisibleMessageId(nextMessages[nextMessages.length - 1]?.id || null);
+            setOldestLoadedMessageCreatedAt(nextMessages[0]?.created_at || null);
             if (editingMessageId === message.id) {
                 cancelEditMessage();
             }
             setMessageMenuId(null);
-            await Promise.all([
-                loadMessages(activeConversationId, false),
-                loadConversations(false)
-            ]);
+            void refreshReadCursor(activeConversationId);
         } catch (error: any) {
             console.error('Failed to delete message:', error);
             showError('فشل حذف الرسالة', error?.message || 'تعذر حذف الرسالة حالياً');
@@ -488,8 +730,7 @@ const ChatPage: React.FC = () => {
         activeConversationId,
         editingMessageId,
         cancelEditMessage,
-        loadMessages,
-        loadConversations,
+        refreshReadCursor,
         showError
     ]);
 
@@ -508,10 +749,16 @@ const ChatPage: React.FC = () => {
         setSendingMessage(true);
         setPageError(null);
         try {
+            let savedMessage: ChatMessage;
             if (isEditing && editingMessageId) {
-                await chatService.updateMessage(editingMessageId, activeConversationId, currentUserId, normalizedText);
+                savedMessage = await chatService.updateMessage(
+                    editingMessageId,
+                    activeConversationId,
+                    currentUserId,
+                    normalizedText
+                );
             } else {
-                await chatService.sendMessage({
+                savedMessage = await chatService.sendMessage({
                     currentUserId,
                     conversationId: activeConversationId,
                     body: normalizedText,
@@ -528,11 +775,13 @@ const ChatPage: React.FC = () => {
             setShowMentions(false);
             setMentionQuery('');
             setMentionRange(null);
-
-            await Promise.all([
-                loadMessages(activeConversationId, false),
-                loadConversations(false)
-            ]);
+            const nextMessages = mergeMessagesAscending(messagesRef.current, [savedMessage]);
+            messagesRef.current = nextMessages;
+            setMessages(nextMessages);
+            syncConversationSummaryFromMessages(activeConversationId, nextMessages);
+            setLatestVisibleMessageId(nextMessages[nextMessages.length - 1]?.id || null);
+            setOldestLoadedMessageCreatedAt(nextMessages[0]?.created_at || null);
+            scrollToBottom('smooth');
         } catch (error: any) {
             console.error('Failed to send message:', error);
             showError('فشل إرسال الرسالة', error?.message || 'تعذر إرسال الرسالة حالياً');
@@ -548,8 +797,7 @@ const ChatPage: React.FC = () => {
         pendingMentions,
         isEditing,
         editingMessageId,
-        loadMessages,
-        loadConversations,
+        scrollToBottom,
         showError
     ]);
 
@@ -564,8 +812,12 @@ const ChatPage: React.FC = () => {
         try {
             await chatService.archiveConversation(activeConversationId, currentUserId);
             await loadConversations(false);
-            await loadUsers(false);
+            messagesRef.current = [];
             setMessages([]);
+            setLatestReadAt(null);
+            setLatestVisibleMessageId(null);
+            setHasMoreMessages(false);
+            setOldestLoadedMessageCreatedAt(null);
             showSuccess('تم حذف المحادثة', 'تم أرشفة المحادثة وإخفاؤها من القائمة.');
         } catch (error: any) {
             console.error('Failed to archive conversation:', error);
@@ -579,7 +831,6 @@ const ChatPage: React.FC = () => {
         activeConversation,
         archivingConversation,
         loadConversations,
-        loadUsers,
         showError,
         showSuccess
     ]);
@@ -636,10 +887,7 @@ const ChatPage: React.FC = () => {
                 );
             }
 
-            await Promise.all([
-                loadConversations(false),
-                loadUsers(false)
-            ]);
+            await loadConversations(false);
 
             setActiveConversationId(conversation.id);
             setSearchParams({ conversation: conversation.id });
@@ -666,7 +914,6 @@ const ChatPage: React.FC = () => {
         selectedGroupUserIds,
         showError,
         loadConversations,
-        loadUsers,
         setSearchParams,
         showSuccess
     ]);
@@ -704,7 +951,7 @@ const ChatPage: React.FC = () => {
                     </h1>
                     <p className="text-sm text-slate-600 dark:text-slate-400">
                         {activeWorkspace === 'ai'
-                            ? 'محادثة ذكية مع اقتراحات إجراءات محفوظة بالتدقيق. التنفيذ المباشر غير مفعّل في هذه النسخة.'
+                            ? 'محادثة ذكية للإجابة من بيانات النظام الحالية. التنفيذ المباشر غير مفعّل في هذه النسخة.'
                             : <>محادثات مباشرة/أقسام/مجموعات مع مرفقات وتحديث لحظي. اكتب {' '}<span dir="ltr" className="font-medium">@</span> لعرض المستخدمين والبحث بالاسم.</>}
                     </p>
                 </div>
@@ -826,7 +1073,22 @@ const ChatPage: React.FC = () => {
                                 </div>
                             </div>
 
-                            <div className="flex-1 space-y-3 overflow-y-auto bg-slate-50 px-4 py-4 dark:bg-slate-900/40">
+                            <div
+                                ref={messagesContainerRef}
+                                className="flex-1 space-y-3 overflow-y-auto bg-slate-50 px-4 py-4 dark:bg-slate-900/40"
+                            >
+                                {!loadingMessages && hasMoreMessages && (
+                                    <div className="flex justify-center">
+                                        <button
+                                            type="button"
+                                            onClick={() => void loadMessages(activeConversation.id, 'older')}
+                                            disabled={loadingOlderMessages}
+                                            className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                                        >
+                                            {loadingOlderMessages ? 'جاري تحميل الرسائل الأقدم...' : 'تحميل رسائل أقدم'}
+                                        </button>
+                                    </div>
+                                )}
                                 {loadingMessages ? (
                                     <p className="text-sm text-slate-500 dark:text-slate-400">جاري تحميل الرسائل...</p>
                                 ) : messages.length === 0 ? (

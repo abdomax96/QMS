@@ -111,6 +111,7 @@ class DocumentService {
         status?: Document['status'];
         department_id?: string;
         search?: string;
+        include_archived?: boolean;
     }): Promise<Document[]> {
         let query = supabase
             .from('documents')
@@ -125,6 +126,9 @@ class DocumentService {
         }
         if (filters?.status) {
             query = query.eq('status', filters.status);
+        } else if (!filters?.include_archived) {
+            // Default behavior: hide archived documents unless explicitly requested.
+            query = query.neq('status', 'archived');
         }
         if (filters?.department_id) {
             query = query.eq('department_id', filters.department_id);
@@ -269,27 +273,40 @@ class DocumentService {
      * Delete (archive) document
      */
     async deleteDocument(id: string): Promise<void> {
-        const { error } = await supabase
+        // NOTE: Some RLS policies can turn UPDATE into a silent no-op (0 rows) without error.
+        // We select a field back and assert we actually touched a row.
+        const { data, error } = await supabase
             .from('documents')
             .update({
                 status: 'archived',
                 updated_at: new Date().toISOString()
             })
-            .eq('id', id);
+            .eq('id', id)
+            .select('id')
+            .maybeSingle();
 
         if (error) throw error;
+        if (!data?.id) {
+            throw new Error('تعذر حذف/أرشفة الوثيقة. تأكد من الصلاحيات أو أن الوثيقة ضمن شركتك.');
+        }
     }
 
     /**
      * Permanently delete document
      */
     async permanentlyDeleteDocument(id: string): Promise<void> {
-        const { error } = await supabase
+        // Similar to UPDATE: assert we actually deleted a row (avoid silent no-op).
+        const { data, error } = await supabase
             .from('documents')
             .delete()
-            .eq('id', id);
+            .eq('id', id)
+            .select('id')
+            .maybeSingle();
 
         if (error) throw error;
+        if (!data?.id) {
+            throw new Error('تعذر حذف الوثيقة نهائياً. تأكد من الصلاحيات أو أن الوثيقة ضمن شركتك.');
+        }
     }
 
     // ============ Version Management ============

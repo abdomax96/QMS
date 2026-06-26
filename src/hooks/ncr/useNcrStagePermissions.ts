@@ -30,21 +30,21 @@ const NCR_CURRENT_STAGE_MAP: Record<string, NcrStage> = {
     'verification_closure': 'closure',
 };
 
-// Map legacy hook action names to current stage action codes stored in DB.
-const ACTION_ALIASES: Record<string, string[]> = {
+// Map semantic hook action names to canonical stage action codes stored in DB.
+const ACTION_CODES: Record<string, string[]> = {
     view: ['view'],
     create: ['create'],
     edit: ['edit'],
-    propose_root_cause: ['add_rca', 'root_cause.propose'],
+    propose_root_cause: ['root_cause.propose'],
     assign_investigator: ['assign'],
     approve_disposition: ['approve'],
-    release_hold: ['hold_release', 'release_hold'],
+    release_hold: ['release_hold'],
     reject: ['reject'],
-    close: ['verify', 'verify_close'],
+    close: ['verify_close'],
     export: ['export'],
     reopen: ['reopen'],
-    add_capa: ['hold_add', 'capa.add'],
-    complete_capa: ['update_progress', 'capa.complete'],
+    add_capa: ['capa.add'],
+    complete_capa: ['capa.complete'],
 };
 
 // ==================== Hook Interface ====================
@@ -145,8 +145,8 @@ export function useNcrStagePermissions(currentNcrStage?: string): NcrStagePermis
             // Strict role+stage source of truth: ncr_stage_permissions only.
             if (!hasStageRecord) return false;
 
-            const aliases = ACTION_ALIASES[action] || [action];
-            return hasAnyStageAllowed(aliases);
+            const codes = ACTION_CODES[action] || [action];
+            return hasAnyStageAllowed(codes);
         };
 
         // Generic stage action checker

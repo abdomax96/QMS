@@ -8,7 +8,6 @@ import { useModulePermissions } from '../../hooks/useModulePermissions';
 import {
     TrashIcon,
     PencilIcon,
-    PrinterIcon,
     DocumentArrowDownIcon,
     ArrowRightIcon,
     ArrowLeftIcon,
@@ -38,18 +37,6 @@ interface NcrPermissionActionsProps {
     className?: string;
 }
 
-// ==================== Stage Action Mapping ====================
-const STAGE_ACTIONS: Record<string, string[]> = {
-    draft: ['edit', 'delete'],
-    submitted: ['view', 'edit', 'review', 'assign'],
-    under_review: ['view', 'edit', 'review', 'assign', 'hold_add'],
-    investigation: ['view', 'edit', 'investigate', 'add_rca'],
-    pending_decision: ['view', 'edit', 'decide', 'hold_release', 'approve'],
-    in_progress: ['view', 'edit', 'update_progress'],
-    pending_verification: ['view', 'edit', 'verify', 'approve', 'hold_release'],
-    closed: ['view', 'export', 'print', 'reopen'],
-};
-
 // ==================== Main Component ====================
 const NcrPermissionActions: React.FC<NcrPermissionActionsProps> = ({
     stageCode,
@@ -57,7 +44,6 @@ const NcrPermissionActions: React.FC<NcrPermissionActionsProps> = ({
     isClosed = false,
     onEdit,
     onDelete,
-    onPrint,
     onExport,
     onAdvance,
     onReturn,
@@ -79,10 +65,8 @@ const NcrPermissionActions: React.FC<NcrPermissionActionsProps> = ({
     // Check permissions for current stage
     const canEdit = canPerformNcrAction(stageCode, 'edit');
     const canDelete = canPerformNcrAction(stageCode, 'delete');
-    const canPrint = canPerformNcrAction(stageCode, 'print');
     const canExport = canPerformNcrAction(stageCode, 'export');
     const canApprove = canPerformNcrAction(stageCode, 'approve');
-    const canReview = canPerformNcrAction(stageCode, 'review');
     const canAdvance = canAdvanceNcr(stageCode);
     const canReturn = canReturnNcr(stageCode);
 
@@ -114,7 +98,7 @@ const NcrPermissionActions: React.FC<NcrPermissionActionsProps> = ({
             )}
 
             {/* Delete Button */}
-            {onDelete && stageCode === 'draft' && (
+            {onDelete && (
                 <button
                     onClick={onDelete}
                     disabled={!canDelete}
@@ -123,19 +107,6 @@ const NcrPermissionActions: React.FC<NcrPermissionActionsProps> = ({
                 >
                     <TrashIcon className="w-4 h-4" />
                     <span className="hidden sm:inline">حذف</span>
-                </button>
-            )}
-
-            {/* Print Button */}
-            {onPrint && (
-                <button
-                    onClick={onPrint}
-                    disabled={!canPrint}
-                    className={secondaryBtn}
-                    title="طباعة"
-                >
-                    <PrinterIcon className="w-4 h-4" />
-                    <span className="hidden sm:inline">طباعة</span>
                 </button>
             )}
 
@@ -267,10 +238,18 @@ export const NcrStageInfo: React.FC<NcrStageInfoProps> = ({ stageCode, className
                 <span key={action}>
                     {action === 'view' ? 'عرض' :
                      action === 'edit' ? 'تعديل' :
+                     action === 'create' ? 'إنشاء' :
                      action === 'approve' ? 'موافقة' :
-                     action === 'review' ? 'مراجعة' :
-                     action === 'investigate' ? 'تحقيق' :
-                     action === 'decide' ? 'قرار' : action}
+                     action === 'assign' ? 'تعيين' :
+                     action === 'root_cause.propose' ? 'اقتراح سبب جذري' :
+                     action === 'release_hold' ? 'فك الحجز' :
+                     action === 'reject' ? 'رفض' :
+                     action === 'verify_close' ? 'تحقق وإغلاق' :
+                     action === 'capa.add' ? 'إضافة CAPA' :
+                     action === 'capa.complete' ? 'إكمال CAPA' :
+                     action === 'workflow.progress' ? 'التقدم في المسار' :
+                     action === 'export' ? 'تصدير' :
+                     action === 'reopen' ? 'إعادة فتح' : action}
                     {i < actions.length - 1 && '، '}
                 </span>
             ))}

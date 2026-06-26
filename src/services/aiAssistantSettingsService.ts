@@ -1,13 +1,18 @@
 import { supabase } from '../config/supabase';
 import type { AiAssistantSettings, AiAssistantSettingsSaveInput } from '../types/ai';
 
+const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
+const DEFAULT_OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+const DEFAULT_GOOGLE_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai';
+const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
+
 export const DEFAULT_AI_ASSISTANT_SETTINGS: AiAssistantSettings = {
   is_enabled: true,
   default_model: 'gpt-4.1-mini',
   temperature: 0.2,
   max_tokens: 1200,
   api_provider: 'openai',
-  api_base_url: 'https://api.openai.com/v1',
+  api_base_url: DEFAULT_OPENAI_BASE_URL,
   has_api_key: false,
   api_key_last4: '',
   api_key_updated_at: null,
@@ -17,7 +22,21 @@ function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function normalizeApiProvider(value: unknown): AiAssistantSettings['api_provider'] {
+  return value === 'openrouter' || value === 'google' || value === 'anthropic' || value === 'custom'
+    ? value
+    : 'openai';
+}
+
+function defaultBaseUrlForProvider(provider: AiAssistantSettings['api_provider']): string {
+  if (provider === 'google') return DEFAULT_GOOGLE_BASE_URL;
+  if (provider === 'openrouter') return DEFAULT_OPENROUTER_BASE_URL;
+  if (provider === 'anthropic') return DEFAULT_ANTHROPIC_BASE_URL;
+  return DEFAULT_OPENAI_BASE_URL;
+}
+
 function normalizeSettings(payload: any): AiAssistantSettings {
+  const apiProvider = normalizeApiProvider(payload?.api_provider);
   return {
     is_enabled: payload?.is_enabled !== false,
     default_model: normalizeText(payload?.default_model) || DEFAULT_AI_ASSISTANT_SETTINGS.default_model,
@@ -27,11 +46,8 @@ function normalizeSettings(payload: any): AiAssistantSettings {
     max_tokens: Number.isFinite(Number(payload?.max_tokens))
       ? Number(payload.max_tokens)
       : DEFAULT_AI_ASSISTANT_SETTINGS.max_tokens,
-    api_provider:
-      payload?.api_provider === 'openrouter' || payload?.api_provider === 'custom'
-        ? payload.api_provider
-        : 'openai',
-    api_base_url: normalizeText(payload?.api_base_url) || DEFAULT_AI_ASSISTANT_SETTINGS.api_base_url,
+    api_provider: apiProvider,
+    api_base_url: normalizeText(payload?.api_base_url) || defaultBaseUrlForProvider(apiProvider),
     has_api_key: Boolean(payload?.has_api_key),
     api_key_last4: normalizeText(payload?.api_key_last4),
     api_key_updated_at: normalizeText(payload?.api_key_updated_at) || null,

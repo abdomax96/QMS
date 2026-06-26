@@ -408,6 +408,7 @@ const TestRunPage: React.FC = () => {
 
   const [activeMeasurementId, setActiveMeasurementId] = useState<string | null>(null);
   const [activeMeasurementTimeHHMM, setActiveMeasurementTimeHHMM] = useState<string>('');
+  const [measurementTimeDrafts, setMeasurementTimeDrafts] = useState<Record<string, string>>({});
 
   const [valuesByKey, setValuesByKey] = useState<Record<string, any>>({});
   const [selectedParameterKey, setSelectedParameterKey] = useState<string>('');
@@ -456,6 +457,17 @@ const TestRunPage: React.FC = () => {
     setLocalNotes(typeof tabNotes === 'string' ? tabNotes : (runData.notes || ''));
   }, [isNew, runData?.id]);
 
+  useEffect(() => {
+    if (isNew) return;
+
+    const nextDrafts = measurements.reduce<Record<string, string>>((acc, measurement) => {
+      acc[measurement.id] = isoToHHMM(measurement.measured_at);
+      return acc;
+    }, {});
+
+    setMeasurementTimeDrafts(nextDrafts);
+  }, [isNew, measurements]);
+
 
   // Persist local state into tab store (marks dirty)
   useEffect(() => {
@@ -503,6 +515,53 @@ const TestRunPage: React.FC = () => {
     }
 
     return out;
+  };
+
+  const focusMeasurement = (measurement: LabV2RunMeasurement) => {
+    setActiveMeasurementId(measurement.id);
+    setActiveMeasurementTimeHHMM(measurementTimeDrafts[measurement.id] ?? isoToHHMM(measurement.measured_at));
+  };
+
+  const saveMeasurementTime = async (measurement: LabV2RunMeasurement, nextHHMM: string) => {
+    if (!runData?.id) return;
+
+    const fallbackHHMM = isoToHHMM(measurement.measured_at || runData.started_at || runData.created_at);
+    const normalizedHHMM = nextHHMM || fallbackHHMM;
+    const nextIso = hhmmToIsoOnBase(
+      measurement.measured_at || runData.started_at || runData.created_at,
+      normalizedHHMM
+    );
+
+    if (!nextIso) {
+      setMeasurementTimeDrafts((prev) => ({ ...prev, [measurement.id]: fallbackHHMM }));
+      if (activeMeasurementId === measurement.id) setActiveMeasurementTimeHHMM(fallbackHHMM);
+      return;
+    }
+
+    if (measurement.measured_at && new Date(measurement.measured_at).toISOString() === nextIso) {
+      setMeasurementTimeDrafts((prev) => ({ ...prev, [measurement.id]: normalizedHHMM }));
+      if (activeMeasurementId === measurement.id) setActiveMeasurementTimeHHMM(normalizedHHMM);
+      return;
+    }
+
+    try {
+      await labV2TestRunService.updateMeasurement(measurement.id, { measured_at: nextIso });
+      patchRunCache(runData.id, (current) => ({
+        ...current,
+        measurements: (current.measurements || []).map((currentMeasurement) =>
+          currentMeasurement.id === measurement.id
+            ? { ...currentMeasurement, measured_at: nextIso }
+            : currentMeasurement
+        ),
+      }));
+      setMeasurementTimeDrafts((prev) => ({ ...prev, [measurement.id]: normalizedHHMM }));
+      if (activeMeasurementId === measurement.id) setActiveMeasurementTimeHHMM(normalizedHHMM);
+      invalidateRunQueriesDebounced(runData.id);
+    } catch (err: any) {
+      setMeasurementTimeDrafts((prev) => ({ ...prev, [measurement.id]: fallbackHHMM }));
+      if (activeMeasurementId === measurement.id) setActiveMeasurementTimeHHMM(fallbackHHMM);
+      toast.error('فشل تحديث الوقت', err?.message);
+    }
   };
 
   const saveRunNotes = async (showSuccessToast: boolean): Promise<boolean> => {
@@ -1254,20 +1313,49 @@ const TestRunPage: React.FC = () => {
 
           return (
             <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-6 space-y-4">
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                <div className="space-y-1">
-                  <div className="text-sm font-semibold text-slate-900 dark:text-white">نتائج الفحص</div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">المواصفة بالأعلى، والتسجيل في جدول مختصر.</div>
-                </div>
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="text-sm font-semibold text-slate-900 dark:text-white">نتائج الفحص</div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400">المواصفة بالأعلى، ويمكن تعديل وقت كل نتيجة مباشرة من عمود الوقت.</div>
+                  </div>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  <div className="min-w-[160px]">
+                    <label className="block text-[11px] text-slate-500 dark:text-slate-400 mb-1">وقت النتيجة</label>
+                    <input
+                      type="time"
+                      lang="en"
+                      dir="ltr"
+                      value={activeMeasurementTimeHHMM}
+                      onChange={(e) => {
+                        const nextHHMM = e.target.value;
+                        setActiveMeasurementTimeHHMM(nextHHMM);
+                        if (activeMeasurementId) {
+                          setMeasurementTimeDrafts((prev) => ({ ...prev, [activeMeasurementId]: nextHHMM }));
+                        }
+                      }}
+                      onBlur={() => {
+                        if (!activeMeasurementId) return;
+                        const activeMeasurement = measurements.find((measurement) => measurement.id === activeMeasurementId);
+                        if (!activeMeasurement) return;
+                        void saveMeasurementTime(activeMeasurement, activeMeasurementTimeHHMM);
+                      }}
+                      disabled={!isEditable}
+                      className="w-full rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2 text-sm dark:bg-slate-900/30 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                    />
+                  </div>
                   <Button
                     variant="outline"
                     onClick={async () => {
                       try {
+                        const baseMeasurementTime = runData.started_at || runData.created_at || new Date().toISOString();
+                        const measuredAt =
+                          hhmmToIsoOnBase(baseMeasurementTime, activeMeasurementTimeHHMM) ||
+                          runData.started_at ||
+                          new Date().toISOString();
                         const created = await labV2TestRunService.createMeasurement({
                           run_id: runData.id,
-                          measured_at: runData.started_at || new Date().toISOString(),
+                          measured_at: measuredAt,
                         });
                         patchRunCache(runData.id, (current) => {
                           const existing = (current.measurements || []).some((m) => m.id === created.id);
@@ -1336,6 +1424,7 @@ const TestRunPage: React.FC = () => {
                         ? evaluateLabV2ParameterValue(selectedParameter, rowRawValue, rulesSnapshot)
                         : null;
                       const defaultTime = isoToHHMM(m.measured_at);
+                      const draftTime = measurementTimeDrafts[m.id] ?? defaultTime;
                       const inputClass =
                         'w-full rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-2 text-sm dark:bg-slate-900/30 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500';
 
@@ -1347,26 +1436,19 @@ const TestRunPage: React.FC = () => {
                               type="time"
                               lang="en"
                               dir="ltr"
-                              defaultValue={defaultTime}
+                              value={draftTime}
                               disabled={!isEditable}
                               className={inputClass}
+                              onFocus={() => focusMeasurement(m)}
+                              onChange={(e) => {
+                                const nextHHMM = e.target.value;
+                                setMeasurementTimeDrafts((prev) => ({ ...prev, [m.id]: nextHHMM }));
+                                setActiveMeasurementId(m.id);
+                                setActiveMeasurementTimeHHMM(nextHHMM);
+                              }}
                               onBlur={async (e) => {
                                 if (!isEditable) return;
-                                const nextIso = hhmmToIsoOnBase(m.measured_at || runData.started_at || runData.created_at, e.target.value);
-                                if (!nextIso) return;
-                                if (m.measured_at && new Date(m.measured_at).toISOString() === nextIso) return;
-                                try {
-                                  await labV2TestRunService.updateMeasurement(m.id, { measured_at: nextIso });
-                                  patchRunCache(runData.id, (current) => ({
-                                    ...current,
-                                    measurements: (current.measurements || []).map((measurement) =>
-                                      measurement.id === m.id ? { ...measurement, measured_at: nextIso } : measurement
-                                    ),
-                                  }));
-                                  invalidateRunQueriesDebounced(runData.id);
-                                } catch (err: any) {
-                                  toast.error('فشل تحديث الوقت', err?.message);
-                                }
+                                await saveMeasurementTime(m, e.target.value || defaultTime);
                               }}
                             />
                           </td>
@@ -1377,6 +1459,7 @@ const TestRunPage: React.FC = () => {
                                   defaultValue={rowRawValue}
                                   disabled={valuesDisabled || !selectedParameter}
                                   className={inputClass}
+                                  onFocus={() => focusMeasurement(m)}
                                   onChange={(e) => {
                                     if ((e.target.value || '') === (rowRawValue || '')) return;
                                     void saveMeasurementValue(m.id, e.target.value);
@@ -1398,6 +1481,7 @@ const TestRunPage: React.FC = () => {
                                   step={selectedParameter?.data_type === 'number' ? 'any' : undefined}
                                   min={selectedParameter?.data_type === 'number' ? (selectedParameter.min_value ?? undefined) : undefined}
                                   max={selectedParameter?.data_type === 'number' ? (selectedParameter.max_value ?? undefined) : undefined}
+                                  onFocus={() => focusMeasurement(m)}
                                   onBlur={(e) => {
                                     if ((e.target.value || '') === (rowRawValue || '')) return;
                                     void saveMeasurementValue(m.id, e.target.value);
@@ -1415,6 +1499,7 @@ const TestRunPage: React.FC = () => {
                               disabled={!isEditable}
                               className={inputClass}
                               placeholder="ملاحظات"
+                              onFocus={() => focusMeasurement(m)}
                               onBlur={async (e) => {
                                 if (!isEditable) return;
                                 const nextNote = e.target.value.trim();

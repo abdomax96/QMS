@@ -1,5 +1,5 @@
 import { supabase } from '../config/supabase';
-import type { AiActionProposal, AiChatFunctionResult, AiMessage, AiThread } from '../types/ai';
+import type { AiChatFunctionResult, AiExecuteFunctionResult, AiMessage, AiThread } from '../types/ai';
 
 type SendAiMessageInput = {
   threadId?: string | null;
@@ -7,6 +7,37 @@ type SendAiMessageInput = {
   moduleHint?: string | null;
   locale?: string;
 };
+
+type ExecuteProposalInput = {
+  proposalId: string;
+  confirmationToken?: string;
+  locale?: string;
+};
+
+async function extractFunctionErrorMessage(error: unknown, data: unknown): Promise<string> {
+  const dataError =
+    data && typeof data === 'object' && 'error' in data ? String((data as { error?: string }).error || '') : '';
+  if (dataError) return dataError;
+
+  if (error && typeof error === 'object' && 'context' in error) {
+    const context = (error as { context?: Response }).context;
+    if (context) {
+      try {
+        const json = await context.clone().json() as { error?: string };
+        if (typeof json?.error === 'string' && json.error.trim()) return json.error.trim();
+      } catch {
+        try {
+          const text = (await context.clone().text()).trim();
+          if (text) return text;
+        } catch {
+          // Ignore response parsing issues and fall back to SDK error message.
+        }
+      }
+    }
+  }
+
+  return error instanceof Error ? error.message : '';
+}
 
 class AiAssistantService {
   async listThreads(limit = 40): Promise<AiThread[]> {
@@ -33,18 +64,6 @@ class AiAssistantService {
     return (data || []) as AiMessage[];
   }
 
-  async getProposals(threadId: string, limit = 40): Promise<AiActionProposal[]> {
-    const { data, error } = await supabase
-      .from('ai_action_proposals')
-      .select('id, thread_id, message_id, tool_name, summary, risk_level, status, action_payload, execution_result, created_at')
-      .eq('thread_id', threadId)
-      .order('created_at', { ascending: false })
-      .limit(limit);
-
-    if (error) throw error;
-    return (data || []) as AiActionProposal[];
-  }
-
   async archiveThread(threadId: string): Promise<void> {
     const { error } = await supabase
       .from('ai_threads')
@@ -67,7 +86,8 @@ class AiAssistantService {
     });
 
     if (error) {
-      throw new Error(error.message || 'Failed to call AI assistant function.');
+      const functionError = await extractFunctionErrorMessage(error, data);
+      throw new Error(functionError || error.message || 'Failed to call AI assistant function.');
     }
 
     if (!data || typeof data !== 'object' || !data.thread) {
@@ -75,6 +95,32 @@ class AiAssistantService {
     }
 
     return data as AiChatFunctionResult;
+  }
+
+  async executeProposal(input: ExecuteProposalInput): Promise<AiExecuteFunctionResult> {
+    const body: Record<string, unknown> = {
+      action: 'execute',
+      proposalId: input.proposalId,
+      locale: input.locale || 'ar',
+    };
+    if (input.confirmationToken?.trim()) {
+      body.confirmationToken = input.confirmationToken.trim();
+    }
+
+    const { data, error } = await supabase.functions.invoke('ai-assistant', {
+      body,
+    });
+
+    if (error) {
+      const functionError = await extractFunctionErrorMessage(error, data);
+      throw new Error(functionError || error.message || 'Failed to execute AI assistant action.');
+    }
+
+    if (!data || typeof data !== 'object' || !data.proposal || !data.assistant_message) {
+      throw new Error('AI assistant returned invalid execution response.');
+    }
+
+    return data as AiExecuteFunctionResult;
   }
 }
 

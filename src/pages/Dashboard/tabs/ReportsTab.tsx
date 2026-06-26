@@ -16,6 +16,7 @@ import { useReportsDashboard } from '../hooks/useReportsDashboard';
 import { PageSkeleton } from '../../../components/common/LoadingStates';
 import useStore from '../../../store';
 import { formatDate } from '../../../utils';
+import { FORMS_REPORTS_HOME } from '../../../constants/formsReportsRoutes';
 
 const STATUS_MAP: Record<string, { label: string; variant: 'green' | 'yellow' | 'red' | 'purple' | 'gray' }> = {
   approved:  { label: 'معتمد',       variant: 'green' },
@@ -49,12 +50,12 @@ const ReportsTab: React.FC = () => {
   return (
     <div className="space-y-5">
       {/* Alerts */}
-      <AlertRow title="مسودات قديمة بحاجة للمراجعة" items={pendingAlert} href="/forms&reports" />
+      <AlertRow title="مسودات قديمة بحاجة للمراجعة" items={pendingAlert} href={FORMS_REPORTS_HOME} />
 
       {/* Quick action */}
       <div className="flex justify-end">
         <button
-          onClick={() => navigate('/forms&reports')}
+          onClick={() => navigate(FORMS_REPORTS_HOME)}
           className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 text-sm transition-colors"
         >
           <PlusIcon className="w-4 h-4" />
@@ -104,7 +105,7 @@ const ReportsTab: React.FC = () => {
         </SectionCard>
 
         {/* Recent reports */}
-        <SectionCard title="أحدث التقارير" viewAllHref="/forms&reports" className="lg:col-span-1">
+        <SectionCard title="أحدث التقارير" viewAllHref={FORMS_REPORTS_HOME} className="lg:col-span-1">
           {recentReports.length === 0 ? (
             <EmptyState message="لا توجد تقارير" />
           ) : (

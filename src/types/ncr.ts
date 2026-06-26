@@ -360,12 +360,6 @@ export interface UserProfile {
     isActive?: boolean;
 }
 
-export interface PermissionMatrix {
-    [role: string]: {
-        [permission: string]: boolean;
-    };
-}
-
 export interface SystemSettings {
     // Flat structure to match settingsService.ts
     departments: string[];
@@ -378,7 +372,6 @@ export interface SystemSettings {
 
     // Optional / Meta
     lastBackupAt?: string | null;
-    permissionMatrix?: PermissionMatrix;
     holdsDisposalPolicy?: 'warning' | 'block';
 
     // NCR document print metadata

@@ -13,13 +13,9 @@ export { default as ModuleRoute, ModuleAccessDenied, FormsReportsRoute, TasksRou
 export { default as ShareButton } from '../../components/common/ShareButton';
 export { default as NcrPermissionActions, NcrActionButton, NcrStageInfo } from '../../components/ncr/NcrPermissionActions';
 
-// ==================== Services ====================
-export { default as modulePermissionsService, moduleService, departmentModuleService, ncrWorkflowService, roleModuleService, documentShareService } from '../../services/modulePermissionsService';
-
 // ==================== Types ====================
 export type { ModulePermission, NcrStagePermission, TaskStagePermission, UseModulePermissionsReturn } from '../../hooks/useModulePermissions';
 export type { DataIsolationConfig, UseDataIsolationReturn } from '../../hooks/useDataIsolation';
-export type { AppModule, DepartmentModuleAccess, NcrWorkflowStage, NcrStagePermission as NcrStagePermissionDB, RoleModulePermission, DocumentShare } from '../../services/modulePermissionsService';
 
 // ==================== Constants ====================
 export const MODULE_CODES = {
@@ -43,24 +39,12 @@ export const PERMISSION_ACTIONS = {
     ASSIGN: 'assign',
     COMPLETE: 'complete',
     RELEASE: 'release',
-    REVIEW: 'review',
-    INVESTIGATE: 'investigate',
-    DECIDE: 'decide',
-    CLOSE: 'close',
-    HOLD_ADD: 'hold_add',
-    HOLD_RELEASE: 'hold_release',
-} as const;
-
-export const NCR_STAGES = {
-    DRAFT: 'draft',
-    SUBMITTED: 'submitted',
-    UNDER_REVIEW: 'under_review',
-    INVESTIGATION: 'investigation',
-    PENDING_DECISION: 'pending_decision',
-    IN_PROGRESS: 'in_progress',
-    PENDING_VERIFICATION: 'pending_verification',
-    CLOSED: 'closed',
-    CANCELLED: 'cancelled',
+    ROOT_CAUSE_PROPOSE: 'root_cause.propose',
+    RELEASE_HOLD: 'release_hold',
+    VERIFY_CLOSE: 'verify_close',
+    CAPA_ADD: 'capa.add',
+    CAPA_COMPLETE: 'capa.complete',
+    WORKFLOW_PROGRESS: 'workflow.progress',
 } as const;
 
 export const TASK_STAGES = {

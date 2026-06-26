@@ -47,7 +47,11 @@ const mapRowToComment = (row: any): Comment => ({
     attachments: row.attachments ?? []
 });
 
-export function useNcrComments(entityId: string, entityType: 'ncr' | 'report' | 'hold' = 'ncr') {
+export function useNcrComments(
+    entityId: string,
+    entityType: 'ncr' | 'report' | 'hold' = 'ncr',
+    companyId?: string | null
+) {
     const [comments, setComments] = useState<Comment[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -129,45 +133,51 @@ export function useNcrComments(entityId: string, entityType: 'ncr' | 'report' | 
         const resolvedAuthorId = authorId || authData?.user?.id || '';
         const timestamp = new Date().toISOString();
 
-        const modernInsert = await supabase.from(COMMENTS_TABLE).insert({
+        const modernPayload = {
             content: input.content,
             ncr_id: input.entityId,
             entity_id: input.entityId,
             entity_type: input.entityType,
+            ...(companyId ? { company_id: companyId } : {}),
             parent_id: input.parentId,
             author_id: resolvedAuthorId,
             author_name: authorName,
             author_avatar: authorAvatar ?? null,
             edited: false,
             created_at: timestamp
-        }).select(MODERN_SELECT).single();
+        };
 
-        let insertData: any = modernInsert.data;
+        const modernInsert = await supabase.from(COMMENTS_TABLE).insert(modernPayload);
+
+        let insertData: any = null;
         let insertError: any = modernInsert.error;
 
         if (insertError && (isMissingColumnError(insertError) || isTypeMismatchError(insertError))) {
             const legacyInsert = await supabase.from(COMMENTS_TABLE).insert({
                 content: input.content,
                 ncr_id: input.entityId,
+                ...(companyId ? { company_id: companyId } : {}),
                 parent_id: input.parentId,
                 author_id: resolvedAuthorId,
                 author_name: authorName,
                 created_at: timestamp,
                 updated_at: timestamp
-            }).select(LEGACY_SELECT).single();
+            });
 
-            insertData = legacyInsert.data;
+            insertData = null;
             insertError = legacyInsert.error;
         }
 
-        // Fallback for environments with strict/legacy RLS where RETURNING can fail.
-        if (insertError && isTypeMismatchError(insertError)) {
+        // Fallback for environments with legacy column drift.
+        if (insertError && (isMissingColumnError(insertError) || isTypeMismatchError(insertError))) {
             const minimalInsert = await supabase.from(COMMENTS_TABLE).insert({
                 content: input.content,
                 ncr_id: input.entityId,
                 entity_id: input.entityId,
                 entity_type: input.entityType,
+                ...(companyId ? { company_id: companyId } : {}),
                 parent_id: input.parentId,
+                author_id: resolvedAuthorId,
                 author_name: authorName
             });
 
@@ -180,12 +190,8 @@ export function useNcrComments(entityId: string, entityType: 'ncr' | 'report' | 
             throw insertError;
         }
 
-        if (insertData) {
-            setComments(prev => [...prev, mapRowToComment(insertData)]);
-        } else {
-            await loadComments();
-        }
-    }, [loadComments]);
+        await loadComments();
+    }, [companyId, loadComments]);
 
     // Edit comment
     const editComment = useCallback(async (id: string, content: string) => {

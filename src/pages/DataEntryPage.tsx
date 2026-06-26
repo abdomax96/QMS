@@ -32,6 +32,7 @@ import {
     buildDocumentVariableSnapshot,
     type DocumentVariableSnapshot,
 } from '../utils/documentVariableBindings';
+import { FORMS_REPORTS_HOME, formsReportsTemplateReportsPath } from '../constants/formsReportsRoutes';
 
 const REPORT_COLLAB_ENABLED = !['0', 'false'].includes(
     String(import.meta.env.VITE_REPORT_COLLAB_ENABLED ?? '1').toLowerCase()
@@ -263,7 +264,6 @@ const DataEntryPageContent: React.FC = () => {
         updateFormInstance,
         updateFormTemplate,
         syncInstance,
-        currentFolderId,
         user,
     } = useStore();
 
@@ -417,28 +417,19 @@ const DataEntryPageContent: React.FC = () => {
             return;
         }
 
-        const folderIdFromQuery =
-            new URLSearchParams(location.search).get('folderId') ||
-            new URLSearchParams(location.search).get('folder');
-
-        const returnPath =
-            existingInstance?.folder_id
-                ? `/forms&reports/${existingInstance.folder_id}`
-                : folderIdFromQuery
-                    ? `/forms&reports/${folderIdFromQuery}`
-                    : currentFolderId
-                        ? `/forms&reports/${currentFolderId}`
-                        : '/forms&reports';
+        const returnTemplateId = existingInstance?.template_id || templateId || actualTemplateId;
+        const returnPath = returnTemplateId
+            ? formsReportsTemplateReportsPath(returnTemplateId)
+            : FORMS_REPORTS_HOME;
 
         openTab('instance', formIdForTab, entryTabTitle, entryPath, returnPath);
     }, [
-        currentFolderId,
         entryPath,
         entryTabTitle,
-        existingInstance?.folder_id,
+        actualTemplateId,
+        existingInstance?.template_id,
         instanceId,
         location.pathname,
-        location.search,
         openTab,
         templateId,
     ]);
@@ -2663,23 +2654,25 @@ const DataEntryPageContent: React.FC = () => {
     const handleBack = () => {
         const activeTab = getActiveTab();
         const tabReturnPath = activeTab?.path === location.pathname ? activeTab.returnPath : undefined;
-        const folderIdFromQuery =
-            new URLSearchParams(location.search).get('folderId') ||
-            new URLSearchParams(location.search).get('folder');
-
         const returnPath = (() => {
             if (tabReturnPath) {
-                if (tabReturnPath === '/folders') return '/forms&reports';
-                if (tabReturnPath.startsWith('/folders/')) {
-                    return tabReturnPath.replace('/folders/', '/forms&reports/');
+                if (
+                    tabReturnPath === '/folders' ||
+                    tabReturnPath.startsWith('/folders/') ||
+                    tabReturnPath === '/forms&reports' ||
+                    tabReturnPath.startsWith('/forms&reports/')
+                ) {
+                    const returnTemplateId = formData.template_id || existingInstance?.template_id || templateId || actualTemplateId;
+                    return returnTemplateId
+                        ? formsReportsTemplateReportsPath(returnTemplateId)
+                        : FORMS_REPORTS_HOME;
                 }
                 return tabReturnPath;
             }
-            if (formData.folder_id) return `/forms&reports/${formData.folder_id}`;
-            if (existingInstance?.folder_id) return `/forms&reports/${existingInstance.folder_id}`;
-            if (folderIdFromQuery) return `/forms&reports/${folderIdFromQuery}`;
-            if (currentFolderId) return `/forms&reports/${currentFolderId}`;
-            return '/forms&reports';
+            const returnTemplateId = formData.template_id || existingInstance?.template_id || templateId || actualTemplateId;
+            return returnTemplateId
+                ? formsReportsTemplateReportsPath(returnTemplateId)
+                : FORMS_REPORTS_HOME;
         })();
 
         if (hasUnsavedChanges) {

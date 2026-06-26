@@ -55,7 +55,6 @@ export const useSupabaseSync = () => {
         if (typeof window === 'undefined') return false;
         const path = window.location.pathname || '';
         return (
-            path.startsWith('/folders') ||
             path.startsWith('/forms') ||
             path.startsWith('/forms&reports') ||
             path.startsWith('/reports')

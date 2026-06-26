@@ -14,6 +14,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { supabase } from '../../config/supabase';
 import { NcrPermissionsSkeleton } from '../common/LoadingStates';
+import { NCR_STAGE_ACTIONS, type NcrStageAction } from '../../constants/ncrStageActions';
 
 interface NcrStage {
     id: string;
@@ -68,11 +69,14 @@ const readStoredArray = (key: string): string[] => {
 };
 
 const FALLBACK_STAGES: NcrStage[] = [
-    { id: 's1', code: 'initial_report', name: 'Initial Report', name_ar: 'التقرير الأولي', stage_order: 1, color: '#2563eb' },
-    { id: 's2', code: 'root_cause_analysis', name: 'Root Cause Analysis', name_ar: 'تحليل السبب الجذري', stage_order: 2, color: '#7c3aed' },
-    { id: 's3', code: 'capa_planning', name: 'CAPA Planning', name_ar: 'تخطيط الإجراءات', stage_order: 3, color: '#0ea5e9' },
-    { id: 's4', code: 'capa_execution', name: 'CAPA Execution', name_ar: 'تنفيذ الإجراءات', stage_order: 4, color: '#10b981' },
-    { id: 's5', code: 'verification_closure', name: 'Verification & Close', name_ar: 'التحقق والإغلاق', stage_order: 5, color: '#f59e0b' },
+    ...NCR_STAGE_ACTIONS.map((stage, index) => ({
+        id: `fallback-${stage.stage}`,
+        code: stage.stage,
+        name: stage.nameEn,
+        name_ar: stage.nameAr,
+        stage_order: stage.order,
+        color: ['#2563eb', '#7c3aed', '#0ea5e9', '#10b981', '#f59e0b'][index] || '#2563eb',
+    })),
 ];
 
 type StagePreset = {
@@ -82,86 +86,56 @@ type StagePreset = {
 };
 
 const STAGE_PRESETS: Record<string, StagePreset> = {
-    initial_report: {
-        actions: ['view', 'create', 'edit', 'delete', 'print'],
-        can_advance: true,
-        can_return: false,
-    },
-    root_cause_analysis: {
-        actions: ['view', 'edit', 'review', 'assign', 'investigate', 'add_rca', 'approve', 'decide', 'reopen', 'print', 'root_cause.propose', 'reject'],
-        can_advance: true,
-        can_return: true,
-    },
-    capa_planning: {
-        actions: ['view', 'edit', 'review', 'assign', 'approve', 'decide', 'hold_add', 'update_progress', 'reopen', 'print', 'capa.add', 'reject'],
-        can_advance: true,
-        can_return: true,
-    },
-    capa_execution: {
-        actions: ['view', 'edit', 'review', 'hold_release', 'update_progress', 'reopen', 'print', 'capa.complete', 'release_hold'],
-        can_advance: true,
-        can_return: true,
-    },
-    verification_closure: {
-        actions: ['view', 'verify', 'export', 'print', 'reopen', 'verify_close'],
-        can_advance: false,
-        can_return: true,
-    },
+    ...Object.fromEntries(
+        NCR_STAGE_ACTIONS.map((stage) => [
+            stage.stage,
+            {
+                actions: [...stage.allowedActions],
+                can_advance: stage.canAdvance,
+                can_return: stage.canReturn,
+            },
+        ])
+    ),
 };
 
 const ACTION_META: Record<string, { label: string; color: string }> = {
     view: { label: 'عرض', color: '#4b5563' },
-    create: { label: 'إنشاء', color: '#10b981' },
+    create: { label: 'إنشاء', color: '#2563eb' },
     edit: { label: 'تعديل', color: '#3b82f6' },
     delete: { label: 'حذف', color: '#ef4444' },
-    review: { label: 'مراجعة', color: '#f59e0b' },
     assign: { label: 'تعيين', color: '#8b5cf6' },
-    investigate: { label: 'تحقيق', color: '#ec4899' },
-    add_rca: { label: 'إضافة RCA', color: '#06b6d4' },
     approve: { label: 'موافقة', color: '#10b981' },
-    decide: { label: 'قرار', color: '#dc2626' },
-    hold_add: { label: 'إضافة حجز', color: '#ef4444' },
-    hold_release: { label: 'إفراج حجز', color: '#10b981' },
-    update_progress: { label: 'تحديث التقدم', color: '#3b82f6' },
     reopen: { label: 'إعادة فتح', color: '#f59e0b' },
-    print: { label: 'طباعة', color: '#6b7280' },
     export: { label: 'تصدير', color: '#6b7280' },
-    verify: { label: 'تحقق', color: '#8b5cf6' },
     verify_close: { label: 'تحقق وإغلاق', color: '#16a34a' },
     reject: { label: 'رفض', color: '#ef4444' },
     'root_cause.propose': { label: 'اقتراح سبب جذري', color: '#06b6d4' },
     'capa.add': { label: 'إضافة CAPA', color: '#0ea5e9' },
     'capa.complete': { label: 'إكمال CAPA', color: '#10b981' },
     release_hold: { label: 'فك الحجز', color: '#10b981' },
+    'workflow.progress': { label: 'التقدم في المسار', color: '#3b82f6' },
 };
 
-const ACTION_ORDER = [
+const ACTION_ORDER: NcrStageAction[] = [
     'view',
     'create',
     'edit',
     'delete',
-    'review',
-    'assign',
-    'investigate',
-    'add_rca',
-    'approve',
-    'decide',
-    'hold_add',
-    'hold_release',
-    'update_progress',
-    'reopen',
-    'export',
-    'print',
-    'verify',
-    'verify_close',
     'root_cause.propose',
-    'capa.add',
-    'capa.complete',
+    'assign',
+    'approve',
     'release_hold',
     'reject',
+    'verify_close',
+    'export',
+    'reopen',
+    'capa.add',
+    'capa.complete',
+    'workflow.progress',
 ];
 
 const ACTION_ORDER_INDEX = new Map<string, number>(ACTION_ORDER.map((code, i) => [code, i]));
+const CANONICAL_ACTION_SET = new Set<string>(ACTION_ORDER);
 
 const makeKey = (stageCode: string, roleId: string) => `${stageCode}::${roleId}`;
 
@@ -178,7 +152,7 @@ const sortActions = (actions: string[]): string[] =>
     });
 
 const ensureView = (actions: string[]): string[] => {
-    const cleaned = uniq(actions);
+    const cleaned = uniq(actions).filter(action => CANONICAL_ACTION_SET.has(action));
     if (!cleaned.includes('view')) {
         cleaned.unshift('view');
     }

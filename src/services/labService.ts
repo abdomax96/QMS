@@ -659,6 +659,10 @@ export async function createMaterialReceiving(
     };
     const status = statusMap[input.overallResult || 'pending'] || 'pending';
 
+    // Prefer letting the database set company_id via DEFAULT get_user_company_id() to avoid
+    // client-side mismatches that can trigger RLS INSERT failures.
+    const resolvedCompanyId = companyId && companyId.trim() ? companyId : undefined;
+
     const { data, error } = await supabase
         .from('material_receiving')
         .insert({
@@ -696,7 +700,7 @@ export async function createMaterialReceiving(
             initial_test_results: input.initialTestResults || null,
             test_requirements_snapshot: testRequirementsSnapshot || [],
             supplier_approval_snapshot: supplierApprovalSnapshot,
-            company_id: companyId || null,
+            company_id: resolvedCompanyId,
             created_at: now,
             updated_at: now
         })

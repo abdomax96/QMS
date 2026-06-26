@@ -73,8 +73,8 @@ export const NCR_TRANSITION_CONDITIONS: Record<NcrDatabaseStage, {
     },
     'root_cause_analysis': {
         required: ['rootCauseApproval.status=approved'],
-        description: 'Root cause must be proposed and approved by both parties',
-        description_ar: 'يجب اقتراح السبب الجذري والموافقة عليه من كلا الطرفين'
+        description: 'Root cause must be proposed and approved by an authorized reviewer',
+        description_ar: 'يجب اقتراح السبب الجذري والموافقة عليه من صاحب الصلاحية'
     },
     'capa_planning': {
         required: ['actions.length>0'],

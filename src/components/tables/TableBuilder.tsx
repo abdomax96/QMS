@@ -86,7 +86,7 @@ const CUSTOM_DATA_TYPE_OPTIONS: Array<{ value: CellDataType; label: string }> = 
     { value: 'boolean-check', label: '✔ / ✖' },
     { value: 'boolean-yesno', label: 'نعم / لا' },
     { value: 'dropdown', label: 'قائمة منسدلة' },
-    { value: 'user-directory', label: 'دليل المستخدمين' },
+    { value: 'user-directory', label: 'دليل العاملين' },
     { value: 'image', label: 'صورة / ملف' },
     { value: 'long-text', label: 'نص طويل' },
 ];
@@ -977,7 +977,7 @@ const TableBuilder: React.FC<TableBuilderProps> = ({ table, onSave, onClose, tem
                                     <option value="boolean-check">✔ مقبول / ✖ مرفوض</option>
                                     <option value="boolean-yesno">نعم / لا</option>
                                     <option value="dropdown">قائمة منسدلة</option>
-                                    <option value="user-directory">دليل المستخدمين</option>
+                                    <option value="user-directory">دليل العاملين</option>
                                     <option value="image">صورة / ملف</option>
                                     <option value="long-text">نص طويل (ملاحظات)</option>
                                 </select>
@@ -1207,7 +1207,7 @@ const TableBuilder: React.FC<TableBuilderProps> = ({ table, onSave, onClose, tem
                                         </div>
                                     </div>
                                     <p className="text-xs text-gray-500 dark:text-gray-400">
-                                        عند الإدخال سيظهر للمستخدم أسماء الموظفين من دليل المستخدمين حسب الفلاتر المختارة.
+                                        عند الإدخال سيظهر للمستخدم أسماء العاملين من دليل العاملين حسب الفلاتر المختارة.
                                     </p>
                                 </div>
                             )}
@@ -4618,7 +4618,7 @@ const TableBuilder: React.FC<TableBuilderProps> = ({ table, onSave, onClose, tem
                                     <option value="boolean-yesno">نعم / لا</option>
                                     <option value="text">نص</option>
                                     <option value="dropdown">قائمة منسدلة</option>
-                                    <option value="user-directory">دليل المستخدمين</option>
+                                    <option value="user-directory">دليل العاملين</option>
                                 </select>
                                 <input
                                     type="number"

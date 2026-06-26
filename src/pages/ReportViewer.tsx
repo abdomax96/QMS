@@ -38,12 +38,13 @@ import {
     resolveCustomCellDisplayValue,
     resolveCustomCellType,
 } from '../utils/customTableV2';
+import { FORMS_REPORTS_HOME, formsReportsTemplateReportsPath } from '../constants/formsReportsRoutes';
 
 const ReportViewer: React.FC = () => {
     const { templateId, instanceId } = useParams<{ templateId?: string; instanceId?: string }>();
     const navigate = useNavigate();
     const location = useLocation();
-    const { formTemplates, formInstances, syncInstance, currentFolderId } = useStore();
+    const { formTemplates, formInstances, syncInstance } = useStore();
     const { getActiveTab } = useTabsStore();
     const { selectedCompany } = useCompanyStore();
     const { logoUrl, logoScale } = useAppSettingsStore();
@@ -292,15 +293,21 @@ const ReportViewer: React.FC = () => {
 
         const returnPath = (() => {
             if (tabReturnPath) {
-                if (tabReturnPath === '/folders') return '/forms&reports';
-                if (tabReturnPath.startsWith('/folders/')) {
-                    return tabReturnPath.replace('/folders/', '/forms&reports/');
+                if (
+                    tabReturnPath === '/folders' ||
+                    tabReturnPath.startsWith('/folders/') ||
+                    tabReturnPath === '/forms&reports' ||
+                    tabReturnPath.startsWith('/forms&reports/')
+                ) {
+                    return instance?.template_id
+                        ? formsReportsTemplateReportsPath(instance.template_id)
+                        : FORMS_REPORTS_HOME;
                 }
                 return tabReturnPath;
             }
-            if (instance?.folder_id) return `/forms&reports/${instance.folder_id}`;
-            if (currentFolderId) return `/forms&reports/${currentFolderId}`;
-            return '/forms&reports';
+            return instance?.template_id
+                ? formsReportsTemplateReportsPath(instance.template_id)
+                : FORMS_REPORTS_HOME;
         })();
 
         navigate(returnPath);

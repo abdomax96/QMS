@@ -3,11 +3,10 @@
  * صفحة إدارة المنتجات وخطوط الإنتاج
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
     PlusIcon,
-    PlayIcon,
     PencilIcon,
     TrashIcon,
     CubeIcon,
@@ -36,7 +35,22 @@ interface SopDocument {
 
 const ProductsPage: React.FC = () => {
     const navigate = useNavigate();
-    const { companies, selectedCompany, selectCompany } = useCompanyStore();
+    const { companies, selectedCompany } = useCompanyStore();
+
+    // IMPORTANT: Company selection inside this page is a local filter ONLY.
+    // The main company is set only from "Companies & Clients" tab.
+    const STORAGE_KEY = 'qms.settings.products.pageCompanyId';
+    const [pageCompanyId, setPageCompanyId] = useState<string>(() => {
+        try {
+            return localStorage.getItem(STORAGE_KEY) || selectedCompany?.id || '';
+        } catch {
+            return selectedCompany?.id || '';
+        }
+    });
+    const pageCompany = useMemo(
+        () => companies.find(c => c.id === pageCompanyId) || null,
+        [companies, pageCompanyId]
+    );
     const [productionLines, setProductionLines] = useState<ProductionLine[]>([]);
     const [products, setProducts] = useState<Product[]>([]);
     const [productsAllergens, setProductsAllergens] = useState<Map<string, string[]>>(new Map());
@@ -69,14 +83,40 @@ const ProductsPage: React.FC = () => {
 
     useEffect(() => {
         loadData();
-    }, [selectedCompany?.id]);
+    }, [pageCompanyId]);
+
+    useEffect(() => {
+        // On first mount (or if store initializes later), use the store's selection as default.
+        if (!pageCompanyId && selectedCompany?.id) {
+            setPageCompanyId(selectedCompany.id);
+        }
+
+        // If a stored companyId is no longer available in the list, fall back.
+        if (pageCompanyId && companies.length > 0 && !companies.some(c => c.id === pageCompanyId)) {
+            const fallbackId = selectedCompany?.id || '';
+            setPageCompanyId(fallbackId);
+        }
+    }, [pageCompanyId, selectedCompany?.id, companies]);
+
+    useEffect(() => {
+        // Persist per-page selection only (does not set main company).
+        try {
+            if (pageCompanyId) {
+                localStorage.setItem(STORAGE_KEY, pageCompanyId);
+            } else {
+                localStorage.removeItem(STORAGE_KEY);
+            }
+        } catch {
+            // ignore storage errors (private mode, blocked storage, etc.)
+        }
+    }, [pageCompanyId]);
 
     const loadData = async () => {
         setIsLoading(true);
         try {
             const [linesData, productsData] = await Promise.all([
-                productService.getProductionLines(selectedCompany?.id),
-                productService.getProducts(selectedCompany?.id)
+                productService.getProductionLines(pageCompanyId || undefined),
+                productService.getProducts(pageCompanyId || undefined)
             ]);
             setProductionLines(linesData);
             setProducts(productsData);
@@ -91,8 +131,8 @@ const ProductsPage: React.FC = () => {
                     .eq('type', 'sop')
                     .order('updated_at', { ascending: false });
 
-                if (selectedCompany?.id) {
-                    docQuery = docQuery.eq('company_id', selectedCompany.id);
+                if (pageCompanyId) {
+                    docQuery = docQuery.eq('company_id', pageCompanyId);
                 }
 
                 const { data: sopDocs } = await docQuery;
@@ -131,6 +171,10 @@ const ProductsPage: React.FC = () => {
 
     // Line CRUD
     const handleAddLine = () => {
+        if (!pageCompanyId) {
+            window.alert('اختر شركة أولاً لإضافة خط إنتاج.');
+            return;
+        }
         setEditingLine(null);
         setLineForm({ name: '', code: '', description: '' });
         setShowLineModal(true);
@@ -148,13 +192,17 @@ const ProductsPage: React.FC = () => {
 
     const handleSaveLine = async () => {
         if (!lineForm.name || !lineForm.code) return;
+        if (!pageCompanyId) {
+            window.alert('اختر شركة أولاً.');
+            return;
+        }
 
         if (editingLine) {
             await productService.updateProductionLine(editingLine.id, lineForm);
         } else {
             await productService.createProductionLine({
                 ...lineForm,
-                company_id: selectedCompany?.id || '',
+                company_id: pageCompanyId,
                 is_active: true
             });
         }
@@ -212,10 +260,16 @@ const ProductsPage: React.FC = () => {
                 sop_document_id: productForm.sop_document_id || null
             });
         } else {
+            const lineCompanyId = productionLines.find(l => l.id === selectedLineId)?.company_id || '';
+            const companyIdForNewProduct = pageCompanyId || lineCompanyId;
+            if (!companyIdForNewProduct) {
+                window.alert('اختر شركة/خط إنتاج صحيح أولاً.');
+                return;
+            }
             await productService.createProduct({
                 ...productForm,
                 sop_document_id: productForm.sop_document_id || null,
-                company_id: selectedCompany?.id || '',
+                company_id: companyIdForNewProduct,
                 production_line_id: selectedLineId,
                 is_active: true
             });
@@ -266,11 +320,9 @@ const ProductsPage: React.FC = () => {
                 <div className="flex items-center gap-3">
                     {/* Company Selector */}
                     <select
-                        value={selectedCompany?.id || ''}
+                        value={pageCompanyId}
                         onChange={(e) => {
-                            if (e.target.value) {
-                                selectCompany(e.target.value);
-                            }
+                            setPageCompanyId(e.target.value);
                         }}
                         className="px-4 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600"
                     >
@@ -281,7 +333,8 @@ const ProductsPage: React.FC = () => {
                     </select>
                     <button
                         onClick={handleAddLine}
-                        className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+                        disabled={!pageCompanyId}
+                        className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                         <PlusIcon className="w-5 h-5" />
                         إضافة خط إنتاج
@@ -417,13 +470,6 @@ const ProductsPage: React.FC = () => {
                                                             </button>
                                                         </td>
                                                          <td className="px-4 py-3 text-center">
-                                                             <button
-                                                                 onClick={() => navigate(`/lab/tests/runs/new?product_id=${product.id}`)}
-                                                                 className="p-1 text-emerald-600 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 rounded"
-                                                                 title="بدء فحص مخبري"
-                                                             >
-                                                                 <PlayIcon className="w-4 h-4" />
-                                                             </button>
                                                              <button
                                                                  onClick={() => {
                                                                      setSelectedProductForRecipes(product);
@@ -680,6 +726,7 @@ const ProductsPage: React.FC = () => {
                     productName={selectedProductForRecipes.name}
                     companyId={selectedProductForRecipes.company_id}
                     userRole="admin"
+                    availableProducts={products}
                     onClose={() => {
                         setShowRecipeManager(false);
                         setSelectedProductForRecipes(null);

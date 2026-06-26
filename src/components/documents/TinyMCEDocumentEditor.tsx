@@ -1,5 +1,30 @@
 import React, { useRef, useCallback, useEffect, useState, useMemo } from 'react';
 import { Editor } from '@tinymce/tinymce-react';
+import 'tinymce/tinymce';
+import 'tinymce/icons/default';
+import 'tinymce/models/dom';
+import 'tinymce/themes/silver';
+import 'tinymce/skins/ui/oxide/skin.css';
+import 'tinymce/plugins/advlist';
+import 'tinymce/plugins/autolink';
+import 'tinymce/plugins/lists';
+import 'tinymce/plugins/link';
+import 'tinymce/plugins/image';
+import 'tinymce/plugins/charmap';
+import 'tinymce/plugins/preview';
+import 'tinymce/plugins/anchor';
+import 'tinymce/plugins/searchreplace';
+import 'tinymce/plugins/visualblocks';
+import 'tinymce/plugins/code';
+import 'tinymce/plugins/fullscreen';
+import 'tinymce/plugins/insertdatetime';
+import 'tinymce/plugins/media';
+import 'tinymce/plugins/table';
+import 'tinymce/plugins/help';
+import 'tinymce/plugins/wordcount';
+import 'tinymce/plugins/pagebreak';
+import 'tinymce/plugins/directionality';
+import 'tinymce/plugins/emoticons';
 import { useCompanyStore } from '../../store/companyStore';
 import type { Variable } from '../../types/supabase'; // Import Variable type
 // import { Document } from '../../types/documents'; // Removed to avoiding strict type matching issues
@@ -117,7 +142,8 @@ export default function TinyMCEDocumentEditor({
         resize: false,
         menubar: !isCompactViewportRef.current,
         directionality: 'rtl' as const,
-        language: 'ar',
+        skin: false,
+        content_css: false,
 
         // Toolbar configuration
         toolbar_mode: 'sliding' as const,
@@ -486,7 +512,7 @@ export default function TinyMCEDocumentEditor({
             {/* TinyMCE Editor */}
             <div className="editor-wrapper">
                 <Editor
-                    apiKey="ghes89p3glg86onznvrharplbw2xvpby8ferhqsj3hi9d4lm"
+                    licenseKey="gpl"
                     onInit={(evt, editor) => {
                         editorRef.current = editor;
                     }}

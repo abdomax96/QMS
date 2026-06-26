@@ -3,12 +3,13 @@
  * مكون إدارة الوصفات لمنتج معين
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
     PlusIcon,
     PencilIcon,
     TrashIcon,
     DocumentDuplicateIcon,
+    ArrowDownTrayIcon,
     StarIcon,
     ChevronDownIcon,
     ChevronUpIcon,
@@ -18,12 +19,15 @@ import {
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import type { Recipe, RecipeIngredient, MixingStep } from '../../types/recipe';
 import { COMMON_UNITS, DEFAULT_RECIPE_PERMISSIONS } from '../../types/recipe';
+import type { Product } from '../../types/product';
 import {
     getRecipesByProduct,
     createRecipe,
     updateRecipe,
     deleteRecipe,
     duplicateRecipe,
+    copyRecipeToProduct,
+    copyAllRecipesToProduct,
     canEditRecipe
 } from '../../services/recipeService';
 import { getAllRawMaterials } from '../../services/masterDataService';
@@ -37,6 +41,7 @@ interface RecipeManagerProps {
     productName: string;
     companyId: string;
     userRole: string;
+    availableProducts?: Product[];
     onClose: () => void;
 }
 
@@ -45,6 +50,7 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({
     productName,
     companyId,
     userRole,
+    availableProducts,
     onClose
 }) => {
     const WATER_INGREDIENT_VALUE = '__water__';
@@ -72,6 +78,25 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({
         mixing_steps: [] as MixingStep[]
     });
 
+    const sourceProducts = useMemo(() => {
+        const list = (availableProducts || [])
+            .filter(p => p.company_id === companyId && p.id !== productId)
+            .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ar'));
+
+        return list;
+    }, [availableProducts, companyId, productId]);
+
+    // Copy recipes from another product (same company)
+    const [showCopyModal, setShowCopyModal] = useState(false);
+    const [copyMode, setCopyMode] = useState<'single' | 'all'>('single');
+    const [copySourceProductId, setCopySourceProductId] = useState('');
+    const [copySourceRecipes, setCopySourceRecipes] = useState<Recipe[]>([]);
+    const [copySourceRecipeId, setCopySourceRecipeId] = useState('');
+    const [copyNewName, setCopyNewName] = useState('');
+    const [copySetAsDefault, setCopySetAsDefault] = useState(false);
+    const [copyKeepSourceDefault, setCopyKeepSourceDefault] = useState(false);
+    const [copyBusy, setCopyBusy] = useState(false);
+
     // تحميل الوصفات والخامات
     useEffect(() => {
         loadData();
@@ -87,6 +112,43 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({
         setRawMaterials(materialsData);
         setLoading(false);
     };
+
+    // Load source product recipes when the copy modal is open
+    useEffect(() => {
+        if (!showCopyModal) return;
+
+        if (!copySourceProductId) {
+            setCopySourceRecipes([]);
+            setCopySourceRecipeId('');
+            setCopyNewName('');
+            return;
+        }
+
+        let cancelled = false;
+        (async () => {
+            const data = await getRecipesByProduct(copySourceProductId);
+            if (cancelled) return;
+            setCopySourceRecipes(data);
+
+            const first = data[0];
+            setCopySourceRecipeId(first?.id || '');
+            setCopyNewName(first?.name || '');
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [showCopyModal, copySourceProductId]);
+
+    useEffect(() => {
+        if (!showCopyModal) return;
+        if (copyMode !== 'single') return;
+
+        const r = copySourceRecipes.find(x => x.id === copySourceRecipeId);
+        if (r) {
+            setCopyNewName(r.name || '');
+        }
+    }, [showCopyModal, copyMode, copySourceRecipeId, copySourceRecipes]);
 
     // إضافة وصفة جديدة
     const handleCreate = () => {
@@ -174,6 +236,119 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({
     const handleDuplicate = async (id: string) => {
         const duplicated = await duplicateRecipe(id);
         if (duplicated) await loadData();
+    };
+
+    const openCopyFromProduct = () => {
+        if (sourceProducts.length === 0) {
+            alert('لا توجد منتجات أخرى داخل نفس الشركة لنسخ الوصفات منها.');
+            return;
+        }
+
+        setCopyMode('single');
+        setCopySourceProductId('');
+        setCopySourceRecipes([]);
+        setCopySourceRecipeId('');
+        setCopyNewName('');
+        setCopySetAsDefault(false);
+        setCopyKeepSourceDefault(false);
+        setShowCopyModal(true);
+    };
+
+    const closeCopyFromProduct = (force?: boolean) => {
+        if (copyBusy && !force) return;
+        setShowCopyModal(false);
+        setCopyMode('single');
+        setCopySourceProductId('');
+        setCopySourceRecipes([]);
+        setCopySourceRecipeId('');
+        setCopyNewName('');
+        setCopySetAsDefault(false);
+        setCopyKeepSourceDefault(false);
+        setCopyBusy(false);
+    };
+
+    const makeUniqueRecipeName = (base: string, used: Set<string>) => {
+        const clean = (base || '').trim() || 'وصفة';
+        if (!used.has(clean)) {
+            used.add(clean);
+            return clean;
+        }
+
+        const v1 = `${clean} (منسوخة)`;
+        if (!used.has(v1)) {
+            used.add(v1);
+            return v1;
+        }
+
+        let i = 2;
+        while (used.has(`${clean} (منسوخة ${i})`)) i += 1;
+        const vN = `${clean} (منسوخة ${i})`;
+        used.add(vN);
+        return vN;
+    };
+
+    const handleConfirmCopy = async () => {
+        if (!copySourceProductId) {
+            alert('اختر المنتج المصدر أولاً');
+            return;
+        }
+
+        if (copyMode === 'single' && !copySourceRecipeId) {
+            alert('اختر الوصفة أولاً');
+            return;
+        }
+
+        setCopyBusy(true);
+        try {
+            const usedNames = new Set(
+                (recipes || [])
+                    .map(r => (r.name || '').trim())
+                    .filter(Boolean)
+            );
+
+            if (copyMode === 'single') {
+                const sourceRecipe = copySourceRecipes.find(r => r.id === copySourceRecipeId) || null;
+                if (!sourceRecipe) {
+                    alert('الوصفة المحددة غير موجودة.');
+                    return;
+                }
+
+                const requestedName = (copyNewName || sourceRecipe.name || '').trim();
+                const finalName = makeUniqueRecipeName(requestedName, usedNames);
+
+                const created = await copyRecipeToProduct(copySourceRecipeId, productId, {
+                    name: finalName,
+                    name_en: sourceRecipe.name_en,
+                    is_default: copySetAsDefault
+                });
+
+                if (!created) {
+                    alert('تعذر نسخ الوصفة. تأكد من الصلاحيات وحاول مرة أخرى.');
+                    return;
+                }
+
+                await loadData();
+                closeCopyFromProduct(true);
+                alert('تم نسخ الوصفة بنجاح');
+                return;
+            }
+
+            const result = await copyAllRecipesToProduct(copySourceProductId, productId, {
+                keepDefault: copyKeepSourceDefault,
+                mapName: (sourceName) => makeUniqueRecipeName(sourceName, usedNames)
+            });
+
+            await loadData();
+            closeCopyFromProduct(true);
+
+            const failedPart = result.failed ? ` (فشل ${result.failed})` : '';
+            alert(`تم نسخ ${result.created.length} وصفة${failedPart}`);
+        } catch (err) {
+            console.error('Error copying recipes:', err);
+            alert('حدث خطأ أثناء نسخ الوصفات.');
+        } finally {
+            setCopyBusy(false);
+        }
     };
 
 
@@ -689,17 +864,33 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({
                                         لا توجد وصفات
                                     </h3>
                                     <p className="text-gray-500 mb-4">أضف وصفة جديدة لهذا المنتج</p>
-                                    <button
-                                        onClick={handleCreate}
-                                        className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
-                                    >
-                                        <PlusIcon className="w-5 h-5" />
-                                        إضافة وصفة
-                                    </button>
+                                    <div className="flex items-center justify-center gap-2">
+                                        <button
+                                            onClick={handleCreate}
+                                            className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+                                        >
+                                            <PlusIcon className="w-5 h-5" />
+                                            إضافة وصفة
+                                        </button>
+                                        <button
+                                            onClick={openCopyFromProduct}
+                                            className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
+                                        >
+                                            <ArrowDownTrayIcon className="w-5 h-5" />
+                                            نسخ من منتج
+                                        </button>
+                                    </div>
                                 </div>
                             ) : (
                                 <>
-                                    <div className="flex justify-end">
+                                    <div className="flex justify-end gap-2">
+                                        <button
+                                            onClick={openCopyFromProduct}
+                                            className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
+                                        >
+                                            <ArrowDownTrayIcon className="w-5 h-5" />
+                                            نسخ من منتج
+                                        </button>
                                         <button
                                             onClick={handleCreate}
                                             className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
@@ -807,6 +998,139 @@ const RecipeManager: React.FC<RecipeManagerProps> = ({
                     )}
                 </div>
             </div>
+
+            {/* Copy From Another Product Modal */}
+            {showCopyModal && (
+                <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
+                        <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                            <div>
+                                <h3 className="text-lg font-bold text-gray-900 dark:text-white">نسخ الوصفات</h3>
+                                <p className="text-xs text-gray-500">إلى: {productName}</p>
+                            </div>
+                            <button
+                                onClick={() => closeCopyFromProduct()}
+                                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+                                aria-label="إغلاق"
+                            >
+                                <XMarkIcon className="w-5 h-5 text-gray-600 dark:text-gray-300" />
+                            </button>
+                        </div>
+
+                        <div className="p-5 space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    طريقة النسخ
+                                </label>
+                                <select
+                                    value={copyMode}
+                                    onChange={(e) => setCopyMode(e.target.value as 'single' | 'all')}
+                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                                    disabled={copyBusy}
+                                >
+                                    <option value="single">نسخ وصفة واحدة</option>
+                                    <option value="all">نسخ كل وصفات المنتج</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    المنتج المصدر
+                                </label>
+                                <select
+                                    value={copySourceProductId}
+                                    onChange={(e) => setCopySourceProductId(e.target.value)}
+                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                                    disabled={copyBusy}
+                                >
+                                    <option value="">-- اختر المنتج --</option>
+                                    {sourceProducts.map(p => (
+                                        <option key={p.id} value={p.id}>
+                                            {p.name} ({p.sku})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {copyMode === 'single' && (
+                                <>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                            الوصفة
+                                        </label>
+                                        <select
+                                            value={copySourceRecipeId}
+                                            onChange={(e) => setCopySourceRecipeId(e.target.value)}
+                                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                                            disabled={copyBusy || !copySourceProductId}
+                                        >
+                                            <option value="">-- اختر الوصفة --</option>
+                                            {copySourceRecipes.map(r => (
+                                                <option key={r.id} value={r.id}>
+                                                    {r.name}{r.is_default ? ' (افتراضية)' : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                            اسم الوصفة الجديدة
+                                        </label>
+                                        <input
+                                            value={copyNewName}
+                                            onChange={(e) => setCopyNewName(e.target.value)}
+                                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+                                            placeholder="اسم الوصفة"
+                                            disabled={copyBusy || !copySourceProductId}
+                                        />
+                                    </div>
+
+                                    <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                                        <input
+                                            type="checkbox"
+                                            checked={copySetAsDefault}
+                                            onChange={(e) => setCopySetAsDefault(e.target.checked)}
+                                            disabled={copyBusy}
+                                        />
+                                        اجعلها افتراضية
+                                    </label>
+                                </>
+                            )}
+
+                            {copyMode === 'all' && (
+                                <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                                    <input
+                                        type="checkbox"
+                                        checked={copyKeepSourceDefault}
+                                        onChange={(e) => setCopyKeepSourceDefault(e.target.checked)}
+                                        disabled={copyBusy}
+                                    />
+                                    اجعل الوصفة الافتراضية من المصدر افتراضية هنا
+                                </label>
+                            )}
+                        </div>
+
+                        <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 flex gap-3">
+                            <button
+                                onClick={handleConfirmCopy}
+                                disabled={copyBusy}
+                                className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-60"
+                            >
+                                <ArrowDownTrayIcon className="w-5 h-5" />
+                                {copyBusy ? 'جاري النسخ...' : 'نسخ'}
+                            </button>
+                            <button
+                                onClick={() => closeCopyFromProduct()}
+                                disabled={copyBusy}
+                                className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-100 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-60"
+                            >
+                                إلغاء
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

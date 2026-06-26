@@ -22,8 +22,8 @@ const CompaniesPage: React.FC = () => {
     const {
         companies,
         setCompanies,
-        selectedCompany,
-        selectCompany,
+        mainCompanyId,
+        setMainCompany,
         isLoading: storeLoading,
         setLoading
     } = useCompanyStore();
@@ -105,9 +105,14 @@ const CompaniesPage: React.FC = () => {
         }
     };
 
-    const handleSelectCompany = (id: string) => {
-        selectCompany(id);
+    const handleSelectCompany = async (id: string) => {
+        await setMainCompany(id);
     };
+
+    const mainCompany = useMemo(() => {
+        if (!mainCompanyId) return null;
+        return companies.find(c => c.id === mainCompanyId) || null;
+    }, [companies, mainCompanyId]);
 
     const filteredCompanies = useMemo(() => {
         if (!searchQuery) return companies;
@@ -143,24 +148,18 @@ const CompaniesPage: React.FC = () => {
                 </button>
             </div>
 
-            {/* Current Context Alert */}
-            {selectedCompany && (
+            {/* Main Company Alert */}
+            {mainCompany && (
                 <div className="mb-6 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-4 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <div className="p-2 bg-blue-100 dark:bg-blue-800 rounded-lg">
                             <BuildingOfficeIcon className="w-6 h-6 text-blue-600 dark:text-blue-400" />
                         </div>
                         <div>
-                            <p className="text-sm text-blue-600 dark:text-blue-400 font-medium">الشركة الحالية</p>
-                            <h3 className="text-lg font-bold text-gray-900 dark:text-white">{selectedCompany.name}</h3>
+                            <p className="text-sm text-blue-600 dark:text-blue-400 font-medium">الشركة الرئيسية</p>
+                            <h3 className="text-lg font-bold text-gray-900 dark:text-white">{mainCompany.name}</h3>
                         </div>
                     </div>
-                    <button
-                        onClick={() => selectCompany('')} // Clear selection logic needs to be handled in store if passing empty string works, or assume selectCompany handles it. Store interface says string. I'll fix store to allow null or handle empty string.
-                        className="text-sm text-blue-600 hover:text-blue-700 hover:underline"
-                    >
-                        إلغاء التحديد
-                    </button>
                 </div>
             )}
 
@@ -195,25 +194,25 @@ const CompaniesPage: React.FC = () => {
                         {/* Sort to put selected company first */}
                         {[...filteredCompanies]
                             .sort((a, b) => {
-                                if (selectedCompany?.id === a.id) return -1;
-                                if (selectedCompany?.id === b.id) return 1;
+                                if (mainCompanyId === a.id) return -1;
+                                if (mainCompanyId === b.id) return 1;
                                 return 0;
                             })
                             .map(company => (
                                 <tr
                                     key={company.id}
-                                    className={`hover:bg-gray-50 dark:hover:bg-gray-700/30 ${selectedCompany?.id === company.id
+                                    className={`hover:bg-gray-50 dark:hover:bg-gray-700/30 ${mainCompanyId === company.id
                                         ? 'bg-blue-50 dark:bg-blue-900/20 border-r-4 border-r-primary-500'
                                         : ''
                                         }`}
                                 >
                                     <td className="px-4 py-3">
                                         <div className="flex items-center gap-3">
-                                            <div className={`p-2 rounded-lg ${selectedCompany?.id === company.id
+                                            <div className={`p-2 rounded-lg ${mainCompanyId === company.id
                                                 ? 'bg-primary-100 dark:bg-primary-900/30'
                                                 : 'bg-gray-100 dark:bg-gray-700'
                                                 }`}>
-                                                <BuildingOfficeIcon className={`w-5 h-5 ${selectedCompany?.id === company.id
+                                                <BuildingOfficeIcon className={`w-5 h-5 ${mainCompanyId === company.id
                                                     ? 'text-primary-600'
                                                     : 'text-gray-500'
                                                     }`} />
@@ -221,7 +220,7 @@ const CompaniesPage: React.FC = () => {
                                             <div>
                                                 <div className="font-medium text-gray-900 dark:text-white flex items-center gap-2">
                                                     {company.name}
-                                                    {selectedCompany?.id === company.id && (
+                                                    {mainCompanyId === company.id && (
                                                         <span className="px-2 py-0.5 text-xs font-medium bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400 rounded-full">
                                                             الشركة الرئيسية
                                                         </span>
@@ -260,7 +259,7 @@ const CompaniesPage: React.FC = () => {
                                             >
                                                 <PencilIcon className="w-4 h-4" />
                                             </button>
-                                            {selectedCompany?.id !== company.id ? (
+                                            {mainCompanyId !== company.id ? (
                                                 <button
                                                     onClick={() => handleSelectCompany(company.id)}
                                                     className="px-3 py-1 text-xs font-medium text-primary-600 bg-primary-50 dark:bg-primary-900/20 hover:bg-primary-100 dark:hover:bg-primary-900/40 rounded-lg"
@@ -270,7 +269,7 @@ const CompaniesPage: React.FC = () => {
                                             ) : (
                                                 <span className="px-3 py-1 text-xs font-medium text-green-600 bg-green-50 dark:bg-green-900/20 rounded-lg flex items-center gap-1">
                                                     <CheckCircleIcon className="w-3 h-3" />
-                                                    محددة
+                                                    رئيسية
                                                 </span>
                                             )}
                                         </div>

@@ -14,6 +14,7 @@ import { generateId } from '../utils';
 import { usePrompt } from '../hooks/usePrompt';
 import type { FormTemplate } from '../types';
 import { exportTemplateBackupFile, parseTemplateBackupFile } from '../services/templateBackupService';
+import { FORMS_REPORTS_HOME } from '../constants/formsReportsRoutes';
 import StaticTabs from '../components/forms/StaticTabs';
 import BasicInfoTab from '../components/forms/tabs/BasicInfoTab';
 import DocumentControlTab from '../components/forms/tabs/DocumentControlTab';
@@ -83,20 +84,18 @@ const FormDesigner: React.FC = () => {
         const tabReturnPath = activeTab?.path === location.pathname ? activeTab.returnPath : undefined;
 
         if (tabReturnPath) {
-            if (tabReturnPath === '/folders') {
-                return '/forms&reports';
-            }
-            if (tabReturnPath.startsWith('/folders/')) {
-                return tabReturnPath.replace('/folders/', '/forms&reports/');
+            if (
+                tabReturnPath === '/folders' ||
+                tabReturnPath.startsWith('/folders/') ||
+                tabReturnPath === '/forms&reports' ||
+                tabReturnPath.startsWith('/forms&reports/')
+            ) {
+                return FORMS_REPORTS_HOME;
             }
             return tabReturnPath;
         }
 
-        if (targetFolderId) {
-            return `/forms&reports/${targetFolderId}`;
-        }
-
-        return '/forms&reports';
+        return FORMS_REPORTS_HOME;
     };
 
     // Update activeTab and URL together

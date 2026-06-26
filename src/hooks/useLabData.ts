@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type { MaterialReceiving, LabTest, MaterialReceivingStatus, LabTestStatus } from '../domain/lab/types';
 import * as labService from '../services/labService';
 import { useRealtimeSubscription } from './useRealtimeSubscription';
+import { useCompanyStore } from '../store/companyStore';
 
 // ============ Material Receivings Hook ============
 
@@ -32,7 +33,8 @@ export function useMaterialReceivings(
         supplierId?: string;
     }
 ): UseMaterialReceivingsResult {
-    const targetCompanyId = companyId;
+    const { selectedCompanyId } = useCompanyStore();
+    const targetCompanyId = companyId || selectedCompanyId || undefined;
 
     const [receivings, setReceivings] = useState<MaterialReceiving[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -128,7 +130,8 @@ export function useLabTests(
         assignedTo?: string;
     }
 ): UseLabTestsResult {
-    const targetCompanyId = companyId;
+    const { selectedCompanyId } = useCompanyStore();
+    const targetCompanyId = companyId || selectedCompanyId || undefined;
 
     const [tests, setTests] = useState<LabTest[]>([]);
     const [isLoading, setIsLoading] = useState(true);

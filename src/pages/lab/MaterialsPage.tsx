@@ -14,10 +14,10 @@ import {
     XMarkIcon,
     CubeIcon,
     ArrowRightIcon,
-    BeakerIcon,
     LinkIcon
 } from '@heroicons/react/24/outline';
 import { TableSkeleton } from '../../components/common/LoadingStates';
+import { FormattedDate } from '../../components/common/FormattedDate';
 import { useRawMaterials } from '../../hooks/useMasterData';
 import * as masterDataService from '../../services/masterDataService';
 import * as packagingSettingsService from '../../services/labPackagingSettingsService';
@@ -25,6 +25,18 @@ import { generateMaterialCode, materialCategoryLabels, shelfLifeUnitLabels } fro
 import type { RawMaterial, MaterialCategory, ShelfLifeUnit } from '../../domain/masterData/types';
 import { useCompanyStore } from '../../store/companyStore';
 import type { LabPackagingType } from '../../services/labPackagingSettingsService';
+import HrSortableHeader from '../../modules/hr/components/HrSortableHeader';
+import HrTablePager from '../../modules/hr/components/HrTablePager';
+import { HrDataGrid } from '../../modules/hr/components/HrPageShell';
+import { usePaginatedRows } from '../../modules/hr/hooks/usePaginatedRows';
+import {
+    createBooleanSorter,
+    createDateSorter,
+    createNumberSorter,
+    createTextSorter,
+    useSortableRows,
+} from '../../modules/hr/hooks/useSortableRows';
+import { cn } from '../../utils';
 
 const ALLERGEN_SUPPORTED_CATEGORIES: MaterialCategory[] = [
     'ingredient',
@@ -45,7 +57,7 @@ const CATEGORY_FIELD_HINTS: Record<MaterialCategory, string> = {
     other: 'يمكن إدخال البيانات الأساسية للتصنيف الآخر.'
 };
 
-const supportsAllergensForCategory = (category: MaterialCategory): boolean =>
+    const supportsAllergensForCategory = (category: MaterialCategory): boolean =>
     ALLERGEN_SUPPORTED_CATEGORIES.includes(category);
 
 const MaterialsPage: React.FC = () => {
@@ -109,9 +121,19 @@ const MaterialsPage: React.FC = () => {
     const filteredMaterials = useMemo(() => {
         if (!searchQuery) return materials;
         const query = searchQuery.toLowerCase();
-        return materials.filter(m =>
-            m.name.toLowerCase().includes(query) ||
-            m.code.toLowerCase().includes(query)
+        return materials.filter((material) =>
+            [
+                material.name,
+                material.code,
+                materialCategoryLabels[material.category],
+                material.unit,
+                material.storageCondition,
+                material.specifications,
+                material.packagingTypeName,
+                material.packagingSubtypeName,
+            ]
+                .filter(Boolean)
+                .some((value) => String(value).toLowerCase().includes(query))
         );
     }, [materials, searchQuery]);
 
@@ -120,6 +142,45 @@ const MaterialsPage: React.FC = () => {
         active: materials.filter(m => m.active).length,
         requiresTest: materials.filter(m => m.requiresLabTest).length
     }), [materials]);
+
+    const materialSorters = useMemo(
+        () => ({
+            code: createTextSorter<RawMaterial>((row) => row.code),
+            name: createTextSorter<RawMaterial>((row) => row.name),
+            category: createTextSorter<RawMaterial>((row) => materialCategoryLabels[row.category] ?? row.category),
+            unit: createTextSorter<RawMaterial>((row) => row.unit),
+            shelfLife: createNumberSorter<RawMaterial>((row) => row.shelfLife),
+            requiresLabTest: createBooleanSorter<RawMaterial>((row) => row.requiresLabTest),
+            active: createBooleanSorter<RawMaterial>((row) => row.active),
+            storageCondition: createTextSorter<RawMaterial>((row) => row.storageCondition),
+            packagingType: createTextSorter<RawMaterial>((row) => row.packagingTypeName),
+            packagingSubtype: createTextSorter<RawMaterial>((row) => row.packagingSubtypeName),
+            updatedAt: createDateSorter<RawMaterial>((row) => row.updatedAt),
+        }),
+        []
+    );
+
+    const { sortedRows, sortKey, sortDirection, toggleSort } = useSortableRows({
+        rows: filteredMaterials,
+        sorters: materialSorters,
+        initialSortKey: 'name',
+    });
+
+    const {
+        page,
+        setPage,
+        pageCount,
+        pageSize,
+        setPageSize,
+        pagedRows,
+        totalRows,
+        fromRow,
+        toRow,
+        offset,
+    } = usePaginatedRows({
+        rows: sortedRows,
+        initialPageSize: 50,
+    });
 
     const openAddModal = () => {
         setEditingMaterial(null);
@@ -296,94 +357,157 @@ const MaterialsPage: React.FC = () => {
                 <input
                     type="text"
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onChange={(e) => {
+                        setSearchQuery(e.target.value);
+                        setPage(1);
+                    }}
                     placeholder="بحث بالاسم أو الكود..."
                     className="w-full pl-4 pr-10 py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-primary-500 dark:bg-gray-800"
                 />
             </div>
 
             {/* Materials List */}
-            {filteredMaterials.length === 0 ? (
-                <div className="text-center py-16 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
-                    <CubeIcon className="w-16 h-16 mx-auto text-gray-300 mb-4" />
-                    <h3 className="text-xl font-medium text-gray-900 dark:text-white mb-2">لا توجد مواد خام</h3>
-                    <p className="text-gray-500 mb-6">ابدأ بإضافة مادة جديدة</p>
-                    <button
-                        onClick={openAddModal}
-                        className="inline-flex items-center gap-2 px-6 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700"
-                    >
-                        <PlusIcon className="w-5 h-5" />
-                        مادة جديدة
-                    </button>
+            {sortedRows.length === 0 ? (
+                <div className="rounded-md border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
+                    {materials.length === 0 ? 'لا توجد مواد خام' : 'لا توجد نتائج'}
                 </div>
             ) : (
-                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-                    <table className="w-full">
-                        <thead className="bg-gray-50 dark:bg-gray-700/50">
+                <HrDataGrid
+                    rowCount={sortedRows.length}
+                    columnCount={13}
+                    footer={
+                        <HrTablePager
+                            page={page}
+                            pageCount={pageCount}
+                            pageSize={pageSize}
+                            totalRows={totalRows}
+                            fromRow={fromRow}
+                            toRow={toRow}
+                            onPageChange={setPage}
+                            onPageSizeChange={setPageSize}
+                        />
+                    }
+                >
+                    <table>
+                        <thead>
                             <tr>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">الكود</th>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">اسم المادة</th>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">التصنيف</th>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">الوحدة</th>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">الحالة</th>
-                                <th className="px-4 py-3 text-center text-sm font-medium text-gray-700 dark:text-gray-300">إجراءات</th>
+                                <th className="w-10 text-center">#</th>
+                                <th>
+                                    <HrSortableHeader label="الكود" sortKey="code" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                                </th>
+                                <th>
+                                    <HrSortableHeader label="اسم المادة" sortKey="name" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                                </th>
+                                <th>
+                                    <HrSortableHeader label="التصنيف" sortKey="category" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                                </th>
+                                <th>
+                                    <HrSortableHeader label="الوحدة" sortKey="unit" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                                </th>
+                                <th className="whitespace-nowrap">
+                                    <HrSortableHeader label="مدة الصلاحية" sortKey="shelfLife" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                                </th>
+                                <th className="whitespace-nowrap">
+                                    <HrSortableHeader label="يتطلب فحص" sortKey="requiresLabTest" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                                </th>
+                                <th className="min-w-[220px]">
+                                    <HrSortableHeader label="التخزين" sortKey="storageCondition" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                                </th>
+                                <th className="min-w-[160px]">
+                                    <HrSortableHeader label="تعبئة (رئيسي)" sortKey="packagingType" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                                </th>
+                                <th className="min-w-[160px]">
+                                    <HrSortableHeader label="تعبئة (فرعي)" sortKey="packagingSubtype" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                                </th>
+                                <th className="whitespace-nowrap">
+                                    <HrSortableHeader label="الحالة" sortKey="active" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                                </th>
+                                <th className="whitespace-nowrap">
+                                    <HrSortableHeader label="آخر تحديث" sortKey="updatedAt" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                                </th>
+                                <th className="text-center">إجراءات</th>
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                            {filteredMaterials.map(material => (
-                                <tr key={material.id} className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 ${!material.active ? 'opacity-50' : ''}`}>
-                                    <td className="px-4 py-3">
-                                        <span className="font-mono text-sm text-purple-600">{material.code}</span>
+                        <tbody>
+                            {pagedRows.map((material, index) => (
+                                <tr key={material.id}>
+                                    <td className="text-center font-mono text-[11px] text-slate-400 dark:text-slate-500">
+                                        {offset + index + 1}
                                     </td>
-                                    <td className="px-4 py-3">
-                                        <div className="flex items-center gap-2">
-                                            <div className="font-medium text-gray-900 dark:text-white">{material.name}</div>
-                                            {material.requiresLabTest && (
-                                                <BeakerIcon className="w-4 h-4 text-blue-500" title="يتطلب فحص" />
-                                            )}
-                                        </div>
+                                    <td className="whitespace-nowrap font-mono text-emerald-700 dark:text-emerald-300">
+                                        {material.code}
                                     </td>
-                                    <td className="px-4 py-3">
-                                        <span className="px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded text-sm">
+                                    <td className="min-w-[220px]">
+                                        <div className="font-semibold text-slate-900 dark:text-slate-100">{material.name}</div>
+                                        {material.nameEn ? (
+                                            <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">{material.nameEn}</div>
+                                        ) : null}
+                                    </td>
+                                    <td className="whitespace-nowrap">
+                                        <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
                                             {materialCategoryLabels[material.category]}
                                         </span>
                                     </td>
-                                    <td className="px-4 py-3 text-gray-600 dark:text-gray-400">
-                                        {material.unit}
+                                    <td className="whitespace-nowrap">{material.unit}</td>
+                                    <td className="whitespace-nowrap font-mono">
+                                        {material.shelfLife ? `${material.shelfLife} ${shelfLifeUnitLabels[material.shelfLifeUnit || 'days']}` : '-'}
                                     </td>
-                                    <td className="px-4 py-3">
+                                    <td className="whitespace-nowrap">
+                                        <span
+                                            className={cn(
+                                                'rounded-full px-2 py-1 text-[11px] font-semibold',
+                                                material.requiresLabTest
+                                                    ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-200'
+                                                    : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                                            )}
+                                        >
+                                            {material.requiresLabTest ? 'نعم' : 'لا'}
+                                        </span>
+                                    </td>
+                                    <td className="min-w-[220px]">{material.storageCondition || '-'}</td>
+                                    <td className="whitespace-nowrap">{material.packagingTypeName || '-'}</td>
+                                    <td className="whitespace-nowrap">{material.packagingSubtypeName || '-'}</td>
+                                    <td className="whitespace-nowrap">
                                         <button
-                                            onClick={() => handleToggleActive(material)}
-                                            className={`px-2.5 py-1 rounded-full text-xs font-medium ${material.active
-                                                ? 'bg-green-100 text-green-700 dark:bg-green-900/30'
-                                                : 'bg-gray-100 text-gray-600'
-                                                }`}
+                                            type="button"
+                                            onClick={() => void handleToggleActive(material)}
+                                            className={cn(
+                                                'rounded-full px-2 py-1 text-[11px] font-semibold transition',
+                                                material.active
+                                                    ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-200 dark:hover:bg-emerald-900/30'
+                                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
+                                            )}
                                         >
                                             {material.active ? 'نشط' : 'غير نشط'}
                                         </button>
                                     </td>
-                                    <td className="px-4 py-3">
-                                        <div className="flex items-center justify-center gap-1">
+                                    <td className="whitespace-nowrap font-mono text-[11px] text-slate-600 dark:text-slate-300">
+                                        <FormattedDate date={material.updatedAt} includeTime />
+                                    </td>
+                                    <td className="whitespace-nowrap text-center">
+                                        <div className="inline-flex items-center justify-center gap-1">
                                             <Link
                                                 to={`/lab/materials/${material.id}`}
-                                                className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg"
-                                                title="عرض التفاصيل والروابط"
+                                                className="inline-flex items-center justify-center rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-900"
+                                                title="عرض التفاصيل"
                                             >
-                                                <LinkIcon className="w-4 h-4" />
+                                                <LinkIcon className="h-4 w-4" />
                                             </Link>
                                             <button
+                                                type="button"
                                                 onClick={() => openEditModal(material)}
-                                                className="p-2 text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 rounded-lg"
+                                                className="inline-flex items-center justify-center rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-900"
                                                 title="تعديل"
                                             >
-                                                <PencilIcon className="w-4 h-4" />
+                                                <PencilIcon className="h-4 w-4" />
                                             </button>
                                             <button
+                                                type="button"
                                                 onClick={() => setShowDeleteConfirm(material.id)}
-                                                className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg"
+                                                className="inline-flex items-center justify-center rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-50 dark:border-slate-700 dark:text-rose-200 dark:hover:bg-rose-950/30"
                                                 title="حذف"
                                             >
-                                                <TrashIcon className="w-4 h-4" />
+                                                <TrashIcon className="h-4 w-4" />
                                             </button>
                                         </div>
                                     </td>
@@ -391,7 +515,7 @@ const MaterialsPage: React.FC = () => {
                             ))}
                         </tbody>
                     </table>
-                </div>
+                </HrDataGrid>
             )}
 
             {/* Add/Edit Modal */}

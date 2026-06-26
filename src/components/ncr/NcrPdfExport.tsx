@@ -179,8 +179,8 @@ export default function NcrPdfExport({ ncr }: Props) {
                         </div>
                         <div className="field">
                             <div className="field-label">الحالة</div>
-                            <span className={`status-badge ${ncr.status === 'closed' ? 'status-closed' : 'status-open'}`}>
-                                {ncr.status === 'closed' ? 'مغلق' : 'مفتوح'}
+                            <span className={`status-badge ${ncr.closedAt ? 'status-closed' : 'status-open'}`}>
+                                {ncr.closedAt ? 'مغلق' : 'مفتوح'}
                             </span>
                         </div>
                         <div className="field">

@@ -33,6 +33,7 @@ import {
   isVariableToken,
   resolveDocumentVariableDisplayValue,
 } from '../utils/documentVariableBindings';
+import { FORMS_REPORTS_HOME, formsReportsTemplateReportsPath } from '../constants/formsReportsRoutes';
 import type { FormSection, QualityCriteria, Table, TableColumn, TableParameter } from '../types';
 
 type AnyRecord = Record<string, any>;
@@ -1387,7 +1388,7 @@ const ReportViewerA4: React.FC = () => {
   const { templateId, instanceId } = useParams<{ templateId?: string; instanceId?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { formTemplates, formInstances, syncInstance, currentFolderId } = useStore();
+  const { formTemplates, formInstances, syncInstance } = useStore();
   const { getActiveTab, openTab } = useTabsStore();
   const { selectedCompany } = useCompanyStore();
   const { logoUrl, logoScale } = useAppSettingsStore();
@@ -1566,25 +1567,15 @@ const ReportViewerA4: React.FC = () => {
   useEffect(() => {
     if (!instanceId || !viewPath) return;
 
-    const folderIdFromQuery =
-      new URLSearchParams(location.search).get('folderId') ||
-      new URLSearchParams(location.search).get('folder');
-
-    const returnPath =
-      instance?.folder_id
-        ? `/forms&reports/${instance.folder_id}`
-        : folderIdFromQuery
-          ? `/forms&reports/${folderIdFromQuery}`
-          : currentFolderId
-            ? `/forms&reports/${currentFolderId}`
-            : '/forms&reports';
+    const returnPath = instance?.template_id
+      ? formsReportsTemplateReportsPath(instance.template_id)
+      : FORMS_REPORTS_HOME;
 
     openTab('instance', instanceId, viewTabTitle, viewPath, returnPath);
   }, [
-    currentFolderId,
     instance?.folder_id,
+    instance?.template_id,
     instanceId,
-    location.search,
     openTab,
     viewPath,
     viewTabTitle,
@@ -1639,15 +1630,12 @@ const ReportViewerA4: React.FC = () => {
     const folderId =
       instance?.folder_id ||
       new URLSearchParams(location.search).get('folderId') ||
-      new URLSearchParams(location.search).get('folder') ||
-      currentFolderId;
+      new URLSearchParams(location.search).get('folder');
     const query = folderId ? `?folderId=${encodeURIComponent(folderId)}` : '';
     const returnPath =
-      instance?.folder_id
-        ? `/forms&reports/${instance.folder_id}`
-        : folderId
-          ? `/forms&reports/${folderId}`
-          : '/forms&reports';
+      instance?.template_id
+        ? formsReportsTemplateReportsPath(instance.template_id)
+        : FORMS_REPORTS_HOME;
 
     // Keep tab metadata in sync before route navigation to avoid view/edit route ping-pong.
     openTab('instance', instanceId, `تعديل - ${templateForRendering?.name || 'تقرير'}`, editPath, returnPath);

@@ -11,7 +11,7 @@
 import { useEffect, useRef } from 'react';
 import { supabase } from '../config/supabase';
 import { useAuthStore } from '../store/authStore';
-import { invalidatePermissionCache } from '../services/permissionService';
+import { invalidateCache as invalidatePermissionCache } from '../services/unifiedPermissionService';
 import { dataCache } from '../services/dataCache';
 
 interface UseVisibilityRefreshOptions {

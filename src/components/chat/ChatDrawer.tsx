@@ -17,6 +17,8 @@ import chatService from '../../services/chatService';
 import useChatDrawerStore from '../../store/chatDrawerStore';
 import type { ChatConversationSummary, ChatMessage, ChatUser } from '../../types/chat';
 
+const CHAT_DRAWER_MESSAGE_LIMIT = 30;
+
 const formatConversationTime = (value: string): string => {
     const date = new Date(value);
     const now = new Date();
@@ -49,6 +51,33 @@ const getUserDisplayName = (user?: { name?: string | null; email?: string | null
     return handle || 'مستخدم';
 };
 
+const sortMessagesAscending = (items: ChatMessage[]): ChatMessage[] => (
+    [...items].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+);
+
+const mergeMessagesAscending = (current: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] => {
+    const byId = new Map<string, ChatMessage>();
+    [...current, ...incoming].forEach((message) => {
+        byId.set(message.id, message);
+    });
+    return sortMessagesAscending(Array.from(byId.values()));
+};
+
+const getConversationPreviewFromMessage = (message: ChatMessage | null): string | null => {
+    if (!message) return null;
+    if (message.message_type === 'attachment') return '[Attachment]';
+    if (message.message_type === 'mixed' && !message.body?.trim()) return '[Attachment]';
+    return message.body?.trim() || '[Message]';
+};
+
+const sortConversationsByActivity = (items: ChatConversationSummary[]): ChatConversationSummary[] => (
+    [...items].sort((a, b) => {
+        const messageDiff = new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime();
+        if (messageDiff !== 0) return messageDiff;
+        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+    })
+);
+
 const ChatDrawer: React.FC = () => {
     const { profile } = useSupabaseAuth();
     const navigate = useNavigate();
@@ -80,18 +109,29 @@ const ChatDrawer: React.FC = () => {
     const [activeMentionIndex, setActiveMentionIndex] = useState(0);
     const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
     const [messageMenuId, setMessageMenuId] = useState<string | null>(null);
+    const [usersLoaded, setUsersLoaded] = useState(false);
 
     const messagesEndRef = useRef<HTMLDivElement | null>(null);
+    const messagesRef = useRef<ChatMessage[]>([]);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
 
     const currentUserId = profile?.uid || null;
     const activeConversationId = conversationId;
 
+    useEffect(() => {
+        setActiveUsers([]);
+        setUsersLoaded(false);
+    }, [currentUserId]);
+
     const activeConversation = useMemo(
         () => conversations.find((conversation) => conversation.id === activeConversationId) || null,
         [conversations, activeConversationId]
     );
+
+    useEffect(() => {
+        messagesRef.current = messages;
+    }, [messages]);
 
     const lastOutgoingMessageId = useMemo(() => {
         if (!currentUserId || messages.length === 0) return null;
@@ -182,38 +222,6 @@ const ChatDrawer: React.FC = () => {
         return parts;
     }, [mentionNameByEmail]);
 
-    const updateMentionState = useCallback((value: string, cursorPosition: number) => {
-        const slice = value.slice(0, cursorPosition);
-        const atIndex = slice.lastIndexOf('@');
-        if (atIndex < 0) {
-            setShowMentions(false);
-            setMentionQuery('');
-            setMentionRange(null);
-            return;
-        }
-
-        const charBefore = atIndex === 0 ? ' ' : slice[atIndex - 1];
-        if (/[A-Za-z0-9_]/.test(charBefore)) {
-            setShowMentions(false);
-            setMentionQuery('');
-            setMentionRange(null);
-            return;
-        }
-
-        const query = slice.slice(atIndex + 1);
-        if (query.includes(' ') || query.includes('\n') || query.includes('\t')) {
-            setShowMentions(false);
-            setMentionQuery('');
-            setMentionRange(null);
-            return;
-        }
-
-        setMentionQuery(query);
-        setMentionRange({ start: atIndex, end: cursorPosition });
-        setShowMentions(true);
-        setActiveMentionIndex(0);
-    }, []);
-
     const insertMention = useCallback((user: ChatUser) => {
         if (!mentionRange) return;
         const before = draftMessage.slice(0, mentionRange.start);
@@ -269,6 +277,34 @@ const ChatDrawer: React.FC = () => {
         });
     }, []);
 
+    const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+        requestAnimationFrame(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior });
+        });
+    }, []);
+
+    const refreshReadCursor = useCallback(async (targetConversationId: string) => {
+        if (!currentUserId) return;
+        try {
+            const readCursor = await chatService.getConversationReadCursor(targetConversationId, currentUserId);
+            setLatestReadAt(readCursor);
+        } catch (err) {
+            console.error('Failed to refresh drawer read cursor:', err);
+        }
+    }, [currentUserId]);
+
+    const syncConversationSummaryFromMessages = useCallback((targetConversationId: string, nextMessages: ChatMessage[]) => {
+        setConversations((current) => sortConversationsByActivity(current.map((conversation) => {
+            if (conversation.id !== targetConversationId) return conversation;
+            const latestVisibleMessage = [...nextMessages].reverse().find((message) => !message.deleted_at) || null;
+            return {
+                ...conversation,
+                last_message_at: latestVisibleMessage?.created_at || conversation.created_at,
+                last_message_preview: getConversationPreviewFromMessage(latestVisibleMessage)
+            };
+        })));
+    }, []);
+
     const loadConversations = useCallback(async () => {
         if (!currentUserId) return;
         setLoadingConversations(true);
@@ -284,46 +320,90 @@ const ChatDrawer: React.FC = () => {
     }, [currentUserId]);
 
     const loadUsers = useCallback(async () => {
-        if (!currentUserId) return;
+        if (!currentUserId || usersLoaded) return;
         setLoadingUsers(true);
         try {
             const list = await chatService.listActiveUsers(currentUserId);
             setActiveUsers(list);
+            setUsersLoaded(true);
         } catch (err: any) {
             console.error('Failed to load drawer users:', err);
         } finally {
             setLoadingUsers(false);
         }
-    }, [currentUserId]);
+    }, [currentUserId, usersLoaded]);
+
+    const updateMentionState = useCallback((value: string, cursorPosition: number) => {
+        if (!usersLoaded && !loadingUsers) {
+            void loadUsers();
+        }
+
+        const slice = value.slice(0, cursorPosition);
+        const atIndex = slice.lastIndexOf('@');
+        if (atIndex < 0) {
+            setShowMentions(false);
+            setMentionQuery('');
+            setMentionRange(null);
+            return;
+        }
+
+        const charBefore = atIndex === 0 ? ' ' : slice[atIndex - 1];
+        if (/[A-Za-z0-9_]/.test(charBefore)) {
+            setShowMentions(false);
+            setMentionQuery('');
+            setMentionRange(null);
+            return;
+        }
+
+        const query = slice.slice(atIndex + 1);
+        if (query.includes(' ') || query.includes('\n') || query.includes('\t')) {
+            setShowMentions(false);
+            setMentionQuery('');
+            setMentionRange(null);
+            return;
+        }
+
+        setMentionQuery(query);
+        setMentionRange({ start: atIndex, end: cursorPosition });
+        setShowMentions(true);
+        setActiveMentionIndex(0);
+    }, [loadingUsers, loadUsers, usersLoaded]);
 
     const loadMessages = useCallback(async (targetConversationId: string) => {
         if (!currentUserId) return;
         setLoadingMessages(true);
         try {
-            const list = await chatService.getMessages(targetConversationId, 120);
-            setMessages(list);
-            await chatService.markConversationRead(targetConversationId, currentUserId);
-            const readCursor = await chatService.getConversationReadCursor(targetConversationId, currentUserId);
-            setLatestReadAt(readCursor);
+            const batch = await chatService.getMessages(targetConversationId, {
+                limit: CHAT_DRAWER_MESSAGE_LIMIT
+            });
+            messagesRef.current = batch.messages;
+            setMessages(batch.messages);
+            await chatService.markConversationRead(targetConversationId, currentUserId, batch.latestVisibleMessageId);
+            await refreshReadCursor(targetConversationId);
+            scrollToBottom('auto');
         } catch (err: any) {
             console.error('Failed to load drawer messages:', err);
             setError(err?.message || 'تعذر تحميل الرسائل');
         } finally {
             setLoadingMessages(false);
         }
-    }, [currentUserId]);
+    }, [currentUserId, refreshReadCursor, scrollToBottom]);
 
     const handleDeleteMessage = useCallback(async (message: ChatMessage) => {
         if (!currentUserId || !activeConversationId) return;
         const confirmed = window.confirm('هل تريد حذف هذه الرسالة؟');
         if (!confirmed) return;
         try {
-            await chatService.deleteMessage(message.id, activeConversationId, currentUserId);
+            const deletedMessage = await chatService.deleteMessage(message.id, activeConversationId, currentUserId);
+            const nextMessages = mergeMessagesAscending(messagesRef.current, [deletedMessage]);
+            messagesRef.current = nextMessages;
+            setMessages(nextMessages);
+            syncConversationSummaryFromMessages(activeConversationId, nextMessages);
             if (editingMessageId === message.id) {
                 cancelEditMessage();
             }
             setMessageMenuId(null);
-            await loadMessages(activeConversationId);
+            void refreshReadCursor(activeConversationId);
         } catch (err: any) {
             console.error('Failed to delete drawer message:', err);
             setError(err?.message || 'تعذر حذف الرسالة');
@@ -333,18 +413,24 @@ const ChatDrawer: React.FC = () => {
         activeConversationId,
         editingMessageId,
         cancelEditMessage,
-        loadMessages
+        refreshReadCursor,
+        syncConversationSummaryFromMessages
     ]);
 
     useEffect(() => {
         if (!isOpen) return;
         setError(null);
-        void Promise.all([loadConversations(), loadUsers()]);
-    }, [isOpen, loadConversations, loadUsers]);
+        void loadConversations();
+    }, [isOpen, loadConversations]);
 
     useEffect(() => {
-        if (!isOpen) return;
-        if (!activeConversationId) return;
+        if (!isOpen || !activeConversationId) {
+            messagesRef.current = [];
+            setMessages([]);
+            setLatestReadAt(null);
+            return;
+        }
+
         void loadMessages(activeConversationId);
     }, [isOpen, activeConversationId, loadMessages]);
 
@@ -361,10 +447,6 @@ const ChatDrawer: React.FC = () => {
         }
     }, [isOpen, activeConversationId, conversations, setConversationId]);
 
-    useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages]);
-
     const handleSendMessage = useCallback(async () => {
         if (!currentUserId || !activeConversationId || sendingMessage) return;
         const text = draftMessage.trim();
@@ -380,10 +462,11 @@ const ChatDrawer: React.FC = () => {
         setSendingMessage(true);
         setError(null);
         try {
+            let savedMessage: ChatMessage;
             if (isEditing && editingMessageId) {
-                await chatService.updateMessage(editingMessageId, activeConversationId, currentUserId, text);
+                savedMessage = await chatService.updateMessage(editingMessageId, activeConversationId, currentUserId, text);
             } else {
-                await chatService.sendMessage({
+                savedMessage = await chatService.sendMessage({
                     currentUserId,
                     conversationId: activeConversationId,
                     body: text,
@@ -399,7 +482,11 @@ const ChatDrawer: React.FC = () => {
             setShowMentions(false);
             setMentionQuery('');
             setMentionRange(null);
-            await loadMessages(activeConversationId);
+            const nextMessages = mergeMessagesAscending(messagesRef.current, [savedMessage]);
+            messagesRef.current = nextMessages;
+            setMessages(nextMessages);
+            syncConversationSummaryFromMessages(activeConversationId, nextMessages);
+            scrollToBottom('smooth');
         } catch (err: any) {
             console.error('Failed to send drawer message:', err);
             setError(err?.message || 'تعذر إرسال الرسالة');
@@ -415,7 +502,8 @@ const ChatDrawer: React.FC = () => {
         pendingMentions,
         isEditing,
         editingMessageId,
-        loadMessages
+        scrollToBottom,
+        syncConversationSummaryFromMessages
     ]);
 
     const handleDownloadAttachment = useCallback(async (bucketId: string, storagePath: string) => {

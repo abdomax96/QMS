@@ -21,7 +21,6 @@ import { SettingsSkeleton } from '../common/LoadingStates';
 import { OrganizationalChart } from './OrganizationalChart';
 
 // Lazy load heavy components
-const PermissionMatrix = lazy(() => import('../permissions/PermissionMatrix'));
 const SimplePermissionMatrix = lazy(() => import('../permissions/SimplePermissionMatrix'));
 // ModuleDistribution removed - module visibility now based on role permissions
 const NcrStagePermissions = lazy(() => import('./NcrStagePermissions'));

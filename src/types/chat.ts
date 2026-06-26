@@ -50,6 +50,28 @@ export interface ChatConversationSummary {
     last_message_preview: string | null;
 }
 
+export interface ChatMessageQueryOptions {
+    limit?: number;
+    before?: string | null;
+}
+
+export interface ChatMessageBatch {
+    messages: ChatMessage[];
+    hasMore: boolean;
+    oldestLoadedMessageCreatedAt: string | null;
+    latestVisibleMessageId: string | null;
+}
+
+export type ChatConversationMessageEventType = 'insert' | 'update' | 'delete' | 'attachment' | 'reload';
+
+export interface ChatConversationMessageEvent {
+    type: ChatConversationMessageEventType;
+    conversationId: string;
+    messageId: string | null;
+    message: ChatMessage | null;
+    attachment: ChatAttachment | null;
+}
+
 export interface ChatDepartment {
     id: string;
     name: string;

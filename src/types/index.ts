@@ -171,7 +171,7 @@ export type CellDataType =
   | 'boolean-check'  // ✔ مقبول / ✖ مرفوض
   | 'boolean-yesno'  // نعم / لا
   | 'dropdown'       // قائمة منسدلة
-  | 'user-directory' // دليل المستخدمين
+  | 'user-directory' // دليل العاملين
   | 'image'          // صورة
   | 'long-text';     // نص طويل
 

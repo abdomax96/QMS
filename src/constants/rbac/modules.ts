@@ -1,8 +1,35 @@
 // ==================== System Modules ====================
-// SIMPLIFIED: Only 7 active modules matching app_modules table
-// تنظيف الموديولات - 7 موديولات فعلية فقط
+// Active modules matching app_modules table.
 
-import type { Module, ModuleGroup } from '../../types/rbac';
+export type PermissionAction = string;
+
+export type ModuleCategory =
+  | 'core_system'
+  | 'quality_management';
+
+export interface Module {
+  id: string;
+  code: string;
+  name: string;
+  name_ar?: string;
+  category: ModuleCategory;
+  icon: string;
+  color: string;
+  display_order: number;
+  is_active: boolean;
+  is_department_scoped: boolean;
+  available_permissions: PermissionAction[];
+  description?: string;
+}
+
+export interface ModuleGroup {
+  category: ModuleCategory;
+  name: string;
+  name_ar: string;
+  icon: string;
+  color: string;
+  modules: Module[];
+}
 
 // ==================== Active System Modules (7) ====================
 export const SYSTEM_MODULES: Module[] = [
@@ -21,6 +48,36 @@ export const SYSTEM_MODULES: Module[] = [
     available_permissions: ['view', 'create', 'edit', 'delete', 'approve', 'export', 'archive'],
     description: 'Forms, templates, and report management',
   },
+  // Production Module
+  {
+    id: 'mod_production',
+    code: 'production',
+    name: 'Production',
+    name_ar: 'الإنتاج',
+    category: 'core_system',
+    icon: 'Factory',
+    color: '#B45309',
+    display_order: 2,
+    is_active: true,
+    is_department_scoped: true,
+    available_permissions: ['view', 'create', 'edit', 'approve', 'export', 'attendance.capture', 'attendance.adjust', 'attendance.review'],
+    description: 'Production batches and operational attendance capture',
+  },
+  // HR Module
+  {
+    id: 'mod_hr',
+    code: 'hr',
+    name: 'Human Resources',
+    name_ar: 'الموارد البشرية',
+    category: 'core_system',
+    icon: 'Users',
+    color: '#0F766E',
+    display_order: 3,
+    is_active: true,
+    is_department_scoped: true,
+    available_permissions: ['view', 'create', 'edit', 'approve', 'export', 'print', 'configure', 'archive', 'calculate', 'close', 'publish'],
+    description: 'Employees, transport, shifts, requests, penalties, and payroll',
+  },
   // Tasks Module
   {
     id: 'mod_tasks',
@@ -30,7 +87,7 @@ export const SYSTEM_MODULES: Module[] = [
     category: 'core_system',
     icon: 'CheckCircle',
     color: '#10B981',
-    display_order: 2,
+    display_order: 4,
     is_active: true,
     is_department_scoped: true,
     available_permissions: ['view', 'create', 'edit', 'delete', 'approve', 'export'],
@@ -45,7 +102,7 @@ export const SYSTEM_MODULES: Module[] = [
     category: 'quality_management',
     icon: 'Beaker',
     color: '#8B5CF6',
-    display_order: 3,
+    display_order: 5,
     is_active: true,
     is_department_scoped: true,
     available_permissions: ['view', 'create', 'edit', 'delete', 'approve', 'export', 'archive'],
@@ -60,7 +117,7 @@ export const SYSTEM_MODULES: Module[] = [
     category: 'quality_management',
     icon: 'ExclamationTriangle',
     color: '#EF4444',
-    display_order: 4,
+    display_order: 6,
     is_active: true,
     is_department_scoped: true,
     available_permissions: ['view', 'create', 'edit', 'delete', 'approve', 'export', 'archive'],
@@ -75,7 +132,7 @@ export const SYSTEM_MODULES: Module[] = [
     category: 'core_system',
     icon: 'Cog',
     color: '#6B7280',
-    display_order: 5,
+    display_order: 7,
     is_active: true,
     is_department_scoped: false,
     available_permissions: ['view', 'edit'],
@@ -90,7 +147,7 @@ export const SYSTEM_MODULES: Module[] = [
     category: 'core_system',
     icon: 'ClipboardList',
     color: '#8B5CF6',
-    display_order: 6,
+    display_order: 8,
     is_active: true,
     is_department_scoped: false,
     available_permissions: ['view', 'export'],
@@ -105,7 +162,7 @@ export const SYSTEM_MODULES: Module[] = [
     category: 'core_system',
     icon: 'ShieldCheck',
     color: '#6366F1',
-    display_order: 7,
+    display_order: 9,
     is_active: true,
     is_department_scoped: false,
     available_permissions: ['view', 'edit'],
@@ -120,7 +177,7 @@ export const SYSTEM_MODULES: Module[] = [
     category: 'core_system',
     icon: 'Users',
     color: '#3B82F6',
-    display_order: 8,
+    display_order: 10,
     is_active: true,
     is_department_scoped: false,
     available_permissions: ['view', 'create', 'edit', 'delete'],
@@ -136,7 +193,7 @@ export const SYSTEM_MODULES: Module[] = [
     category: 'core_system',
     icon: 'Shield',
     color: '#DC2626',
-    display_order: 9,
+    display_order: 11,
     is_active: true,
     is_department_scoped: false,
     available_permissions: ['admin', 'configure'],

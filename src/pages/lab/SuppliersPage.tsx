@@ -1,31 +1,41 @@
 /**
- * Suppliers Page - Simplified Version
- * صفحة إدارة الموردين - نسخة مبسطة
- * Updated: Full Supabase CRUD integration
+ * Suppliers Page - Table UI (Excel-like)
+ * صفحة إدارة الموردين - عرض جدولي
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-    PlusIcon,
+    ArrowPathIcon,
+    ArrowRightIcon,
     MagnifyingGlassIcon,
     PencilIcon,
+    PlusIcon,
     TrashIcon,
-    CheckBadgeIcon,
     XMarkIcon,
-    BuildingOfficeIcon,
-    ArrowRightIcon
 } from '@heroicons/react/24/outline';
 import { TableSkeleton } from '../../components/common/LoadingStates';
+import { FormattedDate } from '../../components/common/FormattedDate';
 import { useSuppliers } from '../../hooks/useMasterData';
 import * as masterDataService from '../../services/masterDataService';
 import { generateSupplierCode } from '../../domain/masterData/types';
 import type { Supplier } from '../../domain/masterData/types';
 import { useCompanyStore } from '../../store/companyStore';
+import HrSortableHeader from '../../modules/hr/components/HrSortableHeader';
+import HrTablePager from '../../modules/hr/components/HrTablePager';
+import { HrDataGrid, HrPageShell, HrSectionCard } from '../../modules/hr/components/HrPageShell';
+import { usePaginatedRows } from '../../modules/hr/hooks/usePaginatedRows';
+import {
+    createBooleanSorter,
+    createDateSorter,
+    createTextSorter,
+    useSortableRows,
+} from '../../modules/hr/hooks/useSortableRows';
+import { cn } from '../../utils';
 
 const SuppliersPage: React.FC = () => {
     const { suppliers, isLoading, error, refetch } = useSuppliers();
-    const { selectedCompany } = useCompanyStore();
+    const { selectedCompany, companies, selectCompany } = useCompanyStore();
 
     const [searchQuery, setSearchQuery] = useState('');
     const [showModal, setShowModal] = useState(false);
@@ -39,24 +49,63 @@ const SuppliersPage: React.FC = () => {
         phone: '',
         email: '',
         address: '',
-        approved: false
+        approved: false,
     });
 
     const filteredSuppliers = useMemo(() => {
         if (!searchQuery) return suppliers;
         const query = searchQuery.toLowerCase();
-        return suppliers.filter(s =>
-            s.name.toLowerCase().includes(query) ||
-            s.code.toLowerCase().includes(query) ||
-            s.contactPerson?.toLowerCase().includes(query)
+        return suppliers.filter((supplier) =>
+            [supplier.name, supplier.code, supplier.contactPerson, supplier.phone, supplier.email, supplier.address]
+                .filter(Boolean)
+                .some((value) => String(value).toLowerCase().includes(query))
         );
     }, [suppliers, searchQuery]);
 
-    const stats = useMemo(() => ({
-        total: suppliers.length,
-        approved: suppliers.filter(s => s.approved).length,
-        notApproved: suppliers.filter(s => !s.approved).length
-    }), [suppliers]);
+    const stats = useMemo(
+        () => ({
+            total: suppliers.length,
+            approved: suppliers.filter((s) => s.approved).length,
+            notApproved: suppliers.filter((s) => !s.approved).length,
+        }),
+        [suppliers]
+    );
+
+    const supplierSorters = useMemo(
+        () => ({
+            code: createTextSorter<Supplier>((row) => row.code),
+            name: createTextSorter<Supplier>((row) => row.name),
+            contactPerson: createTextSorter<Supplier>((row) => row.contactPerson),
+            phone: createTextSorter<Supplier>((row) => row.phone),
+            email: createTextSorter<Supplier>((row) => row.email),
+            address: createTextSorter<Supplier>((row) => row.address),
+            approved: createBooleanSorter<Supplier>((row) => row.approved),
+            updatedAt: createDateSorter<Supplier>((row) => row.updatedAt),
+        }),
+        []
+    );
+
+    const { sortedRows, sortKey, sortDirection, toggleSort } = useSortableRows({
+        rows: filteredSuppliers,
+        sorters: supplierSorters,
+        initialSortKey: 'name',
+    });
+
+    const {
+        page,
+        setPage,
+        pageCount,
+        pageSize,
+        setPageSize,
+        pagedRows,
+        totalRows,
+        fromRow,
+        toRow,
+        offset,
+    } = usePaginatedRows({
+        rows: sortedRows,
+        initialPageSize: 50,
+    });
 
     const openAddModal = () => {
         setEditingSupplier(null);
@@ -67,7 +116,7 @@ const SuppliersPage: React.FC = () => {
             phone: '',
             email: '',
             address: '',
-            approved: false
+            approved: false,
         });
         setShowModal(true);
     };
@@ -81,7 +130,7 @@ const SuppliersPage: React.FC = () => {
             phone: supplier.phone || '',
             email: supplier.email || '',
             address: supplier.address || '',
-            approved: supplier.approved
+            approved: supplier.approved,
         });
         setShowModal(true);
     };
@@ -108,306 +157,420 @@ const SuppliersPage: React.FC = () => {
 
     const handleToggleApproval = async (supplier: Supplier) => {
         await masterDataService.updateSupplier(supplier.id, {
-            approved: !supplier.approved
+            approved: !supplier.approved,
         });
         refetch();
     };
 
-    if (isLoading) {
+    const pageBody = () => {
+        if (isLoading) {
+            return (
+                <div className="p-6">
+                    <TableSkeleton />
+                </div>
+            );
+        }
+
+        if (error) {
+            return (
+                <div className="p-6">
+                    <div className="rounded-md border border-rose-200 bg-rose-50 p-4 text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-200">
+                        {error}
+                    </div>
+                </div>
+            );
+        }
+
         return (
-            <div className="p-6">
-                <TableSkeleton />
-            </div>
-        );
-    }
-
-    if (error) {
-        return (
-            <div className="p-6">
-                <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-600">
-                    {error}
-                </div>
-            </div>
-        );
-    }
-
-    return (
-        <div className="p-6">
-            {/* Back Button */}
-            <Link
-                to="/lab"
-                className="inline-flex items-center gap-2 text-gray-600 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 mb-4 transition-colors"
-            >
-                <ArrowRightIcon className="w-5 h-5" />
-                <span>العودة للمختبر</span>
-            </Link>
-
-            {/* Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-                <div>
-                    <h1 className="text-3xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
-                        <BuildingOfficeIcon className="w-8 h-8 text-blue-600" />
-                        الموردين
-                    </h1>
-                    <p className="text-gray-600 dark:text-gray-400 mt-1">إدارة بيانات الموردين المعتمدين</p>
-                </div>
-                <button
-                    onClick={openAddModal}
-                    className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl hover:from-blue-700 hover:to-indigo-700 transition-all shadow-lg"
-                >
-                    <PlusIcon className="w-5 h-5" />
-                    مورد جديد
-                </button>
-            </div>
-
-            {/* Stats */}
-            <div className="grid grid-cols-3 gap-4 mb-6">
-                <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 text-center">
-                    <div className="text-2xl font-bold text-gray-900 dark:text-white">{stats.total}</div>
-                    <div className="text-sm text-gray-500">إجمالي</div>
-                </div>
-                <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 text-center">
-                    <div className="text-2xl font-bold text-green-600">{stats.approved}</div>
-                    <div className="text-sm text-gray-500">معتمد</div>
-                </div>
-                <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 text-center">
-                    <div className="text-2xl font-bold text-orange-600">{stats.notApproved}</div>
-                    <div className="text-sm text-gray-500">غير معتمد</div>
-                </div>
-            </div>
-
-            {/* Search */}
-            <div className="relative mb-6">
-                <MagnifyingGlassIcon className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="بحث بالاسم أو الكود..."
-                    className="w-full pl-4 pr-10 py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-primary-500 dark:bg-gray-800"
-                />
-            </div>
-
-            {/* Suppliers List */}
-            {filteredSuppliers.length === 0 ? (
-                <div className="text-center py-16 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
-                    <BuildingOfficeIcon className="w-16 h-16 mx-auto text-gray-300 mb-4" />
-                    <h3 className="text-xl font-medium text-gray-900 dark:text-white mb-2">لا يوجد موردين</h3>
-                    <p className="text-gray-500 mb-6">ابدأ بإضافة مورد جديد</p>
-                    <button
-                        onClick={openAddModal}
-                        className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700"
+            <>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <Link
+                        to="/lab"
+                        className="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-emerald-700 dark:text-slate-300 dark:hover:text-emerald-300"
                     >
-                        <PlusIcon className="w-5 h-5" />
-                        مورد جديد
-                    </button>
-                </div>
-            ) : (
-                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-                    <table className="w-full">
-                        <thead className="bg-gray-50 dark:bg-gray-700/50">
-                            <tr>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">الكود</th>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">اسم المورد</th>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">جهة الاتصال</th>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">الهاتف</th>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">الحالة</th>
-                                <th className="px-4 py-3 text-center text-sm font-medium text-gray-700 dark:text-gray-300">إجراءات</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                            {filteredSuppliers.map(supplier => (
-                                <tr key={supplier.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                                    <td className="px-4 py-3">
-                                        <span className="font-mono text-sm text-blue-600">{supplier.code}</span>
-                                    </td>
-                                    <td className="px-4 py-3">
-                                        <div className="flex items-center gap-2">
-                                            <div className="font-medium text-gray-900 dark:text-white">{supplier.name}</div>
-                                            {supplier.approved && (
-                                                <CheckBadgeIcon className="w-5 h-5 text-green-500" title="معتمد" />
-                                            )}
-                                        </div>
-                                    </td>
-                                    <td className="px-4 py-3 text-gray-600 dark:text-gray-400">
-                                        {supplier.contactPerson || '-'}
-                                    </td>
-                                    <td className="px-4 py-3 text-gray-600 dark:text-gray-400" dir="ltr">
-                                        {supplier.phone || '-'}
-                                    </td>
-                                    <td className="px-4 py-3">
-                                        <button
-                                            onClick={() => handleToggleApproval(supplier)}
-                                            className={`px-2.5 py-1 rounded-full text-xs font-medium ${supplier.approved
-                                                ? 'bg-green-100 text-green-700 dark:bg-green-900/30'
-                                                : 'bg-orange-100 text-orange-700 dark:bg-orange-900/30'
-                                                }`}
-                                        >
-                                            {supplier.approved ? 'معتمد' : 'غير معتمد'}
-                                        </button>
-                                    </td>
-                                    <td className="px-4 py-3">
-                                        <div className="flex items-center justify-center gap-1">
-                                            <button
-                                                onClick={() => openEditModal(supplier)}
-                                                className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg"
-                                                title="تعديل"
-                                            >
-                                                <PencilIcon className="w-4 h-4" />
-                                            </button>
-                                            <button
-                                                onClick={() => setShowDeleteConfirm(supplier.id)}
-                                                className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg"
-                                                title="حذف"
-                                            >
-                                                <TrashIcon className="w-4 h-4" />
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
+                        <ArrowRightIcon className="h-4 w-4" />
+                        العودة للمختبر
+                    </Link>
 
-            {/* Add/Edit Modal */}
-            {showModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-                    <div className="bg-white dark:bg-gray-800 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto m-4">
-                        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-                            <h2 className="text-xl font-bold">
-                                {editingSupplier ? 'تعديل مورد' : 'مورد جديد'}
-                            </h2>
-                            <button onClick={() => setShowModal(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
-                                <XMarkIcon className="w-5 h-5" />
-                            </button>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                        <label className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                            <span>الشركة</span>
+                            <select
+                                value={selectedCompany?.id || ''}
+                                onChange={(e) => selectCompany(e.target.value)}
+                                className="h-9 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none transition focus:border-emerald-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                            >
+                                <option value="" disabled>
+                                    اختر شركة
+                                </option>
+                                {companies.map((company) => (
+                                    <option key={company.id} value={company.id}>
+                                        {company.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+
+                        <button
+                            type="button"
+                            onClick={() => void refetch()}
+                            className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900"
+                            title="تحديث"
+                        >
+                            <ArrowPathIcon className="h-4 w-4" />
+                            تحديث
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={openAddModal}
+                            className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white transition hover:bg-emerald-700"
+                        >
+                            <PlusIcon className="h-4 w-4" />
+                            مورد جديد
+                        </button>
+                    </div>
+                </div>
+
+                <HrSectionCard
+                    title="الموردين"
+                    actions={
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                            <div className="relative">
+                                <MagnifyingGlassIcon className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                                <input
+                                    value={searchQuery}
+                                    onChange={(e) => {
+                                        setSearchQuery(e.target.value);
+                                        setPage(1);
+                                    }}
+                                    placeholder="بحث سريع..."
+                                    className="h-9 w-full min-w-[220px] rounded-md border border-slate-200 bg-white pr-8 pl-2 text-xs text-slate-700 outline-none transition focus:border-emerald-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                                />
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400">
+                                <span>الإجمالي: {stats.total}</span>
+                                <span>معتمد: {stats.approved}</span>
+                                <span>غير معتمد: {stats.notApproved}</span>
+                            </div>
                         </div>
-
-                        <form onSubmit={handleSubmit} className="p-4 space-y-4">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium mb-1">كود المورد</label>
-                                    <input
-                                        type="text"
-                                        value={formData.code}
-                                        onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
-                                        readOnly
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium mb-1">اسم المورد *</label>
-                                    <input
-                                        type="text"
-                                        value={formData.name}
-                                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
-                                        required
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium mb-1">جهة الاتصال</label>
-                                    <input
-                                        type="text"
-                                        value={formData.contactPerson}
-                                        onChange={(e) => setFormData({ ...formData, contactPerson: e.target.value })}
-                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium mb-1">الهاتف</label>
-                                    <input
-                                        type="tel"
-                                        value={formData.phone}
-                                        onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
-                                        dir="ltr"
-                                    />
-                                </div>
-                            </div>
-
-                            <div>
-                                <label className="block text-sm font-medium mb-1">البريد الإلكتروني</label>
-                                <input
-                                    type="email"
-                                    value={formData.email}
-                                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
-                                    dir="ltr"
+                    }
+                >
+                    {sortedRows.length === 0 ? (
+                        <div className="rounded-md border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
+                            {suppliers.length === 0 ? 'لا توجد بيانات' : 'لا توجد نتائج'}
+                        </div>
+                    ) : (
+                        <HrDataGrid
+                            rowCount={sortedRows.length}
+                            columnCount={10}
+                            footer={
+                                <HrTablePager
+                                    page={page}
+                                    pageCount={pageCount}
+                                    pageSize={pageSize}
+                                    totalRows={totalRows}
+                                    fromRow={fromRow}
+                                    toRow={toRow}
+                                    onPageChange={setPage}
+                                    onPageSizeChange={setPageSize}
                                 />
-                            </div>
+                            }
+                        >
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th className="w-10 text-center">#</th>
+                                        <th>
+                                            <HrSortableHeader
+                                                label="الكود"
+                                                sortKey="code"
+                                                activeSortKey={sortKey}
+                                                sortDirection={sortDirection}
+                                                onToggle={toggleSort}
+                                            />
+                                        </th>
+                                        <th>
+                                            <HrSortableHeader
+                                                label="اسم المورد"
+                                                sortKey="name"
+                                                activeSortKey={sortKey}
+                                                sortDirection={sortDirection}
+                                                onToggle={toggleSort}
+                                            />
+                                        </th>
+                                        <th>
+                                            <HrSortableHeader
+                                                label="جهة الاتصال"
+                                                sortKey="contactPerson"
+                                                activeSortKey={sortKey}
+                                                sortDirection={sortDirection}
+                                                onToggle={toggleSort}
+                                            />
+                                        </th>
+                                        <th>
+                                            <HrSortableHeader
+                                                label="الهاتف"
+                                                sortKey="phone"
+                                                activeSortKey={sortKey}
+                                                sortDirection={sortDirection}
+                                                onToggle={toggleSort}
+                                            />
+                                        </th>
+                                        <th>
+                                            <HrSortableHeader
+                                                label="البريد"
+                                                sortKey="email"
+                                                activeSortKey={sortKey}
+                                                sortDirection={sortDirection}
+                                                onToggle={toggleSort}
+                                            />
+                                        </th>
+                                        <th className="min-w-[260px]">
+                                            <HrSortableHeader
+                                                label="العنوان"
+                                                sortKey="address"
+                                                activeSortKey={sortKey}
+                                                sortDirection={sortDirection}
+                                                onToggle={toggleSort}
+                                            />
+                                        </th>
+                                        <th>
+                                            <HrSortableHeader
+                                                label="الاعتماد"
+                                                sortKey="approved"
+                                                activeSortKey={sortKey}
+                                                sortDirection={sortDirection}
+                                                onToggle={toggleSort}
+                                            />
+                                        </th>
+                                        <th className="whitespace-nowrap">
+                                            <HrSortableHeader
+                                                label="آخر تحديث"
+                                                sortKey="updatedAt"
+                                                activeSortKey={sortKey}
+                                                sortDirection={sortDirection}
+                                                onToggle={toggleSort}
+                                            />
+                                        </th>
+                                        <th className="text-center">إجراءات</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {pagedRows.map((supplier, index) => (
+                                        <tr key={supplier.id}>
+                                            <td className="text-center font-mono text-[11px] text-slate-400 dark:text-slate-500">
+                                                {offset + index + 1}
+                                            </td>
+                                            <td className="whitespace-nowrap font-mono text-emerald-700 dark:text-emerald-300">
+                                                {supplier.code}
+                                            </td>
+                                            <td className="min-w-[200px] font-semibold text-slate-900 dark:text-slate-100">
+                                                {supplier.name}
+                                            </td>
+                                            <td className="whitespace-nowrap">{supplier.contactPerson || '-'}</td>
+                                            <td className="whitespace-nowrap font-mono" dir="ltr">
+                                                {supplier.phone || '-'}
+                                            </td>
+                                            <td className="whitespace-nowrap font-mono" dir="ltr">
+                                                {supplier.email || '-'}
+                                            </td>
+                                            <td className="min-w-[260px]">{supplier.address || '-'}</td>
+                                            <td className="whitespace-nowrap">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void handleToggleApproval(supplier)}
+                                                    className={cn(
+                                                        'rounded-full px-2 py-1 text-[11px] font-semibold transition',
+                                                        supplier.approved
+                                                            ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-200 dark:hover:bg-emerald-900/30'
+                                                            : 'bg-amber-50 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/20 dark:text-amber-200 dark:hover:bg-amber-900/30'
+                                                    )}
+                                                >
+                                                    {supplier.approved ? 'معتمد' : 'غير معتمد'}
+                                                </button>
+                                            </td>
+                                            <td className="whitespace-nowrap font-mono text-[11px] text-slate-600 dark:text-slate-300">
+                                                <FormattedDate date={supplier.updatedAt} includeTime />
+                                            </td>
+                                            <td className="whitespace-nowrap text-center">
+                                                <div className="inline-flex items-center justify-center gap-1">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => openEditModal(supplier)}
+                                                        className="inline-flex items-center justify-center rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-900"
+                                                        title="تعديل"
+                                                    >
+                                                        <PencilIcon className="h-4 w-4" />
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setShowDeleteConfirm(supplier.id)}
+                                                        className="inline-flex items-center justify-center rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-50 dark:border-slate-700 dark:text-rose-200 dark:hover:bg-rose-950/30"
+                                                        title="حذف"
+                                                    >
+                                                        <TrashIcon className="h-4 w-4" />
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </HrDataGrid>
+                    )}
+                </HrSectionCard>
 
-                            <div>
-                                <label className="block text-sm font-medium mb-1">العنوان</label>
-                                <input
-                                    type="text"
-                                    value={formData.address}
-                                    onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
-                                />
-                            </div>
-
-                            <div className="flex items-center gap-3">
-                                <label className="flex items-center gap-2 cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        checked={formData.approved}
-                                        onChange={(e) => setFormData({ ...formData, approved: e.target.checked })}
-                                        className="w-4 h-4 rounded border-gray-300 text-primary-600"
-                                    />
-                                    <span className="text-sm">مورد معتمد</span>
-                                </label>
-                            </div>
-
-                            <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                {/* Add/Edit Modal */}
+                {showModal && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+                        <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white m-4 dark:bg-gray-800">
+                            <div className="flex items-center justify-between border-b border-gray-200 p-4 dark:border-gray-700">
+                                <h2 className="text-xl font-bold">{editingSupplier ? 'تعديل مورد' : 'مورد جديد'}</h2>
                                 <button
                                     type="button"
                                     onClick={() => setShowModal(false)}
-                                    className="px-4 py-2 text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+                                    className="rounded-lg p-2 hover:bg-gray-100 dark:hover:bg-gray-700"
+                                >
+                                    <XMarkIcon className="h-5 w-5" />
+                                </button>
+                            </div>
+
+                            <form onSubmit={handleSubmit} className="space-y-4 p-4">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="mb-1 block text-sm font-medium">كود المورد</label>
+                                        <input
+                                            type="text"
+                                            value={formData.code}
+                                            onChange={(e) => setFormData({ ...formData, code: e.target.value })}
+                                            className="w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
+                                            readOnly
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="mb-1 block text-sm font-medium">اسم المورد *</label>
+                                        <input
+                                            type="text"
+                                            value={formData.name}
+                                            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                                            className="w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
+                                            required
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="mb-1 block text-sm font-medium">جهة الاتصال</label>
+                                        <input
+                                            type="text"
+                                            value={formData.contactPerson}
+                                            onChange={(e) => setFormData({ ...formData, contactPerson: e.target.value })}
+                                            className="w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="mb-1 block text-sm font-medium">الهاتف</label>
+                                        <input
+                                            type="tel"
+                                            value={formData.phone}
+                                            onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                                            className="w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
+                                            dir="ltr"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="mb-1 block text-sm font-medium">البريد الإلكتروني</label>
+                                    <input
+                                        type="email"
+                                        value={formData.email}
+                                        onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                                        className="w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
+                                        dir="ltr"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="mb-1 block text-sm font-medium">العنوان</label>
+                                    <input
+                                        type="text"
+                                        value={formData.address}
+                                        onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                                        className="w-full rounded-lg border border-gray-300 px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
+                                    />
+                                </div>
+
+                                <div className="flex items-center gap-3">
+                                    <label className="flex cursor-pointer items-center gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={formData.approved}
+                                            onChange={(e) => setFormData({ ...formData, approved: e.target.checked })}
+                                            className="h-4 w-4 rounded border-gray-300 text-primary-600"
+                                        />
+                                        <span className="text-sm">مورد معتمد</span>
+                                    </label>
+                                </div>
+
+                                <div className="flex justify-end gap-3 border-t border-gray-200 pt-4 dark:border-gray-700">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowModal(false)}
+                                        className="rounded-lg px-4 py-2 text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700"
+                                    >
+                                        إلغاء
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        className="rounded-lg bg-emerald-600 px-6 py-2 text-white hover:bg-emerald-700"
+                                    >
+                                        {editingSupplier ? 'حفظ التعديلات' : 'إضافة المورد'}
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )}
+
+                {/* Delete Confirmation */}
+                {showDeleteConfirm && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+                        <div className="max-w-sm rounded-xl bg-white p-6 m-4 dark:bg-gray-800">
+                            <h3 className="mb-2 text-lg font-bold">تأكيد الحذف</h3>
+                            <p className="mb-4 text-gray-600 dark:text-gray-400">هل أنت متأكد من حذف هذا المورد؟</p>
+                            <div className="flex justify-end gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowDeleteConfirm(null)}
+                                    className="rounded-lg px-4 py-2 text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700"
                                 >
                                     إلغاء
                                 </button>
                                 <button
-                                    type="submit"
-                                    className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                    type="button"
+                                    onClick={() => void handleDelete(showDeleteConfirm)}
+                                    className="rounded-lg bg-rose-600 px-4 py-2 text-white hover:bg-rose-700"
                                 >
-                                    {editingSupplier ? 'حفظ التعديلات' : 'إضافة المورد'}
+                                    حذف
                                 </button>
                             </div>
-                        </form>
-                    </div>
-                </div>
-            )}
-
-            {/* Delete Confirmation */}
-            {showDeleteConfirm && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-                    <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-sm m-4">
-                        <h3 className="text-lg font-bold mb-2">تأكيد الحذف</h3>
-                        <p className="text-gray-600 dark:text-gray-400 mb-4">هل أنت متأكد من حذف هذا المورد؟</p>
-                        <div className="flex justify-end gap-3">
-                            <button
-                                onClick={() => setShowDeleteConfirm(null)}
-                                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
-                            >
-                                إلغاء
-                            </button>
-                            <button
-                                onClick={() => handleDelete(showDeleteConfirm)}
-                                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
-                            >
-                                حذف
-                            </button>
                         </div>
                     </div>
-                </div>
-            )}
-        </div>
+                )}
+            </>
+        );
+    };
+
+    return (
+        <HrPageShell title="الموردين" description="" stats={[]}>
+            {pageBody()}
+        </HrPageShell>
     );
 };
 
 export default SuppliersPage;
+

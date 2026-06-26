@@ -13,6 +13,73 @@ import {
 } from '../../services/aiAssistantSettingsService';
 import type { AiAssistantSettings } from '../../types/ai';
 
+const PROVIDER_DEFAULTS: Record<
+  AiAssistantSettings['api_provider'],
+  {
+    baseUrl: string;
+    defaultModel: string;
+    keyHint: string;
+  }
+> = {
+  openai: {
+    baseUrl: 'https://api.openai.com/v1',
+    defaultModel: 'gpt-4.1-mini',
+    keyHint: 'مفتاح OpenAI يبدأ عادةً بـ sk-.',
+  },
+  openrouter: {
+    baseUrl: 'https://openrouter.ai/api/v1',
+    defaultModel: 'openai/gpt-4.1-mini',
+    keyHint: 'مفتاح OpenRouter يبدأ بـ sk-or-.',
+  },
+  google: {
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    defaultModel: 'gemini-2.5-flash',
+    keyHint: 'استخدم مفتاح Google/Gemini API صالح من Google AI Studio.',
+  },
+  anthropic: {
+    baseUrl: 'https://api.anthropic.com/v1',
+    defaultModel: 'claude-sonnet-4-20250514',
+    keyHint: 'استخدم مفتاح Anthropic API صالح لحساب Claude.',
+  },
+  custom: {
+    baseUrl: 'https://api.openai.com/v1',
+    defaultModel: 'gpt-4.1-mini',
+    keyHint: 'يجب أن يكون المزود متوافقًا مع واجهة OpenAI chat/completions.',
+  },
+};
+
+const CUSTOM_MODEL_OPTION = '__custom_model__';
+
+const PROVIDER_MODEL_OPTIONS: Record<
+  Exclude<AiAssistantSettings['api_provider'], 'custom'>,
+  Array<{ value: string; label: string }>
+> = {
+  openai: [
+    { value: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
+    { value: 'gpt-4o-mini', label: 'gpt-4o-mini' },
+    { value: 'gpt-4o', label: 'gpt-4o' },
+  ],
+  openrouter: [
+    { value: 'openai/gpt-4.1-mini', label: 'openai/gpt-4.1-mini' },
+    { value: 'openai/gpt-4o-mini', label: 'openai/gpt-4o-mini' },
+    { value: 'openai/gpt-4o', label: 'openai/gpt-4o' },
+  ],
+  google: [
+    { value: 'gemini-2.5-flash', label: 'gemini-2.5-flash' },
+    { value: 'gemini-2.5-flash-lite', label: 'gemini-2.5-flash-lite' },
+    { value: 'gemini-2.5-pro', label: 'gemini-2.5-pro' },
+    { value: 'gemini-2.0-flash', label: 'gemini-2.0-flash' },
+    { value: 'gemini-3-flash-preview', label: 'gemini-3-flash-preview' },
+  ],
+  anthropic: [
+    { value: 'claude-sonnet-4-20250514', label: 'claude-sonnet-4-20250514' },
+    { value: 'claude-opus-4-20250514', label: 'claude-opus-4-20250514' },
+    { value: 'claude-3-7-sonnet-latest', label: 'claude-3-7-sonnet-latest' },
+    { value: 'claude-3-5-sonnet-latest', label: 'claude-3-5-sonnet-latest' },
+    { value: 'claude-3-5-haiku-latest', label: 'claude-3-5-haiku-latest' },
+  ],
+};
+
 function normalizeApiKeyInput(value: string): string {
   return value.trim().replace(/^bearer\s+/i, '').trim();
 }
@@ -30,6 +97,14 @@ function validateApiKeyForProvider(
 
   if (provider === 'openai' && (!/^sk-/i.test(normalizedKey) || /^sk-or-/i.test(normalizedKey))) {
     return 'مفتاح OpenAI غير متوافق. يجب أن يبدأ بـ sk- (وليس sk-or-).';
+  }
+
+  if (provider === 'google' && /^(sk-|sk-or-)/i.test(normalizedKey)) {
+    return 'مفتاح Google Gemini غير متوافق. استخدم مفتاح Google API وليس مفتاح OpenAI/OpenRouter.';
+  }
+
+  if (provider === 'anthropic' && /^sk-or-/i.test(normalizedKey)) {
+    return 'مفتاح Claude (Anthropic) غير متوافق. استخدم مفتاح Anthropic API وليس مفتاح OpenRouter.';
   }
 
   return null;
@@ -50,6 +125,22 @@ const AiAssistantSettings: React.FC = () => {
     DEFAULT_AI_ASSISTANT_SETTINGS.api_provider
   );
   const [apiKeyInput, setApiKeyInput] = useState('');
+
+  const providerDefaults = PROVIDER_DEFAULTS[settings.api_provider];
+  const modelOptions =
+    settings.api_provider === 'custom' ? [] : PROVIDER_MODEL_OPTIONS[settings.api_provider];
+  const usesPresetModel =
+    settings.api_provider !== 'custom' &&
+    modelOptions.some((option) => option.value === settings.default_model);
+  const selectedModelValue =
+    settings.api_provider === 'custom'
+      ? settings.default_model
+      : usesPresetModel
+        ? settings.default_model
+        : CUSTOM_MODEL_OPTION;
+  const showCustomModelInput =
+    settings.api_provider === 'custom' || selectedModelValue === CUSTOM_MODEL_OPTION;
+  const canEditBaseUrl = settings.api_provider === 'custom';
 
   useEffect(() => {
     if (permissionsLoading) return;
@@ -225,43 +316,97 @@ const AiAssistantSettings: React.FC = () => {
           <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">مزود API</label>
           <select
             value={settings.api_provider}
-            onChange={(e) =>
+            onChange={(e) => {
+              const nextProvider = (e.target.value as AiAssistantSettings['api_provider']) || 'openai';
+              const nextDefaults = PROVIDER_DEFAULTS[nextProvider];
               setSettings((prev) => ({
                 ...prev,
-                api_provider: (e.target.value as AiAssistantSettings['api_provider']) || 'openai',
-              }))
-            }
+                api_provider: nextProvider,
+                api_base_url: nextDefaults.baseUrl,
+                default_model: nextDefaults.defaultModel,
+              }));
+            }}
             className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
             disabled={!canManageAiSettings || isSaving}
           >
             <option value="openai">OpenAI</option>
             <option value="openrouter">OpenRouter</option>
+            <option value="google">Google Gemini</option>
+            <option value="anthropic">Claude (Anthropic)</option>
             <option value="custom">Custom (OpenAI Compatible)</option>
           </select>
+          <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">{providerDefaults.keyHint}</p>
         </div>
 
         <div>
           <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">الموديل الافتراضي</label>
-          <input
-            type="text"
-            value={settings.default_model}
-            onChange={(e) => setSettings((prev) => ({ ...prev, default_model: e.target.value }))}
-            placeholder="gpt-4.1-mini"
-            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
-            disabled={!canManageAiSettings || isSaving}
-          />
+          {settings.api_provider === 'custom' ? (
+            <input
+              type="text"
+              value={settings.default_model}
+              onChange={(e) => setSettings((prev) => ({ ...prev, default_model: e.target.value }))}
+              placeholder={providerDefaults.defaultModel}
+              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+              disabled={!canManageAiSettings || isSaving}
+            />
+          ) : (
+            <div className="space-y-2">
+              <select
+                value={selectedModelValue}
+                onChange={(e) => {
+                  const nextValue = e.target.value;
+                  setSettings((prev) => ({
+                    ...prev,
+                    default_model:
+                      nextValue === CUSTOM_MODEL_OPTION ? '' : nextValue,
+                  }));
+                }}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+                disabled={!canManageAiSettings || isSaving}
+              >
+                {modelOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+                <option value={CUSTOM_MODEL_OPTION}>موديل مخصص</option>
+              </select>
+
+              {showCustomModelInput && (
+                <input
+                  type="text"
+                  value={settings.default_model}
+                  onChange={(e) => setSettings((prev) => ({ ...prev, default_model: e.target.value }))}
+                  placeholder={providerDefaults.defaultModel}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+                  disabled={!canManageAiSettings || isSaving}
+                />
+              )}
+            </div>
+          )}
         </div>
 
         <div className="md:col-span-2">
           <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">API Base URL</label>
-          <input
-            type="text"
-            value={settings.api_base_url}
-            onChange={(e) => setSettings((prev) => ({ ...prev, api_base_url: e.target.value }))}
-            placeholder="https://api.openai.com/v1"
-            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
-            disabled={!canManageAiSettings || isSaving}
-          />
+          {canEditBaseUrl ? (
+            <input
+              type="text"
+              value={settings.api_base_url}
+              onChange={(e) => setSettings((prev) => ({ ...prev, api_base_url: e.target.value }))}
+              placeholder={providerDefaults.baseUrl}
+              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700"
+              disabled={!canManageAiSettings || isSaving}
+            />
+          ) : (
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-2 text-sm text-gray-700 dark:text-gray-300">
+              {providerDefaults.baseUrl}
+            </div>
+          )}
+          <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+            {canEditBaseUrl
+              ? 'هذا الحقل متاح فقط للمزودات المتوافقة المخصصة.'
+              : 'يتم ضبط هذا الرابط تلقائياً حسب المزود، ولا يتغير عند تغيير الموديل.'}
+          </p>
         </div>
 
         <div>

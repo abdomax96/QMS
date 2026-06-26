@@ -373,7 +373,7 @@ const NcrListPage = () => {
                                                         <EyeIcon className="w-4 h-4" />
                                                         <span>عرض</span>
                                                     </Link>
-                                                    {can('ncr', 'print') && (
+                                                    {can('ncr', 'export') && (
                                                         <button
                                                             onClick={() => void printNcrReport(ncr)}
                                                             className="inline-flex items-center gap-1 text-gray-600 hover:text-primary-600"

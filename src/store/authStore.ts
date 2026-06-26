@@ -4,7 +4,7 @@ import { supabase, supabaseRestQuery } from '../config/supabase';
 import type { Session, AuthChangeEvent, RealtimeChannel } from '@supabase/supabase-js';
 import { fetchSystemSettings } from '../services/ncr/settingsService';
 import { dataCache } from '../services/dataCache';
-import { invalidatePermissionCache } from '../services/permissionService';
+import { invalidateCache as invalidatePermissionCache } from '../services/unifiedPermissionService';
 
 export const AUTH_STORE_READY_EVENT = 'qms:auth-store-ready';
 

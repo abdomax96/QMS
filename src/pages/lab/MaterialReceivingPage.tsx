@@ -1,304 +1,488 @@
 /**
  * Material Receiving Page
  * صفحة استلام المواد الخام
- * Updated: Using Supabase data via useMaterialReceivings hook
+ * Updated: Dense table UI (Excel-like) similar to HR tables.
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-    PlusIcon,
-    MagnifyingGlassIcon,
-    FunnelIcon,
-    TruckIcon,
-    EyeIcon,
-    ArrowRightIcon
+  ArrowPathIcon,
+  ArrowRightIcon,
+  EyeIcon,
+  FunnelIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
 } from '@heroicons/react/24/outline';
 import { TableSkeleton } from '../../components/common/LoadingStates';
-import { useMaterialReceivings } from '../../hooks/useLabData';
 import { FormattedDate } from '../../components/common/FormattedDate';
+import { useMaterialReceivings } from '../../hooks/useLabData';
+import { downloadFromUrl } from '../../services/fileStorageService';
+import { useCompanyStore } from '../../store/companyStore';
 import {
-    materialTypeLabels,
-    materialReceivingStatusLabels,
-    materialReceivingStatusColors
+  materialReceivingStatusColors,
+  materialReceivingStatusLabels,
+  materialTypeLabels,
 } from '../../domain/lab/types';
-import type { MaterialType, MaterialReceivingStatus } from '../../domain/lab/types';
+import type { MaterialReceiving, MaterialReceivingStatus, MaterialType } from '../../domain/lab/types';
+import HrSortableHeader from '../../modules/hr/components/HrSortableHeader';
+import HrTablePager from '../../modules/hr/components/HrTablePager';
+import { HrDataGrid, HrPageShell, HrSectionCard } from '../../modules/hr/components/HrPageShell';
+import { usePaginatedRows } from '../../modules/hr/hooks/usePaginatedRows';
+import {
+  createDateSorter,
+  createNumberSorter,
+  createTextSorter,
+  useSortableRows,
+} from '../../modules/hr/hooks/useSortableRows';
+import { cn } from '../../utils';
 
 const MaterialReceivingPage: React.FC = () => {
-    // Supabase data hook
-    const { receivings, isLoading, error, refetch, stats } = useMaterialReceivings();
+  const { selectedCompany } = useCompanyStore();
+  // Rely on RLS for company isolation. Explicit company filtering here can hide newly created rows
+  // if the UI company selector drifts from the authenticated user's effective company.
+  const { receivings, isLoading, error, refetch, stats } = useMaterialReceivings();
 
-    const [searchQuery, setSearchQuery] = useState('');
-    const [showFilters, setShowFilters] = useState(false);
-    const [statusFilter, setStatusFilter] = useState<MaterialReceivingStatus[]>([]);
-    const [typeFilter, setTypeFilter] = useState<MaterialType[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<MaterialReceivingStatus[]>([]);
+  const [typeFilter, setTypeFilter] = useState<MaterialType[]>([]);
 
-    const filteredMaterials = useMemo(() => {
-        let result = receivings;
+  const filteredMaterials = useMemo(() => {
+    let result = receivings;
+    const query = searchQuery.trim().toLowerCase();
 
-        // Search filter
-        if (searchQuery) {
-            const query = searchQuery.toLowerCase();
-            result = result.filter(m =>
-                m.materialName.toLowerCase().includes(query) ||
-                m.receivingNumber.toLowerCase().includes(query) ||
-                m.batchNumber.toLowerCase().includes(query)
-            );
-        }
-
-        // Status filter
-        if (statusFilter.length > 0) {
-            result = result.filter(m => statusFilter.includes(m.status));
-        }
-
-        // Type filter
-        if (typeFilter.length > 0) {
-            result = result.filter(m => typeFilter.includes(m.materialType));
-        }
-
-        return result;
-    }, [receivings, searchQuery, statusFilter, typeFilter]);
-
-    const toggleStatusFilter = (status: MaterialReceivingStatus) => {
-        setStatusFilter(prev =>
-            prev.includes(status)
-                ? prev.filter(s => s !== status)
-                : [...prev, status]
-        );
-    };
-
-    const toggleTypeFilter = (type: MaterialType) => {
-        setTypeFilter(prev =>
-            prev.includes(type)
-                ? prev.filter(t => t !== type)
-                : [...prev, type]
-        );
-    };
-
-    const clearFilters = () => {
-        setStatusFilter([]);
-        setTypeFilter([]);
-    };
-
-    // Loading state
-    if (isLoading) {
-        return (
-            <div className="p-6">
-                <TableSkeleton />
-            </div>
-        );
+    if (query) {
+      result = result.filter((m) =>
+        [
+          m.materialName,
+          m.receivingNumber,
+          m.batchNumber,
+          m.materialCode,
+          m.supplierName,
+          m.invoiceNumber,
+          m.deliveryNoteNumber,
+          m.storageLocation,
+          m.receivedByName,
+          m.notes,
+          m.rejectionReason,
+        ]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(query))
+      );
     }
 
-    // Error state
-    if (error) {
-        return (
-            <div className="p-6 flex items-center justify-center min-h-screen">
-                <div className="text-center">
-                    <p className="text-red-600 mb-4">{error}</p>
-                    <button onClick={refetch} className="px-4 py-2 bg-primary-600 text-white rounded-lg">
-                        إعادة المحاولة
-                    </button>
-                </div>
-            </div>
-        );
+    if (statusFilter.length > 0) {
+      result = result.filter((m) => statusFilter.includes(m.status));
     }
 
+    if (typeFilter.length > 0) {
+      result = result.filter((m) => typeFilter.includes(m.materialType));
+    }
+
+    return result;
+  }, [receivings, searchQuery, statusFilter, typeFilter]);
+
+  const materialSorters = useMemo(
+    () => ({
+      receivingNumber: createTextSorter<MaterialReceiving>((row) => row.receivingNumber),
+      status: createTextSorter<MaterialReceiving>((row) => row.status),
+      materialType: createTextSorter<MaterialReceiving>((row) => row.materialType),
+      materialName: createTextSorter<MaterialReceiving>((row) => row.materialName),
+      materialCode: createTextSorter<MaterialReceiving>((row) => row.materialCode),
+      supplierName: createTextSorter<MaterialReceiving>((row) => row.supplierName),
+      batchNumber: createTextSorter<MaterialReceiving>((row) => row.batchNumber),
+      quantity: createNumberSorter<MaterialReceiving>((row) => row.quantity),
+      acceptedQuantity: createNumberSorter<MaterialReceiving>((row) => row.acceptedQuantity),
+      rejectedQuantity: createNumberSorter<MaterialReceiving>((row) => row.rejectedQuantity),
+      remainingQuantity: createNumberSorter<MaterialReceiving>(
+        (row) => row.remainingQuantity ?? row.acceptedQuantity ?? row.quantity
+      ),
+      receivedAt: createDateSorter<MaterialReceiving>((row) => row.receivedAt),
+      productionDate: createDateSorter<MaterialReceiving>((row) => row.productionDate),
+      expiryDate: createDateSorter<MaterialReceiving>((row) => row.expiryDate),
+      updatedAt: createDateSorter<MaterialReceiving>((row) => row.updatedAt),
+    }),
+    []
+  );
+
+  const { sortedRows, sortKey, sortDirection, toggleSort } = useSortableRows({
+    rows: filteredMaterials,
+    sorters: materialSorters,
+    initialSortKey: 'receivedAt',
+    initialDirection: 'desc',
+  });
+
+  const {
+    page,
+    setPage,
+    pageCount,
+    pageSize,
+    setPageSize,
+    pagedRows,
+    totalRows,
+    fromRow,
+    toRow,
+  } = usePaginatedRows({
+    rows: sortedRows,
+    initialPageSize: 50,
+  });
+
+  const handleDownloadCoa = (material: MaterialReceiving) => {
+    const coaUrl = material.certificateOfAnalysis?.trim();
+    if (!coaUrl) return;
+
+    const urlParts = coaUrl.split('/');
+    const fileName =
+      urlParts[urlParts.length - 1] || `COA_${material.receivingNumber || material.id}.pdf`;
+
+    void downloadFromUrl(coaUrl, fileName);
+  };
+
+  const toggleStatusFilter = (status: MaterialReceivingStatus) => {
+    setStatusFilter((prev) => (prev.includes(status) ? prev.filter((s) => s !== status) : [...prev, status]));
+    setPage(1);
+  };
+
+  const toggleTypeFilter = (type: MaterialType) => {
+    setTypeFilter((prev) => (prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]));
+    setPage(1);
+  };
+
+  const clearFilters = () => {
+    setStatusFilter([]);
+    setTypeFilter([]);
+    setPage(1);
+  };
+
+  if (isLoading) {
     return (
-        <div className="p-6">
-            {/* Back Button */}
-            <Link
-                to="/lab"
-                className="inline-flex items-center gap-2 text-gray-600 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 mb-4 transition-colors"
-            >
-                <ArrowRightIcon className="w-5 h-5" />
-                <span>العودة للمختبر</span>
-            </Link>
-
-            {/* Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-                <div>
-                    <h1 className="text-3xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
-                        <TruckIcon className="w-8 h-8 text-green-600" />
-                        استلام المواد الخام
-                    </h1>
-                    <p className="text-gray-600 dark:text-gray-400 mt-1">تسجيل وفحص المواد الواردة</p>
-                </div>
-                <Link
-                    to="/lab/receiving/new"
-                    className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl hover:from-green-700 hover:to-emerald-700 transition-all shadow-lg"
-                >
-                    <PlusIcon className="w-5 h-5" />
-                    استلام جديد
-                </Link>
-            </div>
-
-            {/* Stats */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 text-center">
-                    <div className="text-2xl font-bold text-gray-900 dark:text-white">{stats.total}</div>
-                    <div className="text-sm text-gray-500">إجمالي</div>
-                </div>
-                <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 text-center">
-                    <div className="text-2xl font-bold text-yellow-600">{stats.pending}</div>
-                    <div className="text-sm text-gray-500">قيد الانتظار</div>
-                </div>
-                <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 text-center">
-                    <div className="text-2xl font-bold text-green-600">{stats.accepted}</div>
-                    <div className="text-sm text-gray-500">مقبول</div>
-                </div>
-                <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 text-center">
-                    <div className="text-2xl font-bold text-red-600">{stats.rejected}</div>
-                    <div className="text-sm text-gray-500">مرفوض</div>
-                </div>
-            </div>
-
-            {/* Toolbar */}
-            <div className="flex flex-col sm:flex-row gap-4 mb-6">
-                <div className="relative flex-1">
-                    <MagnifyingGlassIcon className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                    <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="بحث باسم المادة أو رقم الاستلام..."
-                        className="w-full pl-4 pr-10 py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-primary-500 dark:bg-gray-800"
-                    />
-                </div>
-                <button
-                    onClick={() => setShowFilters(!showFilters)}
-                    className={`flex items-center gap-2 px-4 py-3 border rounded-xl transition-colors ${showFilters ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-600' : 'border-gray-300 dark:border-gray-600'
-                        }`}
-                >
-                    <FunnelIcon className="w-5 h-5" />
-                    فلتر
-                </button>
-            </div>
-
-            {/* Filters */}
-            {showFilters && (
-                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-6">
-                    <div className="flex items-center justify-between mb-4">
-                        <h3 className="font-medium">الفلاتر</h3>
-                        <button onClick={clearFilters} className="text-sm text-primary-600 hover:underline">مسح</button>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-sm font-medium mb-2">الحالة</label>
-                            <div className="flex flex-wrap gap-2">
-                                {(Object.entries(materialReceivingStatusLabels) as [MaterialReceivingStatus, string][]).map(([status, label]) => (
-                                    <button
-                                        key={status}
-                                        onClick={() => toggleStatusFilter(status)}
-                                        className={`px-3 py-1.5 rounded-full text-sm transition-colors ${statusFilter.includes(status)
-                                            ? `${materialReceivingStatusColors[status].bg} ${materialReceivingStatusColors[status].text} font-medium`
-                                            : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200'
-                                            }`}
-                                    >
-                                        {label}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium mb-2">نوع المادة</label>
-                            <div className="flex flex-wrap gap-2">
-                                {(Object.entries(materialTypeLabels) as [MaterialType, string][]).map(([type, label]) => (
-                                    <button
-                                        key={type}
-                                        onClick={() => toggleTypeFilter(type)}
-                                        className={`px-3 py-1.5 rounded-full text-sm transition-colors ${typeFilter.includes(type)
-                                            ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-600 font-medium'
-                                            : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200'
-                                            }`}
-                                    >
-                                        {label}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Materials List */}
-            {filteredMaterials.length === 0 ? (
-                <div className="text-center py-16 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
-                    <TruckIcon className="w-16 h-16 mx-auto text-gray-300 mb-4" />
-                    <h3 className="text-xl font-medium text-gray-900 dark:text-white mb-2">لا توجد مواد</h3>
-                    <p className="text-gray-500 mb-6">ابدأ بتسجيل استلام جديد</p>
-                    <Link
-                        to="/lab/receiving/new"
-                        className="inline-flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded-xl hover:bg-green-700"
-                    >
-                        <PlusIcon className="w-5 h-5" />
-                        استلام جديد
-                    </Link>
-                </div>
-            ) : (
-                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-                    <table className="w-full">
-                        <thead className="bg-gray-50 dark:bg-gray-700/50">
-                            <tr>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">رقم الاستلام</th>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">المادة</th>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">المورد</th>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">الكمية</th>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">الحالة</th>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">الاستهلاك</th>
-                                <th className="px-4 py-3 text-right text-sm font-medium text-gray-700 dark:text-gray-300">التاريخ</th>
-                                <th className="px-4 py-3 text-center text-sm font-medium text-gray-700 dark:text-gray-300">إجراء</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                            {filteredMaterials.map(material => (
-                                <tr key={material.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                                    <td className="px-4 py-3">
-                                        <span className="font-mono font-medium text-green-600">{material.receivingNumber}</span>
-                                    </td>
-                                    <td className="px-4 py-3">
-                                        <div className="font-medium text-gray-900 dark:text-white">{material.materialName}</div>
-                                        <div className="text-sm text-gray-500">Batch: {material.batchNumber}</div>
-                                    </td>
-                                    <td className="px-4 py-3 text-gray-600 dark:text-gray-400">
-                                        {material.supplierName}
-                                    </td>
-                                    <td className="px-4 py-3 text-gray-600 dark:text-gray-400">
-                                        {material.quantity} {material.unit}
-                                    </td>
-                                    <td className="px-4 py-3">
-                                        <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${materialReceivingStatusColors[material.status].bg} ${materialReceivingStatusColors[material.status].text}`}>
-                                            {materialReceivingStatusLabels[material.status]}
-                                        </span>
-                                        {material.isManuallyDepleted && (
-                                            <span className="mr-2 px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
-                                                نفدت يدوياً
-                                            </span>
-                                        )}
-                                    </td>
-                                    <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">
-                                        <div>مستهلك: {Number(material.consumedQuantity ?? 0).toFixed(3)} {material.unit}</div>
-                                        <div className="font-medium">متبقي: {Number(material.remainingQuantity ?? material.acceptedQuantity ?? material.quantity ?? 0).toFixed(3)} {material.unit}</div>
-                                    </td>
-                                    <td className="px-4 py-3 text-sm text-gray-500">
-                                        <FormattedDate date={material.receivedAt} />
-                                    </td>
-                                    <td className="px-4 py-3 text-center">
-                                        <Link
-                                            to={`/lab/receiving/${material.id}`}
-                                            className="inline-flex items-center gap-1 px-3 py-1.5 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-lg"
-                                        >
-                                            <EyeIcon className="w-4 h-4" />
-                                            عرض
-                                        </Link>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
-        </div>
+      <div className="p-6">
+        <TableSkeleton />
+      </div>
     );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6 flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <p className="text-red-600 mb-4">{error}</p>
+          <button onClick={refetch} className="px-4 py-2 bg-primary-600 text-white rounded-lg">
+            إعادة المحاولة
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <HrPageShell title="استلام المواد الخام" description="" stats={[]}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <Link
+          to="/lab"
+          className="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-emerald-700 dark:text-slate-300 dark:hover:text-emerald-300"
+        >
+          <ArrowRightIcon className="h-4 w-4" />
+          العودة للمختبر
+        </Link>
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+          <div className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
+            <span className="text-slate-500 dark:text-slate-400">الشركة:</span>
+            <span className="font-semibold">{selectedCompany?.name || 'غير محددة'}</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900"
+            title="تحديث"
+          >
+            <ArrowPathIcon className="h-4 w-4" />
+            تحديث
+          </button>
+
+          <Link
+            to="/lab/receiving/new"
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white transition hover:bg-emerald-700"
+          >
+            <PlusIcon className="h-4 w-4" />
+            استلام جديد
+          </Link>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {[
+          { label: 'الإجمالي', value: stats.total, className: 'text-slate-900 dark:text-slate-100' },
+          { label: 'قيد الانتظار', value: stats.pending, className: 'text-amber-700 dark:text-amber-200' },
+          { label: 'مقبول', value: stats.accepted, className: 'text-emerald-700 dark:text-emerald-200' },
+          { label: 'مرفوض', value: stats.rejected, className: 'text-rose-700 dark:text-rose-200' },
+        ].map((stat) => (
+          <div
+            key={stat.label}
+            className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-800 dark:bg-slate-900"
+          >
+            <div className="text-[11px] text-slate-500 dark:text-slate-400">{stat.label}</div>
+            <div className={cn('mt-1 text-base font-semibold', stat.className)}>{stat.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <HrSectionCard
+        title="الاستلامات"
+        actions={
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+            <div className="relative">
+              <MagnifyingGlassIcon className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="بحث سريع..."
+                className="h-9 w-full min-w-[220px] rounded-md border border-slate-200 bg-white pr-8 pl-2 text-xs text-slate-700 outline-none transition focus:border-emerald-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowFilters((prev) => !prev)}
+              className={cn(
+                'inline-flex h-9 items-center justify-center gap-2 rounded-md border px-3 text-xs font-medium transition',
+                showFilters
+                  ? 'border-emerald-600 bg-emerald-600 text-white'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900'
+              )}
+            >
+              <FunnelIcon className="h-4 w-4" />
+              فلاتر
+            </button>
+
+            {(statusFilter.length > 0 || typeFilter.length > 0) && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="inline-flex h-9 items-center justify-center rounded-md border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900"
+              >
+                مسح
+              </button>
+            )}
+          </div>
+        }
+      >
+        {showFilters ? (
+          <div className="mb-3 space-y-3 rounded-md border border-slate-200 bg-white p-3 text-xs dark:border-slate-800 dark:bg-slate-900">
+            <div className="space-y-2">
+              <div className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">الحالة</div>
+              <div className="flex flex-wrap gap-2">
+                {(Object.entries(materialReceivingStatusLabels) as [MaterialReceivingStatus, string][]).map(
+                  ([status, label]) => (
+                    <button
+                      key={status}
+                      type="button"
+                      onClick={() => toggleStatusFilter(status)}
+                      className={cn(
+                        'rounded-full border px-3 py-1 text-[11px] transition',
+                        statusFilter.includes(status)
+                          ? `${materialReceivingStatusColors[status].bg} ${materialReceivingStatusColors[status].text} border-transparent font-semibold`
+                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900'
+                      )}
+                    >
+                      {label}
+                    </button>
+                  )
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">نوع المادة</div>
+              <div className="flex flex-wrap gap-2">
+                {(Object.entries(materialTypeLabels) as [MaterialType, string][]).map(([type, label]) => (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => toggleTypeFilter(type)}
+                    className={cn(
+                      'rounded-full border px-3 py-1 text-[11px] transition',
+                      typeFilter.includes(type)
+                        ? 'border-transparent bg-emerald-50 text-emerald-700 font-semibold dark:bg-emerald-900/20 dark:text-emerald-200'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900'
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {sortedRows.length === 0 ? (
+          <div className="rounded-md border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
+            لا توجد بيانات
+          </div>
+        ) : (
+          <HrDataGrid
+            rowCount={sortedRows.length}
+            columnCount={27}
+            footer={
+              <HrTablePager
+                page={page}
+                pageCount={pageCount}
+                pageSize={pageSize}
+                totalRows={totalRows}
+                fromRow={fromRow}
+                toRow={toRow}
+                onPageChange={setPage}
+                onPageSizeChange={setPageSize}
+              />
+            }
+          >
+            <table>
+              <thead>
+                <tr>
+                  <th>
+                    <HrSortableHeader label="رقم" sortKey="receivingNumber" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th>
+                    <HrSortableHeader label="الحالة" sortKey="status" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th>
+                    <HrSortableHeader label="النوع" sortKey="materialType" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th>
+                    <HrSortableHeader label="المادة" sortKey="materialName" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th>
+                    <HrSortableHeader label="كود" sortKey="materialCode" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th>
+                    <HrSortableHeader label="المورد" sortKey="supplierName" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th>
+                    <HrSortableHeader label="Batch" sortKey="batchNumber" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th>
+                    <HrSortableHeader label="الكمية" sortKey="quantity" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th>وحدة</th>
+                  <th>التعبئة</th>
+                  <th>
+                    <HrSortableHeader label="إنتاج" sortKey="productionDate" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th>
+                    <HrSortableHeader label="انتهاء" sortKey="expiryDate" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th>
+                    <HrSortableHeader label="استلام" sortKey="receivedAt" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th>مستلم</th>
+                  <th>
+                    <HrSortableHeader label="مقبول" sortKey="acceptedQuantity" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th>
+                    <HrSortableHeader label="مرفوض" sortKey="rejectedQuantity" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th>
+                    <HrSortableHeader label="متبقي" sortKey="remainingQuantity" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th>مستهلك</th>
+                  <th>مخزن</th>
+                  <th>ظروف التخزين</th>
+                  <th>إذن تسليم</th>
+                  <th>فاتورة</th>
+                  <th>COA</th>
+                  <th>سبب الرفض</th>
+                  <th>ملاحظات</th>
+                  <th>
+                    <HrSortableHeader label="آخر تحديث" sortKey="updatedAt" activeSortKey={sortKey} sortDirection={sortDirection} onToggle={toggleSort} />
+                  </th>
+                  <th className="text-center">عرض</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pagedRows.map((material) => (
+                  <tr key={material.id}>
+                    <td className="whitespace-nowrap font-mono text-emerald-700 dark:text-emerald-300">{material.receivingNumber}</td>
+                    <td className="whitespace-nowrap">
+                      <span
+                        className={cn(
+                          'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold',
+                          materialReceivingStatusColors[material.status]?.bg,
+                          materialReceivingStatusColors[material.status]?.text
+                        )}
+                      >
+                        {materialReceivingStatusLabels[material.status] || material.status}
+                      </span>
+                      {material.isManuallyDepleted ? (
+                        <span className="mr-2 inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700 dark:bg-rose-900/20 dark:text-rose-200">
+                          نفدت يدويا
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="whitespace-nowrap">{materialTypeLabels[material.materialType] || material.materialType}</td>
+                    <td className="min-w-[240px]">
+                      <div className="font-semibold text-slate-900 dark:text-slate-100">{material.materialName}</div>
+                    </td>
+                    <td className="whitespace-nowrap font-mono">{material.materialCode || '-'}</td>
+                    <td className="min-w-[180px]">
+                      <div className="font-medium">{material.supplierName || '-'}</div>
+                    </td>
+                    <td className="whitespace-nowrap font-mono">{material.batchNumber}</td>
+                    <td className="whitespace-nowrap text-right font-mono">{Number(material.quantity ?? 0).toFixed(3)}</td>
+                    <td className="whitespace-nowrap">{material.unit}</td>
+                    <td className="whitespace-nowrap">{material.packagingType || '-'}</td>
+                    <td className="whitespace-nowrap font-mono"><FormattedDate date={material.productionDate} fallback="-" /></td>
+                    <td className="whitespace-nowrap font-mono"><FormattedDate date={material.expiryDate} fallback="-" /></td>
+                    <td className="whitespace-nowrap font-mono"><FormattedDate date={material.receivedAt} includeTime /></td>
+                    <td className="whitespace-nowrap">{material.receivedByName || '-'}</td>
+                    <td className="whitespace-nowrap text-right font-mono">{Number(material.acceptedQuantity ?? 0).toFixed(3)}</td>
+                    <td className="whitespace-nowrap text-right font-mono">{Number(material.rejectedQuantity ?? 0).toFixed(3)}</td>
+                    <td className="whitespace-nowrap text-right font-mono">{Number(material.remainingQuantity ?? material.acceptedQuantity ?? material.quantity ?? 0).toFixed(3)}</td>
+                    <td className="whitespace-nowrap text-right font-mono">{Number(material.consumedQuantity ?? 0).toFixed(3)}</td>
+                    <td className="whitespace-nowrap">{material.storageLocation || '-'}</td>
+                    <td className="min-w-[180px]">{material.storageCondition || '-'}</td>
+                    <td className="whitespace-nowrap font-mono">{material.deliveryNoteNumber || '-'}</td>
+                    <td className="whitespace-nowrap font-mono">{material.invoiceNumber || '-'}</td>
+                    <td className="whitespace-nowrap">
+                      {material.certificateOfAnalysis ? (
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadCoa(material)}
+                          className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 hover:underline dark:text-emerald-300 dark:hover:text-emerald-200"
+                          title="تحميل COA"
+                        >
+                          تحميل
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-slate-400 dark:text-slate-500">غيرمرفق</span>
+                      )}
+                    </td>
+                    <td className="min-w-[200px]">{material.rejectionReason || '-'}</td>
+                    <td className="min-w-[260px]">{material.notes || '-'}</td>
+                    <td className="whitespace-nowrap font-mono"><FormattedDate date={material.updatedAt} includeTime /></td>
+                    <td className="whitespace-nowrap text-center">
+                      <Link
+                        to={`/lab/receiving/${material.id}`}
+                        className="inline-flex items-center justify-center rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-900"
+                        title="عرض"
+                      >
+                        <EyeIcon className="h-4 w-4" />
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </HrDataGrid>
+        )}
+      </HrSectionCard>
+    </HrPageShell>
+  );
 };
 
 export default MaterialReceivingPage;

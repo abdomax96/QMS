@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import {
-  FolderIcon,
   DocumentTextIcon,
   ClipboardDocumentCheckIcon,
   ClockIcon,
@@ -10,6 +9,7 @@ import {
 import useStore from '../../../store';
 import { calcTrend, countByMonth } from '../dashboard.types';
 import type { KpiMetric, MonthlyPoint } from '../dashboard.types';
+import { FORMS_REPORTS_HOME } from '../../../constants/formsReportsRoutes';
 
 const MONTH_LABELS: Record<string, string> = {
   '0': 'يناير', '1': 'فبراير', '2': 'مارس', '3': 'أبريل',
@@ -26,7 +26,7 @@ export interface ReportsDashboardData {
 }
 
 export function useReportsDashboard(): ReportsDashboardData {
-  const { folders, formTemplates, formInstances, isLoading } = useStore();
+    const { formTemplates, formInstances, isLoading } = useStore();
 
   return useMemo(() => {
     const instances = Object.values(formInstances);
@@ -80,7 +80,7 @@ export function useReportsDashboard(): ReportsDashboardData {
         color: 'blue',
         trend: reportsTrend,
         subtitle: `هذا الشهر: ${curReports}`,
-        href: '/forms&reports',
+        href: FORMS_REPORTS_HOME,
       },
       {
         id: 'approval_rate',
@@ -108,7 +108,7 @@ export function useReportsDashboard(): ReportsDashboardData {
         icon: ClockIcon,
         color: drafts > 10 ? 'orange' : 'yellow',
         highlight: drafts > 10,
-        href: '/forms&reports',
+        href: FORMS_REPORTS_HOME,
       },
       {
         id: 'submitted',
@@ -116,15 +116,15 @@ export function useReportsDashboard(): ReportsDashboardData {
         value: submitted,
         icon: DocumentTextIcon,
         color: 'purple',
-        href: '/forms&reports',
+        href: FORMS_REPORTS_HOME,
       },
       {
-        id: 'folders',
-        label: 'المجلدات',
-        value: Object.keys(folders).length,
-        icon: FolderIcon,
+        id: 'templates',
+        label: 'النماذج',
+        value: Object.keys(formTemplates).length,
+        icon: DocumentTextIcon,
         color: 'gray',
-        href: '/forms&reports',
+        href: FORMS_REPORTS_HOME,
       },
     ];
 
@@ -141,5 +141,5 @@ export function useReportsDashboard(): ReportsDashboardData {
       .map(i => ({ id: i.instance_id, name: i.name || 'بدون عنوان', status: i.status, createdAt: i.created_at }));
 
     return { kpis, monthlyReports, statusDistribution, recentReports, isLoading };
-  }, [folders, formTemplates, formInstances, isLoading]);
+  }, [formTemplates, formInstances, isLoading]);
 }

@@ -1,6 +1,7 @@
 import { supabase } from '../../config/supabase';
 import type { CapaAction, NcrAttachment, NcrRecord, NcrStatus, NcrVerification } from '../../types/ncr';
 import { getUserNameByEmail } from '../../utils/ncr/userUtils';
+import { checkNcrStagePermission, requireNcrStagePermission } from '../unifiedPermissionService';
 
 export interface CreateNcrPayload {
     date: string;
@@ -138,6 +139,54 @@ function formatDate(date: string): { year: number } {
     return { year: d.getFullYear() };
 }
 
+async function getNcrStageForPermission(id: string, companyId?: string | null): Promise<NcrRecord['currentStage']> {
+    let query = supabase
+        .from(NCR_TABLE)
+        .select('current_stage')
+        .eq('id', id);
+
+    if (companyId) {
+        query = query.eq('company_id', companyId);
+    }
+
+    const { data, error } = await query.single();
+    if (error || !data?.current_stage) {
+        throw error || new Error('NCR not found');
+    }
+
+    return data.current_stage as NcrRecord['currentStage'];
+}
+
+async function requireAnyNcrStagePermission(
+    stageCode: string,
+    actions: string[]
+): Promise<void> {
+    for (const action of actions) {
+        const result = await checkNcrStagePermission(stageCode, action, { skipAudit: true });
+        if (result.allowed) return;
+    }
+
+    await requireNcrStagePermission(stageCode, actions[0] || 'view');
+}
+
+function assertNcrStage(
+    actualStage: NcrRecord['currentStage'],
+    expectedStages: NcrRecord['currentStage'][],
+    message: string
+): void {
+    if (!expectedStages.includes(actualStage)) {
+        throw new Error(message);
+    }
+}
+
+function appendUniqueStage(
+    stages: NcrRecord['completedStages'] | undefined,
+    stage: NcrRecord['currentStage']
+): NcrRecord['completedStages'] {
+    const next = Array.isArray(stages) ? [...stages] : [];
+    return next.includes(stage) ? next : [...next, stage];
+}
+
 export async function generateNextNcrNumber(targetDate: string, maxRetries = 3): Promise<string> {
     const { year } = formatDate(targetDate);
     const counterKey = `ncr_counter_${year}`;
@@ -264,6 +313,7 @@ export async function createNcr(payload: CreateNcrPayload): Promise<NcrRecord> {
     if (!companyId) {
         throw new Error('يجب اختيار الشركة قبل إنشاء تقرير عدم المطابقة');
     }
+    await requireNcrStagePermission('initial_report', 'create');
 
     const ncrNumber = await generateNextNcrNumber(payload.date);
     const ncrId = crypto.randomUUID();
@@ -381,6 +431,9 @@ export async function fetchNcrs(companyId?: string | null): Promise<NcrRecord[]>
 }
 
 export async function updateNcr(payload: UpdateNcrPayload) {
+    const currentStage = await getNcrStageForPermission(payload.id, payload.companyId);
+    await requireNcrStagePermission(currentStage, 'edit');
+
     const updates: Record<string, unknown> = {
         updated_at: new Date().toISOString()
     };
@@ -439,6 +492,9 @@ export async function updateNcr(payload: UpdateNcrPayload) {
 
 export async function appendAttachments(id: string, files: File[], companyId?: string | null) {
     if (!files.length) return await getNcrById(id, companyId);
+    const currentStage = await getNcrStageForPermission(id, companyId);
+    await requireNcrStagePermission(currentStage, 'edit');
+
     const ncr = await getNcrById(id, companyId);
     if (!ncr) throw new Error('NCR not found');
     const newAttachments = await uploadAttachments(id, files);
@@ -459,6 +515,9 @@ export async function appendAttachments(id: string, files: File[], companyId?: s
 }
 
 export async function deleteNcr(id: string, companyId?: string | null) {
+    const currentStage = await getNcrStageForPermission(id, companyId);
+    await requireNcrStagePermission(currentStage, 'delete');
+
     let query = supabase.from(NCR_TABLE).delete().eq('id', id);
     if (companyId) {
         query = query.eq('company_id', companyId);
@@ -541,6 +600,18 @@ export async function proposeRootCause(
     proposedByRole: 'department' | 'quality',
     companyId?: string | null
 ): Promise<NcrRecord> {
+    const ncr = await getNcrById(id, companyId);
+    if (!ncr) throw new Error('NCR not found');
+    assertNcrStage(
+        ncr.currentStage,
+        ['root_cause_analysis'],
+        'لا يمكن اقتراح السبب الجذري إلا في مرحلة تحليل السبب الجذري'
+    );
+    if (!rootCauseText.trim()) {
+        throw new Error('يجب إدخال تحليل السبب الجذري');
+    }
+    await requireNcrStagePermission(ncr.currentStage, 'root_cause.propose');
+
     const now = new Date().toISOString();
 
     const rootCauseApproval = {
@@ -584,6 +655,18 @@ export async function reviewRootCause(
 ): Promise<NcrRecord> {
     const ncr = await getNcrById(id, companyId);
     if (!ncr || !ncr.rootCauseApproval) throw new Error('NCR or root cause approval not found');
+    assertNcrStage(
+        ncr.currentStage,
+        ['root_cause_analysis'],
+        'لا يمكن مراجعة السبب الجذري إلا في مرحلة تحليل السبب الجذري'
+    );
+    if (ncr.rootCauseApproval.status !== 'pending') {
+        throw new Error('لا يوجد سبب جذري بانتظار المراجعة');
+    }
+    if (!approved && !rejectionReason?.trim()) {
+        throw new Error('يجب إدخال سبب الرفض');
+    }
+    await requireAnyNcrStagePermission(ncr.currentStage, approved ? ['approve'] : ['reject']);
 
     const now = new Date().toISOString();
 
@@ -606,7 +689,19 @@ export async function reviewRootCause(
     // If approved, progress to next stage
     if (approved && ncr.currentStage === 'root_cause_analysis') {
         updates.current_stage = 'capa_planning';
-        updates.completed_stages = [...(ncr.completedStages || []), 'root_cause_analysis'];
+        updates.completed_stages = appendUniqueStage(ncr.completedStages, 'root_cause_analysis');
+        updates.stage_history = [
+            ...(ncr.stageHistory || []),
+            {
+                from: ncr.currentStage,
+                to: 'capa_planning',
+                transitionedBy: reviewedBy,
+                transitionedByName: reviewedByName,
+                transitionedByEmail: reviewedByEmail,
+                transitionedAt: now,
+                notes: 'اعتماد تحليل السبب الجذري والانتقال إلى تخطيط الإجراءات'
+            }
+        ];
     }
 
     let query = supabase.from(NCR_TABLE).update(updates).eq('id', id);
@@ -636,6 +731,21 @@ export async function addCapaAction(
 ): Promise<NcrRecord> {
     const ncr = await getNcrById(id, companyId);
     if (!ncr) throw new Error('NCR not found');
+    assertNcrStage(
+        ncr.currentStage,
+        ['capa_planning'],
+        'لا يمكن إضافة إجراءات CAPA إلا في مرحلة تخطيط الإجراءات'
+    );
+    if (!action.description.trim()) {
+        throw new Error('يجب إدخال وصف الإجراء');
+    }
+    if (!action.responsibleDeptId || !action.responsiblePersonId) {
+        throw new Error('يجب اختيار القسم والشخص المسؤول');
+    }
+    if (!action.targetDate) {
+        throw new Error('يجب اختيار الموعد المستهدف');
+    }
+    await requireNcrStagePermission(ncr.currentStage, 'capa.add');
 
     const now = new Date().toISOString();
 
@@ -671,6 +781,15 @@ export async function updateCapaStatus(
 ): Promise<NcrRecord> {
     const ncr = await getNcrById(id, companyId);
     if (!ncr) throw new Error('NCR not found');
+    assertNcrStage(
+        ncr.currentStage,
+        ['capa_execution'],
+        'لا يمكن تحديث تنفيذ CAPA إلا في مرحلة تنفيذ الإجراءات'
+    );
+    if (!ncr.actions.some((action) => action.id === actionId)) {
+        throw new Error('الإجراء المطلوب غير موجود');
+    }
+    await requireNcrStagePermission(ncr.currentStage, 'capa.complete');
 
     const now = new Date().toISOString();
 
@@ -706,6 +825,7 @@ export async function progressToNextStage(
 ): Promise<NcrRecord> {
     const ncr = await getNcrById(id, companyId);
     if (!ncr) throw new Error('NCR not found');
+    await requireNcrStagePermission(ncr.currentStage, 'workflow.progress');
 
     // Import state machine for validation
     const { validateTransition, getNextStage, NCR_STAGE_LABELS } = await import('../../utils/ncr/ncrStateMachine');
@@ -743,7 +863,7 @@ export async function progressToNextStage(
 
     let query = supabase.from(NCR_TABLE).update({
         current_stage: nextStage,
-        completed_stages: [...(ncr.completedStages || []), ncr.currentStage],
+        completed_stages: appendUniqueStage(ncr.completedStages, ncr.currentStage),
         stage_history: [...(ncr.stageHistory || []), newTransition],
         updated_at: now
     }).eq('id', id);
@@ -770,6 +890,12 @@ export async function verifyAndClose(
 ): Promise<NcrRecord> {
     const ncr = await getNcrById(id, companyId);
     if (!ncr) throw new Error('NCR not found');
+    assertNcrStage(
+        ncr.currentStage,
+        ['verification_closure'],
+        'لا يمكن التحقق والإغلاق إلا في مرحلة التحقق والإغلاق'
+    );
+    await requireNcrStagePermission(ncr.currentStage, 'verify_close');
 
     const now = new Date().toISOString();
 
@@ -797,7 +923,7 @@ export async function verifyAndClose(
         updates.status = 'closed';
         updates.closed_at = now;
         updates.current_stage = 'verification_closure';
-        updates.completed_stages = [...(ncr.completedStages || []), 'verification_closure'];
+        updates.completed_stages = appendUniqueStage(ncr.completedStages, 'verification_closure');
     }
 
     let query = supabase.from(NCR_TABLE).update(updates).eq('id', id);
@@ -837,6 +963,7 @@ export async function returnToPreviousStage(
 ): Promise<NcrRecord> {
     const ncr = await getNcrById(id, companyId);
     if (!ncr) throw new Error('NCR not found');
+    await requireAnyNcrStagePermission(ncr.currentStage, ['workflow.return', 'reopen']);
 
     const currentIndex = NCR_STAGE_SEQUENCE.indexOf(ncr.currentStage);
     if (currentIndex <= 0) {
@@ -868,8 +995,10 @@ export async function returnToPreviousStage(
 
     // Force real re-work on the returned stage before allowing progress again.
     if (targetStage === 'root_cause_analysis') {
-        // Requires root cause to be proposed/approved again.
+        // Requires root cause and downstream CAPA work to be proposed/approved again.
+        resetUpdates.root_cause = null;
         resetUpdates.root_cause_approval = null;
+        resetUpdates.actions = [];
         resetUpdates.verification = null;
     } else if (targetStage === 'capa_planning') {
         // Requires CAPA planning to be rebuilt/confirmed again.
@@ -884,6 +1013,7 @@ export async function returnToPreviousStage(
         resetUpdates.verification = null;
     } else if (targetStage === 'initial_report') {
         // Rolling back to initial report clears downstream approvals/execution state.
+        resetUpdates.root_cause = null;
         resetUpdates.root_cause_approval = null;
         resetUpdates.actions = [];
         resetUpdates.verification = null;
@@ -981,13 +1111,36 @@ export async function addNcrHoldSortLog(input: {
     sortedBy?: string | null;
     notes?: string | null;
 }): Promise<NcrHoldSortLogRecord> {
+    const ncr = await getNcrById(input.ncrId, input.companyId);
+    if (!ncr) throw new Error('NCR not found');
+    await requireNcrStagePermission(ncr.currentStage, 'release_hold');
+
+    const sortedQty = Number(input.sortedQty || 0);
+    const destroyedQty = Number(input.destroyedQty || 0);
+    if (!Number.isFinite(sortedQty) || sortedQty <= 0) {
+        throw new Error('يرجى إدخال كمية مفرزة أكبر من صفر');
+    }
+    if (!Number.isFinite(destroyedQty) || destroyedQty < 0 || destroyedQty > sortedQty) {
+        throw new Error('الكمية المتهلكة يجب أن تكون بين صفر والكمية المفرزة');
+    }
+
+    const { reservedQty, remainingQty } = await calculateNcrHoldRemainingQty(ncr, input.companyId);
+    if (reservedQty <= 0) {
+        throw new Error('لا توجد كمية محتجزة لإدارتها');
+    }
+    if (sortedQty > remainingQty) {
+        const unitLabel = (ncr.reservedUnit || '').trim();
+        const suffix = unitLabel ? ` ${unitLabel}` : '';
+        throw new Error(`الكمية المفرزة تتجاوز الكمية المتبقية (${formatQuantity(remainingQty)}${suffix}).`);
+    }
+
     const { data, error } = await supabase
         .from('ncr_hold_sort_logs')
         .insert({
             ncr_id: input.ncrId,
             company_id: input.companyId,
-            sorted_qty: input.sortedQty,
-            destroyed_qty: input.destroyedQty ?? 0,
+            sorted_qty: sortedQty,
+            destroyed_qty: destroyedQty,
             sorted_at: input.sortedAt ?? new Date().toISOString(),
             sorted_by: input.sortedBy ?? null,
             notes: input.notes ?? null

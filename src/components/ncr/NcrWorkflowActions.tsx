@@ -5,7 +5,7 @@
  * Updated: 2025-12-31 - Using stage-based permissions per architecture redesign
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
     PlusIcon,
     CheckIcon,
@@ -16,6 +16,7 @@ import {
     LockClosedIcon
 } from '@heroicons/react/24/outline';
 import { supabase } from '../../config/supabase';
+import hrService from '../../modules/hr/services/hrService';
 import {
     proposeRootCause,
     reviewRootCause,
@@ -29,6 +30,7 @@ import { useNcrStagePermissions } from '../../hooks/ncr/useNcrStagePermissions';
 import { InlineLoading } from '../common/LoadingStates';
 import { WORKFLOW_STAGES } from '../../types/ncr';
 import type { NcrRecord, CapaAction } from '../../types/ncr';
+import type { HrEmployeeListItem } from '../../modules/hr/types';
 
 interface Props {
     ncr: NcrRecord;
@@ -39,6 +41,115 @@ interface Props {
         email: string;
         role: 'department' | 'quality';
     };
+}
+
+interface LookupOption {
+    id: string;
+    label: string;
+    description?: string;
+}
+
+type DepartmentLookup = { id: string; name: string; name_ar?: string | null };
+type EmployeeLookup = Pick<
+    HrEmployeeListItem,
+    'id' | 'name' | 'email' | 'baseEmployeeCode' | 'departmentId' | 'departmentName' | 'jobTitleText' | 'employmentStatus' | 'isActive'
+>;
+
+function SearchableSelect({
+    label,
+    placeholder,
+    options,
+    value,
+    onChange,
+    disabled = false,
+    emptyMessage = 'لا توجد نتائج'
+}: {
+    label: string;
+    placeholder: string;
+    options: LookupOption[];
+    value: string;
+    onChange: (value: string) => void;
+    disabled?: boolean;
+    emptyMessage?: string;
+}) {
+    const [open, setOpen] = useState(false);
+    const [query, setQuery] = useState('');
+    const rootRef = useRef<HTMLDivElement | null>(null);
+    const selected = options.find((option) => option.id === value);
+    const filtered = useMemo(() => {
+        const q = query.trim().toLowerCase();
+        if (!q) return options;
+        return options.filter((option) =>
+            `${option.label} ${option.description || ''}`.toLowerCase().includes(q)
+        );
+    }, [options, query]);
+
+    useEffect(() => {
+        if (!open) return;
+        const onPointerDown = (event: MouseEvent) => {
+            if (!rootRef.current?.contains(event.target as Node)) {
+                setOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', onPointerDown);
+        return () => document.removeEventListener('mousedown', onPointerDown);
+    }, [open]);
+
+    return (
+        <div ref={rootRef} className="relative">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{label}</label>
+            <button
+                type="button"
+                disabled={disabled}
+                onClick={() => {
+                    setOpen((current) => !current);
+                    setQuery('');
+                }}
+                className="flex min-h-[42px] w-full items-center justify-between rounded-lg border border-gray-300 bg-white px-3 py-2 text-right text-sm text-gray-900 shadow-sm disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-600 dark:text-white"
+            >
+                <span className={selected ? '' : 'text-gray-500 dark:text-gray-300'}>
+                    {selected?.label || placeholder}
+                </span>
+                <span className="text-gray-400">▾</span>
+            </button>
+            {open && !disabled && (
+                <div className="absolute z-30 mt-1 w-full overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-600 dark:bg-gray-700">
+                    <div className="p-2">
+                        <input
+                            autoFocus
+                            value={query}
+                            onChange={(event) => setQuery(event.target.value)}
+                            placeholder="بحث..."
+                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                        />
+                    </div>
+                    <div className="max-h-56 overflow-y-auto py-1">
+                        {filtered.length === 0 ? (
+                            <div className="px-3 py-3 text-sm text-gray-500 dark:text-gray-300">{emptyMessage}</div>
+                        ) : (
+                            filtered.map((option) => (
+                                <button
+                                    key={option.id}
+                                    type="button"
+                                    onClick={() => {
+                                        onChange(option.id);
+                                        setOpen(false);
+                                        setQuery('');
+                                    }}
+                                    className={`block w-full px-3 py-2 text-right text-sm hover:bg-primary-50 dark:hover:bg-gray-600 ${value === option.id ? 'bg-primary-50 text-primary-700 dark:bg-gray-600 dark:text-white' : 'text-gray-800 dark:text-gray-100'}`}
+                                >
+                                    <span className="block font-medium">{option.label}</span>
+                                    {option.description && (
+                                        <span className="block text-xs text-gray-500 dark:text-gray-300">{option.description}</span>
+                                    )}
+                                </button>
+                            ))
+                        )}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
 }
 
 export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
@@ -63,7 +174,6 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
     const [showCapaForm, setShowCapaForm] = useState(false);
     const [showVerifyForm, setShowVerifyForm] = useState(false);
     const [rootCauseText, setRootCauseText] = useState(ncr.rootCause || '');
-    const [rejectionReason, setRejectionReason] = useState('');
     const [capaForm, setCapaForm] = useState({
         type: 'corrective' as 'corrective' | 'preventive',
         description: '',
@@ -73,8 +183,8 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
     });
     const [verificationNotes, setVerificationNotes] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
-    const [departments, setDepartments] = useState<{ id: string; name: string; name_ar?: string | null }[]>([]);
-    const [users, setUsers] = useState<{ id: string; name?: string | null; email?: string | null; department_id?: string | null }[]>([]);
+    const [departments, setDepartments] = useState<DepartmentLookup[]>([]);
+    const [employees, setEmployees] = useState<EmployeeLookup[]>([]);
 
     const isClosed = !!ncr.closedAt;
     const currentStageInfo = WORKFLOW_STAGES[ncr.currentStage];
@@ -89,30 +199,72 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
     const previousStageCode = currentStageIndex > 0 ? workflowStageOrder[currentStageIndex - 1] : null;
     const previousStageLabel = previousStageCode ? WORKFLOW_STAGES[previousStageCode]?.name : null;
     const canReturnToPreviousStage = Boolean(previousStageCode) && (canReopen || isAdmin);
-    const filteredUsers = capaForm.responsibleDeptId
-        ? users.filter((user) => user.department_id === capaForm.responsibleDeptId)
-        : [];
+    const selectedDepartment = departments.find((department) => department.id === capaForm.responsibleDeptId);
+    const responsibleEmployees = useMemo(() => {
+        if (!capaForm.responsibleDeptId) return employees;
+
+        const matchesSelectedDepartment = (employee: EmployeeLookup) =>
+            employee.departmentId === capaForm.responsibleDeptId
+            || (!!selectedDepartment && employee.departmentName === (selectedDepartment.name_ar || selectedDepartment.name))
+            || (!!selectedDepartment && employee.departmentName === selectedDepartment.name);
+
+        const departmentEmployees = employees.filter(matchesSelectedDepartment);
+        const otherEmployees = employees.filter((employee) => !matchesSelectedDepartment(employee));
+        return [...departmentEmployees, ...otherEmployees];
+    }, [capaForm.responsibleDeptId, employees, selectedDepartment]);
+
+    const departmentOptions = departments.map((dept) => ({
+        id: dept.id,
+        label: dept.name_ar || dept.name,
+        description: dept.name_ar && dept.name_ar !== dept.name ? dept.name : undefined
+    }));
+    const userOptions = responsibleEmployees.map((employee) => ({
+        id: employee.id,
+        label: employee.name || employee.email || employee.id,
+        description: [
+            employee.baseEmployeeCode,
+            employee.departmentName,
+            employee.jobTitleText,
+            employee.isActive ? undefined : 'غير نشط'
+        ].filter(Boolean).join(' | ') || undefined
+    }));
 
     useEffect(() => {
-        const loadCapaLookup = async () => {
-            const [{ data: deptRows }, { data: userRows }] = await Promise.all([
-                supabase
-                    .from('departments')
-                    .select('id, name, name_ar')
-                    .eq('is_active', true)
-                    .order('display_order', { ascending: true }),
-                supabase
-                    .from('users')
-                    .select('id, name, email, department_id')
-                    .eq('is_active', true)
-                    .order('name', { ascending: true })
-            ]);
+        let isMounted = true;
 
-            setDepartments(deptRows || []);
-            setUsers(userRows || []);
+        const loadCapaLookup = async () => {
+            try {
+                const [{ data: deptRows, error: deptError }, employeeRows] = await Promise.all([
+                    supabase
+                        .from('departments')
+                        .select('id, name, name_ar')
+                        .eq('is_active', true)
+                        .order('display_order', { ascending: true }),
+                    hrService.listEmployees(500)
+                ]);
+
+                if (deptError) {
+                    console.warn('Unable to load NCR CAPA departments:', deptError.message);
+                }
+
+                if (!isMounted) return;
+                setDepartments(deptRows || []);
+                setEmployees(employeeRows.filter((employee) =>
+                    employee.employmentStatus !== 'archived'
+                ));
+            } catch (error) {
+                console.warn('Unable to load NCR CAPA lookup data:', error);
+                if (!isMounted) return;
+                setDepartments([]);
+                setEmployees([]);
+            }
         };
 
         loadCapaLookup();
+
+        return () => {
+            isMounted = false;
+        };
     }, []);
 
     // Root cause analysis handlers
@@ -139,7 +291,7 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
         }
     };
 
-    const handleReviewRootCause = async (approved: boolean) => {
+    const handleReviewRootCause = async (approved: boolean, rejectionReason?: string) => {
         setIsProcessing(true);
         try {
             const updated = await reviewRootCause(
@@ -153,7 +305,6 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
                 ncr.companyId
             );
             onUpdate(updated);
-            setRejectionReason('');
         } catch (error) {
             console.error('Error reviewing root cause:', error);
             alert('حدث خطأ في مراجعة السبب الجذري');
@@ -164,18 +315,18 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
 
     // CAPA handlers
     const handleAddCapa = async () => {
-        if (!capaForm.description.trim() || !capaForm.responsibleDeptId || !capaForm.responsiblePersonId) return;
+        if (!capaForm.description.trim() || !capaForm.responsibleDeptId || !capaForm.responsiblePersonId || !capaForm.targetDate) return;
         setIsProcessing(true);
         try {
             const selectedDept = departments.find((d) => d.id === capaForm.responsibleDeptId);
-            const selectedUser = users.find((u) => u.id === capaForm.responsiblePersonId);
+            const selectedEmployee = employees.find((employee) => employee.id === capaForm.responsiblePersonId);
             const updated = await addCapaAction(ncr.id, {
                 type: capaForm.type,
                 description: capaForm.description,
                 responsibleDeptId: capaForm.responsibleDeptId,
                 responsibleDept: selectedDept?.name_ar || selectedDept?.name || '',
                 responsiblePersonId: capaForm.responsiblePersonId,
-                responsiblePerson: selectedUser?.name || selectedUser?.email || '',
+                responsiblePerson: selectedEmployee?.name || selectedEmployee?.email || '',
                 targetDate: capaForm.targetDate
             }, ncr.companyId);
             onUpdate(updated);
@@ -352,6 +503,11 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
                                         {ncr.rootCauseApproval.status === 'approved' && '✅ تمت الموافقة'}
                                         {ncr.rootCauseApproval.status === 'rejected' && '❌ تم الرفض'}
                                         {ncr.rootCauseApproval.status === 'pending' && '⏳ بانتظار المراجعة'}
+                                        {ncr.rootCauseApproval.status === 'rejected' && ncr.rootCauseApproval.rejectionReason && (
+                                            <div className="mt-2 text-sm">
+                                                سبب الرفض: {ncr.rootCauseApproval.rejectionReason}
+                                            </div>
+                                        )}
                                     </div>
 
                                     {/* Review buttons */}
@@ -370,8 +526,7 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
                                                     onClick={() => {
                                                         const reason = prompt('سبب الرفض:');
                                                         if (reason) {
-                                                            setRejectionReason(reason);
-                                                            handleReviewRootCause(false);
+                                                            handleReviewRootCause(false, reason);
                                                         }
                                                     }}
                                                     disabled={isProcessing}
@@ -382,6 +537,47 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
                                                 </button>
                                             </div>
                                         )}
+                                    {ncr.rootCauseApproval.status === 'rejected' && canProposeRootCause && (
+                                        <div className="space-y-3">
+                                            {showRootCauseForm ? (
+                                                <>
+                                                    <textarea
+                                                        value={rootCauseText}
+                                                        onChange={(e) => setRootCauseText(e.target.value)}
+                                                        rows={4}
+                                                        placeholder="أدخل تحليل السبب الجذري المعدل..."
+                                                        className="w-full rounded-lg border-gray-300 dark:border-gray-600 dark:bg-gray-700"
+                                                    />
+                                                    <div className="flex gap-2">
+                                                        <button
+                                                            onClick={handleProposeRootCause}
+                                                            disabled={isProcessing || !rootCauseText.trim()}
+                                                            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
+                                                        >
+                                                            {isProcessing ? 'جاري الإرسال...' : 'إعادة الإرسال للموافقة'}
+                                                        </button>
+                                                        <button
+                                                            onClick={() => setShowRootCauseForm(false)}
+                                                            className="px-4 py-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50"
+                                                        >
+                                                            إلغاء
+                                                        </button>
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <button
+                                                    onClick={() => {
+                                                        setRootCauseText(ncr.rootCauseApproval?.rootCauseText || ncr.rootCause || '');
+                                                        setShowRootCauseForm(true);
+                                                    }}
+                                                    className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-red-300 text-red-700 rounded-lg hover:border-primary-400 hover:text-primary-600 transition-colors"
+                                                >
+                                                    <PlusIcon className="w-5 h-5" />
+                                                    تعديل السبب الجذري وإعادة الإرسال
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             ) : canProposeRootCause ? (
                                 <>
@@ -483,44 +679,41 @@ export default function NcrWorkflowActions({ ncr, onUpdate, userInfo }: Props) {
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">القسم المسؤول</label>
-                                            <select
+                                            <SearchableSelect
+                                                label="القسم المسؤول"
+                                                placeholder="اختر القسم"
+                                                options={departmentOptions}
                                                 value={capaForm.responsibleDeptId}
-                                                onChange={(e) => setCapaForm({ ...capaForm, responsibleDeptId: e.target.value, responsiblePersonId: '' })}
-                                                className="w-full rounded-lg border-gray-300 dark:border-gray-600 dark:bg-gray-600"
-                                            >
-                                                <option value="">اختر القسم</option>
-                                                {departments.map((dept) => (
-                                                    <option key={dept.id} value={dept.id}>
-                                                        {dept.name_ar || dept.name}
-                                                    </option>
-                                                ))}
-                                            </select>
+                                                onChange={(responsibleDeptId) => setCapaForm({
+                                                    ...capaForm,
+                                                    responsibleDeptId,
+                                                    responsiblePersonId: ''
+                                                })}
+                                                emptyMessage="لا توجد أقسام مطابقة"
+                                            />
                                         </div>
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">الشخص المسؤول</label>
-                                            <select
+                                            <SearchableSelect
+                                                label="الشخص المسؤول"
+                                                placeholder="اختر المسؤول"
+                                                options={userOptions}
                                                 value={capaForm.responsiblePersonId}
-                                                onChange={(e) => setCapaForm({ ...capaForm, responsiblePersonId: e.target.value })}
-                                                className="w-full rounded-lg border-gray-300 dark:border-gray-600 dark:bg-gray-600"
+                                                onChange={(responsiblePersonId) => setCapaForm({
+                                                    ...capaForm,
+                                                    responsiblePersonId
+                                                })}
                                                 disabled={!capaForm.responsibleDeptId}
-                                            >
-                                                <option value="">اختر المسؤول</option>
-                                                {filteredUsers.map((user) => (
-                                                    <option key={user.id} value={user.id}>
-                                                        {user.name || user.email || user.id}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                            {capaForm.responsibleDeptId && filteredUsers.length === 0 && (
-                                                <p className="text-xs text-amber-600 mt-1">لا يوجد مستخدمون نشطون في هذا القسم.</p>
+                                                emptyMessage="لا يوجد مستخدمون مطابقون"
+                                            />
+                                            {employees.length === 0 && (
+                                                <p className="text-xs text-amber-600 mt-1">لا يوجد موظفون متاحون في دليل HR.</p>
                                             )}
                                         </div>
                                     </div>
                                     <div className="flex gap-2">
                                         <button
                                             onClick={handleAddCapa}
-                                            disabled={isProcessing}
+                                            disabled={isProcessing || !capaForm.description.trim() || !capaForm.responsibleDeptId || !capaForm.responsiblePersonId || !capaForm.targetDate}
                                             className="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50"
                                         >
                                             إضافة

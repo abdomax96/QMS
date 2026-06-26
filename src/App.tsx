@@ -5,7 +5,7 @@ import MainLayout from './layouts/MainLayout';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import RouteErrorElement from './components/common/RouteErrorElement';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
-import { ModuleRoute, FormsReportsRoute, TasksRoute, NcrRoute, ChatRoute } from './components/auth/ModuleRoute';
+import { ModuleRoute, FormsReportsRoute, TasksRoute, NcrRoute, ChatRoute, HrRoute } from './components/auth/ModuleRoute';
 
 // Unauthorized page
 const UnauthorizedPage = lazy(() => import('./pages/UnauthorizedPage'));
@@ -15,7 +15,9 @@ const Dashboard = lazy(() => import('./pages/Dashboard/index'));
 const FormDesigner = lazy(() => import('./pages/FormDesigner'));
 const DataEntryPage = lazy(() => import('./pages/DataEntryPage'));
 const ReportViewer = lazy(() => import('./pages/ReportViewerA4'));
-const FoldersPage = lazy(() => import('./pages/Folders'));
+const FormsReportsNewPage = lazy(() => import('./pages/forms/FormsReportsNewPage'));
+const FormTemplateReportsPage = lazy(() => import('./pages/forms/FormTemplateReportsPage'));
+const FormsReportsLegacyClosedPage = lazy(() => import('./pages/forms/FormsReportsLegacyClosedPage'));
 // const UnifiedFormsReports = lazy(() => import('./pages/UnifiedFormsReports'));
 
 // NCR Pages - lazy loaded
@@ -82,18 +84,27 @@ const HoldsPage = lazy(() => import('./pages/ncr/HoldsPage'));
 const SettingsPage = lazy(() => import('./pages/ncr/SettingsPage'));
 
 // Admin Pages - lazy loaded
-const UserManagementPage = lazy(() => import('./pages/admin/UserManagementPage'));
 const RecycleBinPage = lazy(() => import('./pages/RecycleBinPage'));
 const ArchivePage = lazy(() => import('./pages/ArchivePage'));
 const AuditLogPage = lazy(() => import('./pages/admin/AuditLogPage'));
 const ErrorDashboardPage = lazy(() => import('./pages/admin/ErrorDashboardPage'));
-const PermissionsPage = lazy(() => import('./pages/PermissionsPage'));
-const DepartmentsPage = lazy(() => import('./pages/DepartmentsPage'));
 
 // Production Module - lazy loaded
 const ProductionDashboard = lazy(() => import('./pages/production/ProductionDashboard'));
 const ProductionNew = lazy(() => import('./pages/production/ProductionNew'));
 const ProductionDetails = lazy(() => import('./pages/production/ProductionDetails'));
+const ProductionAttendancePage = lazy(() => import('./pages/production/ProductionAttendancePage'));
+
+// HR Module - lazy loaded
+const HrDashboardPage = lazy(() => import('./modules/hr/pages/HrDashboardPage'));
+const HrEmployeesPage = lazy(() => import('./modules/hr/pages/EmployeesPage'));
+const HrTransportPage = lazy(() => import('./modules/hr/pages/TransportPage'));
+const HrShiftsPage = lazy(() => import('./modules/hr/pages/ShiftsPage'));
+const HrRequestsPage = lazy(() => import('./modules/hr/pages/RequestsPage'));
+const HrPenaltiesPage = lazy(() => import('./modules/hr/pages/PenaltiesPage'));
+const HrPayrollPage = lazy(() => import('./modules/hr/pages/PayrollPage'));
+const HrSettingsPage = lazy(() => import('./modules/hr/pages/SettingsPage'));
+const HrReportsPage = lazy(() => import('./modules/hr/pages/ReportsPage'));
 
 // Document Control - lazy loaded
 const DocumentsPage = lazy(() => import('./pages/documents/DocumentsPage'));
@@ -168,7 +179,13 @@ const PageLoader = () => {
     return <DetailPageSkeleton />;
   }
 
-  if (pathname.startsWith('/folders') || pathname.startsWith('/forms&reports') || pathname.startsWith('/documents') || pathname.startsWith('/tasks')) {
+  if (
+    pathname.startsWith('/forms&reports') ||
+    pathname.startsWith('/documents') ||
+    pathname.startsWith('/tasks') ||
+    pathname.startsWith('/hr') ||
+    pathname.startsWith('/production')
+  ) {
     return (
       <div className="p-4 sm:p-6">
         <TableSkeleton rows={8} />
@@ -269,7 +286,7 @@ const router = createBrowserRouter([
         element: (
           <FormsReportsRoute>
             <Suspense fallback={<PageLoader />}>
-              <FoldersPage />
+              <FormsReportsLegacyClosedPage />
             </Suspense>
           </FormsReportsRoute>
         )
@@ -279,7 +296,7 @@ const router = createBrowserRouter([
         element: (
           <FormsReportsRoute>
             <Suspense fallback={<PageLoader />}>
-              <FoldersPage />
+              <FormsReportsLegacyClosedPage />
             </Suspense>
           </FormsReportsRoute>
         )
@@ -289,7 +306,7 @@ const router = createBrowserRouter([
         element: (
           <FormsReportsRoute>
             <Suspense fallback={<PageLoader />}>
-              <FoldersPage />
+              <FormsReportsLegacyClosedPage />
             </Suspense>
           </FormsReportsRoute>
         )
@@ -299,7 +316,27 @@ const router = createBrowserRouter([
         element: (
           <FormsReportsRoute>
             <Suspense fallback={<PageLoader />}>
-              <FoldersPage />
+              <FormsReportsLegacyClosedPage />
+            </Suspense>
+          </FormsReportsRoute>
+        )
+      },
+      {
+        path: "forms&reports-new",
+        element: (
+          <FormsReportsRoute>
+            <Suspense fallback={<PageLoader />}>
+              <FormsReportsNewPage />
+            </Suspense>
+          </FormsReportsRoute>
+        )
+      },
+      {
+        path: "forms&reports-new/:templateId",
+        element: (
+          <FormsReportsRoute>
+            <Suspense fallback={<PageLoader />}>
+              <FormTemplateReportsPage />
             </Suspense>
           </FormsReportsRoute>
         )
@@ -336,7 +373,13 @@ const router = createBrowserRouter([
       },
       {
         path: "reports",
-        element: <Navigate to="/forms&reports" replace />
+        element: (
+          <FormsReportsRoute>
+            <Suspense fallback={<PageLoader />}>
+              <FormsReportsLegacyClosedPage />
+            </Suspense>
+          </FormsReportsRoute>
+        )
       },
       {
         path: "reports/new/:templateId",
@@ -459,12 +502,12 @@ const router = createBrowserRouter([
         element: <SettingsPage />
       },
       {
+        path: "permissions",
+        element: <Navigate to="/settings?section=access&tab=matrix" replace />
+      },
+      {
         path: "users",
-        element: (
-          <Suspense fallback={<PageLoader />}>
-            <UserManagementPage />
-          </Suspense>
-        )
+        element: <Navigate to="/hr/employees" replace />
       },
       {
         path: "profile",
@@ -504,6 +547,150 @@ const router = createBrowserRouter([
           <Suspense fallback={<PageLoader />}>
             <ErrorDashboardPage />
           </Suspense>
+        )
+      },
+      // ==================== Production Module ====================
+      {
+        path: "production",
+        element: (
+          <ModuleRoute module="production">
+            <Suspense fallback={<PageLoader />}>
+              <ProductionDashboard />
+            </Suspense>
+          </ModuleRoute>
+        )
+      },
+      {
+        path: "production/new",
+        element: (
+          <ModuleRoute module="production" action="create">
+            <Suspense fallback={<PageLoader />}>
+              <ProductionNew />
+            </Suspense>
+          </ModuleRoute>
+        )
+      },
+      {
+        path: "production/history",
+        element: (
+          <ModuleRoute module="production">
+            <Navigate to="/production" replace />
+          </ModuleRoute>
+        )
+      },
+      {
+        path: "production/attendance",
+        element: (
+          <ModuleRoute module="production" action={['view', 'attendance.capture', 'attendance.review', 'attendance.adjust']}>
+            <Suspense fallback={<PageLoader />}>
+              <ProductionAttendancePage />
+            </Suspense>
+          </ModuleRoute>
+        )
+      },
+      {
+        path: "production/:id",
+        element: (
+          <ModuleRoute module="production">
+            <Suspense fallback={<PageLoader />}>
+              <ProductionDetails />
+            </Suspense>
+          </ModuleRoute>
+        )
+      },
+      // ==================== HR Module ====================
+      {
+        path: "hr",
+        element: <Navigate to="/hr/dashboard" replace />
+      },
+      {
+        path: "hr/dashboard",
+        element: (
+          <HrRoute>
+            <Suspense fallback={<PageLoader />}>
+              <HrDashboardPage />
+            </Suspense>
+          </HrRoute>
+        )
+      },
+      {
+        path: "hr/employees",
+        element: (
+          <HrRoute>
+            <Suspense fallback={<PageLoader />}>
+              <HrEmployeesPage />
+            </Suspense>
+          </HrRoute>
+        )
+      },
+      {
+        path: "hr/transport",
+        element: (
+          <HrRoute>
+            <Suspense fallback={<PageLoader />}>
+              <HrTransportPage />
+            </Suspense>
+          </HrRoute>
+        )
+      },
+      {
+        path: "hr/shifts",
+        element: (
+          <HrRoute>
+            <Suspense fallback={<PageLoader />}>
+              <HrShiftsPage />
+            </Suspense>
+          </HrRoute>
+        )
+      },
+      {
+        path: "hr/requests",
+        element: (
+          <HrRoute>
+            <Suspense fallback={<PageLoader />}>
+              <HrRequestsPage />
+            </Suspense>
+          </HrRoute>
+        )
+      },
+      {
+        path: "hr/penalties",
+        element: (
+          <HrRoute>
+            <Suspense fallback={<PageLoader />}>
+              <HrPenaltiesPage />
+            </Suspense>
+          </HrRoute>
+        )
+      },
+      {
+        path: "hr/payroll",
+        element: (
+          <HrRoute action={['view', 'calculate', 'approve', 'close']}>
+            <Suspense fallback={<PageLoader />}>
+              <HrPayrollPage />
+            </Suspense>
+          </HrRoute>
+        )
+      },
+      {
+        path: "hr/settings",
+        element: (
+          <HrRoute action={['view', 'configure']}>
+            <Suspense fallback={<PageLoader />}>
+              <HrSettingsPage />
+            </Suspense>
+          </HrRoute>
+        )
+      },
+      {
+        path: "hr/reports",
+        element: (
+          <HrRoute action={['view', 'export']}>
+            <Suspense fallback={<PageLoader />}>
+              <HrReportsPage />
+            </Suspense>
+          </HrRoute>
         )
       },
       // ==================== Pallet Module ====================

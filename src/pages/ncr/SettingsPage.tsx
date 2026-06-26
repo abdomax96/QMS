@@ -89,11 +89,11 @@ const SettingsPage: React.FC = () => {
                 </div>
 
                 <button
-                    onClick={() => navigate('/users')}
+                    onClick={() => navigate('/hr/employees')}
                     className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-primary-50 text-primary-700 hover:bg-primary-100 border border-primary-200 dark:bg-primary-900/30 dark:text-primary-200 dark:border-primary-700 dark:hover:bg-primary-900/50"
                 >
                     <UserGroupIcon className="w-5 h-5" />
-                    دليل المستخدمين
+                    دليل العاملين
                 </button>
             </div>
 

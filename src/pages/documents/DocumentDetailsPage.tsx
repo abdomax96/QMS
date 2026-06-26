@@ -233,11 +233,22 @@ export default function DocumentDetailsPage() {
     };
 
     const handleDelete = async () => {
-        if (!document || !confirm('هل أنت متأكد من حذف هذه الوثيقة؟')) return;
+        if (!document) return;
+        const confirmMessage = document.status === 'archived'
+            ? 'هل أنت متأكد من حذف هذه الوثيقة نهائياً؟'
+            : document.status === 'approved'
+                ? 'هل أنت متأكد من أرشفة هذه الوثيقة؟'
+                : 'هل أنت متأكد من حذف هذه الوثيقة؟';
+        if (!confirm(confirmMessage)) return;
         setActionLoading('delete');
         try {
-            await documentService.deleteDocument(document.id);
-            addToast({ type: 'success', message: 'تم أرشفة الوثيقة' });
+            if (document.status === 'archived') {
+                await documentService.permanentlyDeleteDocument(document.id);
+                addToast({ type: 'success', message: 'تم حذف الوثيقة نهائياً' });
+            } else {
+                await documentService.deleteDocument(document.id);
+                addToast({ type: 'success', message: 'تم أرشفة الوثيقة' });
+            }
             navigate('/documents');
         } catch (err: any) {
             addToast({ type: 'error', message: err.message || 'فشل الحذف' });
@@ -439,6 +450,9 @@ export default function DocumentDetailsPage() {
     const statusConfig = STATUS_CONFIG[document.status as keyof typeof STATUS_CONFIG] || STATUS_CONFIG.draft;
     const StatusIcon = statusConfig.icon;
     const isDraft = document.status === 'draft' || document.status === 'pending_review' || (latestVersion?.status === 'draft');
+    const canDeleteOrArchive =
+        (document.status === 'approved' && (can('documents', 'archive') || can('documents', 'delete'))) ||
+        (document.status !== 'approved' && can('documents', 'delete'));
     const metadataRows = [
         { label: 'النوع', value: TYPE_LABELS[document.type] || '-' },
         { label: 'القسم', value: document.department?.name || '-' },
@@ -483,6 +497,26 @@ export default function DocumentDetailsPage() {
                                 title="طباعة"
                             >
                                 <PrinterIcon className="w-5 h-5" />
+                            </button>
+                        )}
+
+                        {/* Delete/Archive Button (Preview Mode) */}
+                        {!isEditing && canDeleteOrArchive && (
+                            <button
+                                onClick={handleDelete}
+                                disabled={actionLoading === 'delete'}
+                                className={cn(
+                                    "min-h-[40px] min-w-[40px] p-2 rounded-lg transition-colors",
+                                    "text-slate-600 dark:text-slate-300 hover:bg-rose-50 dark:hover:bg-rose-900/20 hover:text-rose-700",
+                                    actionLoading === 'delete' && "opacity-50 cursor-not-allowed"
+                                )}
+                                title={document.status === 'approved' ? 'أرشفة' : document.status === 'archived' ? 'حذف نهائي' : 'حذف'}
+                            >
+                                {document.status === 'approved' ? (
+                                    <ArchiveBoxIcon className="w-5 h-5" />
+                                ) : (
+                                    <TrashIcon className="w-5 h-5" />
+                                )}
                             </button>
                         )}
 
@@ -576,6 +610,25 @@ export default function DocumentDetailsPage() {
                                         >
                                             <DocumentPlusIcon className="w-4 h-4" />
                                             إصدار جديد
+                                        </button>
+                                    )}
+
+                                    {canDeleteOrArchive && (
+                                        <button
+                                            onClick={handleDelete}
+                                            disabled={actionLoading === 'delete'}
+                                            className={cn(
+                                                "min-h-[40px] w-full px-4 py-2 rounded-lg transition-colors inline-flex items-center justify-center gap-2 text-sm font-medium",
+                                                "bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/30",
+                                                actionLoading === 'delete' && "opacity-50 cursor-not-allowed"
+                                            )}
+                                        >
+                                            {document.status === 'approved' ? (
+                                                <ArchiveBoxIcon className="w-4 h-4" />
+                                            ) : (
+                                                <TrashIcon className="w-4 h-4" />
+                                            )}
+                                            {document.status === 'approved' ? 'أرشفة' : document.status === 'archived' ? 'حذف نهائي' : 'حذف'}
                                         </button>
                                     )}
                                 </>

@@ -109,7 +109,7 @@ const NewMaterialReceivingPage: React.FC = () => {
     const { id: editId } = useParams<{ id: string }>();
     const isEditMode = !!editId;
     const { profile } = useSupabaseAuth();
-    const { selectedCompany, companies, setCompanies } = useCompanyStore();
+    const { selectedCompany, companies, setCompanies, selectCompany } = useCompanyStore();
     const [targetCompanyId, setTargetCompanyId] = useState<string>(selectedCompany?.id || '');
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isLoadingEdit, setIsLoadingEdit] = useState(isEditMode);
@@ -236,7 +236,10 @@ const NewMaterialReceivingPage: React.FC = () => {
                         setSelectedCategory(savedCategory);
                     }
 
-                    if (receiving.companyId) setTargetCompanyId(receiving.companyId);
+                    if (receiving.companyId) {
+                        setTargetCompanyId(receiving.companyId);
+                        selectCompany(receiving.companyId);
+                    }
                     if (receiving.rawMaterialId) setSelectedRawMaterialId(receiving.rawMaterialId);
 
                     setFormData({
@@ -329,7 +332,7 @@ const NewMaterialReceivingPage: React.FC = () => {
         };
 
         loadExistingData();
-    }, [editId, isEditMode, navigate]);
+    }, [editId, isEditMode, navigate, selectCompany]);
 
     // Fixed category list
     const standardCategories = [
@@ -743,7 +746,7 @@ const NewMaterialReceivingPage: React.FC = () => {
                     },
                     profile?.uid || '',
                     profile?.name || profile?.email || '',
-                    targetCompanyId
+                    targetCompanyId || undefined
                 );
                 if (material) navigate('/lab/receiving');
             }
@@ -804,7 +807,9 @@ const NewMaterialReceivingPage: React.FC = () => {
                         <select
                             value={targetCompanyId}
                             onChange={(e) => {
-                                setTargetCompanyId(e.target.value);
+                                const nextCompanyId = e.target.value;
+                                setTargetCompanyId(nextCompanyId);
+                                selectCompany(nextCompanyId);
                                 setSelectedRawMaterialId(null);
                                 setFormData(prev => ({ ...prev, rawMaterialId: '', materialName: '', supplierId: '', supplierName: '' }));
                             }}

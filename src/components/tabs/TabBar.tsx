@@ -19,6 +19,7 @@ import { cn } from '../../utils';
 import { useTabsStore } from '../../store/tabsStore';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { useToastStore } from '../../store/toastStore';
+import { FORMS_REPORTS_HOME } from '../../constants/formsReportsRoutes';
 
 interface TabBarProps {
     /** @deprecated No longer used - tabs close directly with auto-save to IndexedDB */
@@ -68,9 +69,13 @@ const TabBar: React.FC<TabBarProps> = ({ className }) => {
 
     const resolveReturnPath = (returnPath?: string): string | null => {
         if (!returnPath) return null;
-        if (returnPath === '/folders') return '/forms&reports';
-        if (returnPath.startsWith('/folders/')) {
-            return returnPath.replace('/folders/', '/forms&reports/');
+        if (
+            returnPath === '/folders' ||
+            returnPath.startsWith('/folders/') ||
+            returnPath === '/forms&reports' ||
+            returnPath.startsWith('/forms&reports/')
+        ) {
+            return FORMS_REPORTS_HOME;
         }
         return returnPath;
     };

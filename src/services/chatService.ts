@@ -2,9 +2,12 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '../config/supabase';
 import type {
     ChatAttachment,
+    ChatConversationMessageEvent,
     ChatConversationSummary,
     ChatDepartment,
     ChatMessage,
+    ChatMessageBatch,
+    ChatMessageQueryOptions,
     ChatUser,
     CreateChatConversationInput,
     SendChatMessageInput
@@ -20,6 +23,12 @@ type ChatConversationRow = {
     is_archived: boolean;
     created_at: string;
     updated_at: string;
+};
+
+type ChatConversationSummaryRow = ChatConversationRow & {
+    display_title: string;
+    members_count: number;
+    last_message_preview: string | null;
 };
 
 type ChatMessageRow = {
@@ -49,6 +58,18 @@ type ChatDepartmentRow = {
     name: string | null;
     name_ar: string | null;
     is_active: boolean;
+};
+
+type ChatAttachmentRow = {
+    id: string;
+    message_id: string;
+    conversation_id: string;
+    bucket_id: string;
+    storage_path: string;
+    file_name: string;
+    content_type: string | null;
+    size_bytes: number;
+    created_at: string;
 };
 
 class ChatService {
@@ -129,6 +150,99 @@ class ChatService {
         });
 
         return byId;
+    }
+
+    private mapConversationSummary(row: ChatConversationSummaryRow): ChatConversationSummary {
+        return {
+            id: row.id,
+            conversation_type: row.conversation_type,
+            title: row.title ?? null,
+            department_id: row.department_id ?? null,
+            created_by: row.created_by,
+            last_message_at: row.last_message_at,
+            is_archived: Boolean(row.is_archived),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            display_title: row.display_title || row.title || 'Conversation',
+            members_count: Number(row.members_count || 0),
+            last_message_preview: row.last_message_preview ?? null
+        };
+    }
+
+    private mapAttachmentRow(row: ChatAttachmentRow): ChatAttachment {
+        return {
+            id: row.id,
+            message_id: row.message_id,
+            conversation_id: row.conversation_id,
+            bucket_id: row.bucket_id,
+            storage_path: row.storage_path,
+            file_name: row.file_name,
+            content_type: row.content_type ?? null,
+            size_bytes: Number(row.size_bytes || 0),
+            created_at: row.created_at
+        };
+    }
+
+    private async getAttachmentsByMessageIds(messageIds: string[]): Promise<Map<string, ChatAttachment[]>> {
+        const attachmentsByMessage = new Map<string, ChatAttachment[]>();
+        if (messageIds.length === 0) return attachmentsByMessage;
+
+        const { data: attachments, error: attachmentsError } = await supabase
+            .from('chat_message_attachments')
+            .select('id, message_id, conversation_id, bucket_id, storage_path, file_name, content_type, size_bytes, created_at')
+            .in('message_id', messageIds)
+            .order('created_at', { ascending: true });
+
+        if (attachmentsError) throw attachmentsError;
+
+        ((attachments || []) as ChatAttachmentRow[]).forEach((attachmentRow) => {
+            const list = attachmentsByMessage.get(attachmentRow.message_id) || [];
+            list.push(this.mapAttachmentRow(attachmentRow));
+            attachmentsByMessage.set(attachmentRow.message_id, list);
+        });
+
+        return attachmentsByMessage;
+    }
+
+    private async hydrateMessages(messageRows: ChatMessageRow[]): Promise<ChatMessage[]> {
+        if (messageRows.length === 0) return [];
+
+        const senderIds = Array.from(new Set(messageRows.map((message) => message.sender_id)));
+        const usersById = await this.getUsersByIds(senderIds);
+        const attachmentsByMessage = await this.getAttachmentsByMessageIds(messageRows.map((message) => message.id));
+
+        return messageRows.map((messageRow) => ({
+            ...messageRow,
+            sender: usersById[messageRow.sender_id] || null,
+            attachments: attachmentsByMessage.get(messageRow.id) || []
+        }));
+    }
+
+    private async getMessageById(messageId: string): Promise<ChatMessage | null> {
+        const { data, error } = await supabase
+            .from('chat_messages')
+            .select('id, conversation_id, sender_id, body, message_type, created_at, edited_at, is_edited, deleted_at')
+            .eq('id', messageId)
+            .maybeSingle();
+
+        if (error) throw error;
+        if (!data) return null;
+
+        const [message] = await this.hydrateMessages([data as ChatMessageRow]);
+        return message || null;
+    }
+
+    private async getAttachmentById(attachmentId: string): Promise<ChatAttachment | null> {
+        const { data, error } = await supabase
+            .from('chat_message_attachments')
+            .select('id, message_id, conversation_id, bucket_id, storage_path, file_name, content_type, size_bytes, created_at')
+            .eq('id', attachmentId)
+            .maybeSingle();
+
+        if (error) throw error;
+        if (!data) return null;
+
+        return this.mapAttachmentRow(data as ChatAttachmentRow);
     }
 
     private buildFileStoragePath(companyId: string, conversationId: string, fileName: string): string {
@@ -328,148 +442,47 @@ class ChatService {
     }
 
     async listConversations(currentUserId: string): Promise<ChatConversationSummary[]> {
-        const { data: conversations, error: conversationsError } = await supabase
-            .from('chat_conversations')
-            .select('id, conversation_type, title, department_id, created_by, last_message_at, is_archived, created_at, updated_at')
-            .eq('is_archived', false)
-            .order('last_message_at', { ascending: false });
-
-        if (conversationsError) throw conversationsError;
-        const convRows = (conversations || []) as ChatConversationRow[];
-        if (convRows.length === 0) return [];
-
-        const conversationIds = convRows.map(c => c.id);
-
-        const { data: membersData, error: membersError } = await supabase
-            .from('chat_conversation_members')
-            .select('conversation_id, user_id, left_at')
-            .in('conversation_id', conversationIds)
-            .is('left_at', null);
-        if (membersError) throw membersError;
-
-        const members = (membersData || []) as ChatMemberRow[];
-        const membersByConversation = new Map<string, ChatMemberRow[]>();
-        members.forEach(m => {
-            const list = membersByConversation.get(m.conversation_id) || [];
-            list.push(m);
-            membersByConversation.set(m.conversation_id, list);
+        const { data, error } = await supabase.rpc('chat_list_conversation_summaries', {
+            p_user_id: currentUserId
         });
 
-        const memberUserIds = Array.from(new Set(members.map(m => m.user_id)));
-        const usersById = await this.getUsersByIds(memberUserIds);
+        if (error) throw error;
 
-        const departmentIds = Array.from(
-            new Set(convRows.map((conversation) => conversation.department_id).filter(Boolean))
-        ) as string[];
-        const departmentsById = new Map<string, string>();
-
-        if (departmentIds.length > 0) {
-            const { data: departmentRows, error: departmentError } = await supabase
-                .from('departments')
-                .select('id, name, name_ar')
-                .in('id', departmentIds);
-
-            if (departmentError) throw departmentError;
-
-            (departmentRows || []).forEach((row: any) => {
-                departmentsById.set(
-                    row.id as string,
-                    (row.name_ar as string | null) || (row.name as string | null) || 'Department Conversation'
-                );
-            });
-        }
-
-        const { data: messageRows, error: messagesError } = await supabase
-            .from('chat_messages')
-            .select('id, conversation_id, sender_id, body, message_type, created_at')
-            .in('conversation_id', conversationIds)
-            .is('deleted_at', null)
-            .order('created_at', { ascending: true });
-        if (messagesError) throw messagesError;
-
-        const latestByConversation = new Map<string, { body: string | null; message_type: string }>();
-        (messageRows || []).forEach((m: any) => {
-            latestByConversation.set(m.conversation_id, {
-                body: m.body ?? null,
-                message_type: m.message_type
-            });
-        });
-
-        return convRows.map((conversation) => {
-            const convMembers = membersByConversation.get(conversation.id) || [];
-            const otherMember = convMembers.find(m => m.user_id !== currentUserId);
-            const otherUser = otherMember ? usersById[otherMember.user_id] : null;
-            const latest = latestByConversation.get(conversation.id);
-
-            let displayTitle = conversation.title || 'Conversation';
-            if (conversation.conversation_type === 'direct') {
-                displayTitle = otherUser?.name || otherUser?.email || conversation.title || 'Direct Message';
-            } else if (conversation.conversation_type === 'department') {
-                displayTitle = conversation.title || departmentsById.get(conversation.department_id || '') || 'Department Conversation';
-            }
-
-            return {
-                ...conversation,
-                display_title: displayTitle,
-                members_count: convMembers.length,
-                last_message_preview: latest
-                    ? (latest.message_type === 'attachment'
-                        ? '[Attachment]'
-                        : latest.body || '[Message]')
-                    : null
-            };
-        });
+        return ((data || []) as ChatConversationSummaryRow[]).map((row) => this.mapConversationSummary(row));
     }
 
-    async getMessages(conversationId: string, limit = 100): Promise<ChatMessage[]> {
-        const { data: rows, error } = await supabase
+    async getMessages(
+        conversationId: string,
+        options: ChatMessageQueryOptions = {}
+    ): Promise<ChatMessageBatch> {
+        const pageSize = Math.max(1, Math.min(options.limit ?? 100, 200));
+
+        let query = supabase
             .from('chat_messages')
             .select('id, conversation_id, sender_id, body, message_type, created_at, edited_at, is_edited, deleted_at')
             .eq('conversation_id', conversationId)
-            .order('created_at', { ascending: true })
-            .limit(limit);
+            .order('created_at', { ascending: false })
+            .limit(pageSize + 1);
+
+        if (options.before) {
+            query = query.lt('created_at', options.before);
+        }
+
+        const { data: rows, error } = await query;
 
         if (error) throw error;
 
         const messageRows = (rows || []) as ChatMessageRow[];
-        const senderIds = Array.from(new Set(messageRows.map(m => m.sender_id)));
-        const usersById = await this.getUsersByIds(senderIds);
+        const hasMore = messageRows.length > pageSize;
+        const visibleRows = (hasMore ? messageRows.slice(0, pageSize) : messageRows).slice().reverse();
+        const messages = await this.hydrateMessages(visibleRows);
 
-        const messageIds = messageRows.map(m => m.id);
-        let attachmentRows: any[] = [];
-        if (messageIds.length > 0) {
-            const { data: attachments, error: attachmentsError } = await supabase
-                .from('chat_message_attachments')
-                .select('id, message_id, conversation_id, bucket_id, storage_path, file_name, content_type, size_bytes, created_at')
-                .in('message_id', messageIds)
-                .order('created_at', { ascending: true });
-
-            if (attachmentsError) throw attachmentsError;
-            attachmentRows = attachments || [];
-        }
-
-        const attachmentsByMessage = new Map<string, ChatAttachment[]>();
-        attachmentRows.forEach((a: any) => {
-            const list = attachmentsByMessage.get(a.message_id) || [];
-            list.push({
-                id: a.id,
-                message_id: a.message_id,
-                conversation_id: a.conversation_id,
-                bucket_id: a.bucket_id,
-                storage_path: a.storage_path,
-                file_name: a.file_name,
-                content_type: a.content_type ?? null,
-                size_bytes: Number(a.size_bytes || 0),
-                created_at: a.created_at
-            });
-            attachmentsByMessage.set(a.message_id, list);
-        });
-
-        return messageRows.map((m) => ({
-            ...m,
-            sender: usersById[m.sender_id] || null,
-            attachments: attachmentsByMessage.get(m.id) || []
-        }));
+        return {
+            messages,
+            hasMore,
+            oldestLoadedMessageCreatedAt: messages[0]?.created_at ?? null,
+            latestVisibleMessageId: messages[messages.length - 1]?.id ?? null
+        };
     }
 
     async createConversation(input: CreateChatConversationInput): Promise<ChatConversationSummary> {
@@ -727,11 +740,11 @@ class ChatService {
             console.warn('Failed to persist chat mentions:', error);
         }
 
-        const usersById = await this.getUsersByIds([input.currentUserId]);
-        const messageWithAttachments = await this.getMessages(input.conversationId, 1);
-        const fromServer = messageWithAttachments.find(m => m.id === message.id);
+        const fromServer = await this.getMessageById(message.id);
 
         if (fromServer) return fromServer;
+
+        const usersById = await this.getUsersByIds([input.currentUserId]);
 
         return {
             ...message,
@@ -745,7 +758,7 @@ class ChatService {
         conversationId: string,
         userId: string,
         body: string
-    ): Promise<void> {
+    ): Promise<ChatMessage> {
         const companyId = await this.resolveCurrentCompanyId(userId);
         const normalized = body.trim();
         if (!normalized) {
@@ -764,13 +777,20 @@ class ChatService {
             .eq('company_id', companyId);
 
         if (error) throw error;
+
+        const updatedMessage = await this.getMessageById(messageId);
+        if (!updatedMessage) {
+            throw new Error('Message updated but could not be reloaded.');
+        }
+
+        return updatedMessage;
     }
 
     async deleteMessage(
         messageId: string,
         conversationId: string,
         userId: string
-    ): Promise<void> {
+    ): Promise<ChatMessage> {
         const companyId = await this.resolveCurrentCompanyId(userId);
         const { error } = await supabase
             .from('chat_messages')
@@ -785,6 +805,13 @@ class ChatService {
             .eq('company_id', companyId);
 
         if (error) throw error;
+
+        const deletedMessage = await this.getMessageById(messageId);
+        if (!deletedMessage) {
+            throw new Error('Message deleted but could not be reloaded.');
+        }
+
+        return deletedMessage;
     }
 
     async archiveConversation(conversationId: string, userId: string): Promise<void> {
@@ -802,25 +829,19 @@ class ChatService {
         if (error) throw error;
     }
 
-    async markConversationRead(conversationId: string, userId: string): Promise<void> {
+    async markConversationRead(
+        conversationId: string,
+        userId: string,
+        latestVisibleMessageId: string | null = null
+    ): Promise<void> {
         const companyId = await this.resolveCurrentCompanyId(userId);
 
-        const { data: latestMessage, error: latestMessageError } = await supabase
-            .from('chat_messages')
-            .select('id')
-            .eq('conversation_id', conversationId)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-
-        if (latestMessageError) throw latestMessageError;
-
-        if (latestMessage?.id) {
+        if (latestVisibleMessageId) {
             const { error: readError } = await supabase
                 .from('chat_message_reads')
                 .upsert({
                     company_id: companyId,
-                    message_id: latestMessage.id,
+                    message_id: latestVisibleMessageId,
                     user_id: userId,
                     read_at: new Date().toISOString()
                 }, { onConflict: 'message_id,user_id' });
@@ -864,30 +885,159 @@ class ChatService {
         ));
     }
 
+    private async emitMessageRealtimeEvent(
+        conversationId: string,
+        payload: any,
+        onChanged: (event: ChatConversationMessageEvent) => void
+    ): Promise<void> {
+        const messageId = String(payload?.new?.id || payload?.old?.id || '');
+
+        if (!messageId) {
+            onChanged({
+                type: 'reload',
+                conversationId,
+                messageId: null,
+                message: null,
+                attachment: null
+            });
+            return;
+        }
+
+        if (payload.eventType === 'DELETE') {
+            onChanged({
+                type: 'delete',
+                conversationId,
+                messageId,
+                message: null,
+                attachment: null
+            });
+            return;
+        }
+
+        try {
+            const message = await this.getMessageById(messageId);
+            if (!message) {
+                onChanged({
+                    type: 'delete',
+                    conversationId,
+                    messageId,
+                    message: null,
+                    attachment: null
+                });
+                return;
+            }
+
+            onChanged({
+                type: payload.eventType === 'INSERT'
+                    ? 'insert'
+                    : (message.deleted_at ? 'delete' : 'update'),
+                conversationId,
+                messageId,
+                message,
+                attachment: null
+            });
+        } catch {
+            onChanged({
+                type: 'reload',
+                conversationId,
+                messageId,
+                message: null,
+                attachment: null
+            });
+        }
+    }
+
+    private async emitAttachmentRealtimeEvent(
+        conversationId: string,
+        payload: any,
+        onChanged: (event: ChatConversationMessageEvent) => void
+    ): Promise<void> {
+        const attachmentId = String(payload?.new?.id || payload?.old?.id || '');
+        const fallbackMessageId = String(payload?.new?.message_id || payload?.old?.message_id || '');
+
+        if (!attachmentId) {
+            onChanged({
+                type: 'reload',
+                conversationId,
+                messageId: fallbackMessageId || null,
+                message: null,
+                attachment: null
+            });
+            return;
+        }
+
+        if (payload.eventType === 'DELETE') {
+            onChanged({
+                type: 'reload',
+                conversationId,
+                messageId: fallbackMessageId || null,
+                message: null,
+                attachment: null
+            });
+            return;
+        }
+
+        try {
+            const attachment = await this.getAttachmentById(attachmentId);
+            if (!attachment) {
+                onChanged({
+                    type: 'reload',
+                    conversationId,
+                    messageId: fallbackMessageId || null,
+                    message: null,
+                    attachment: null
+                });
+                return;
+            }
+
+            onChanged({
+                type: 'attachment',
+                conversationId,
+                messageId: attachment.message_id,
+                message: null,
+                attachment
+            });
+        } catch {
+            onChanged({
+                type: 'reload',
+                conversationId,
+                messageId: fallbackMessageId || null,
+                message: null,
+                attachment: null
+            });
+        }
+    }
+
     subscribeConversationFeed(onChanged: () => void): RealtimeChannel {
         const channel = supabase.channel('chat-conversations-feed')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_conversations' }, () => onChanged())
             .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_conversation_members' }, () => onChanged())
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_messages' }, () => onChanged())
             .subscribe();
 
         return channel;
     }
 
-    subscribeConversationMessages(conversationId: string, onChanged: () => void): RealtimeChannel {
+    subscribeConversationMessages(
+        conversationId: string,
+        onChanged: (event: ChatConversationMessageEvent) => void
+    ): RealtimeChannel {
         const channel = supabase.channel(`chat-conversation-${conversationId}`)
             .on('postgres_changes', {
                 event: '*',
                 schema: 'public',
                 table: 'chat_messages',
                 filter: `conversation_id=eq.${conversationId}`
-            }, () => onChanged())
+            }, (payload) => {
+                void this.emitMessageRealtimeEvent(conversationId, payload, onChanged);
+            })
             .on('postgres_changes', {
                 event: '*',
                 schema: 'public',
                 table: 'chat_message_attachments',
                 filter: `conversation_id=eq.${conversationId}`
-            }, () => onChanged())
+            }, (payload) => {
+                void this.emitAttachmentRealtimeEvent(conversationId, payload, onChanged);
+            })
             .subscribe();
 
         return channel;
