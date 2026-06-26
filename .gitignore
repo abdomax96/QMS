@@ -66,3 +66,6 @@ Thumbs.db
 
 # Local agent tooling/config (not part of app)
 .agent/
+
+# Release artifacts (APKs, builds, etc.)
+.release-artifacts/
