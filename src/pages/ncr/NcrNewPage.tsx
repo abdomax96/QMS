@@ -11,7 +11,7 @@ import { useAuth } from '../../hooks/ncr/useAuth';
 import { useEnsureCompaniesLoaded } from '../../hooks/useEnsureCompaniesLoaded';
 import type { CreateNcrPayload } from '../../services/ncr/ncrService';
 import { FormSkeleton } from '../../components/common/LoadingStates';
-import { requireNcrStagePermission, PermissionError } from '../../services/unifiedPermissionService';
+import { requirePermission, PermissionError } from '../../services/unifiedPermissionService';
 import { useDefects } from '../../hooks/ncr/useDefects';
 import type { DefectType } from '../../hooks/ncr/useDefects';
 
@@ -379,8 +379,10 @@ const NcrNewPage = () => {
         setIsSubmitting(true);
         setFeedback(null);
         try {
-            // SECURITY: Backend permission enforcement
-            await requireNcrStagePermission('initial_report', 'create');
+            // SECURITY: Backend permission enforcement.
+            // Base CRUD (create) is authorised by the Main Module Matrix
+            // (role_module_permissions), not by NCR stage permissions.
+            await requirePermission('ncr', 'create');
             if (!selectedCompanyId) {
                 setFeedback({ type: 'error', message: 'يرجى اختيار الشركة قبل إنشاء التقرير.' });
                 return;

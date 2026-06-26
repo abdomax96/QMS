@@ -51,7 +51,7 @@ const NcrPermissionActions: React.FC<NcrPermissionActionsProps> = ({
     onReject,
     className = '',
 }) => {
-    const { canPerformNcrAction, canAdvanceNcr, canReturnNcr, loading } = useModulePermissions();
+    const { canPerform, canPerformNcrAction, canAdvanceNcr, canReturnNcr, loading } = useModulePermissions();
 
     if (loading) {
         return (
@@ -62,10 +62,11 @@ const NcrPermissionActions: React.FC<NcrPermissionActionsProps> = ({
         );
     }
 
-    // Check permissions for current stage
-    const canEdit = canPerformNcrAction(stageCode, 'edit');
-    const canDelete = canPerformNcrAction(stageCode, 'delete');
-    const canExport = canPerformNcrAction(stageCode, 'export');
+    // Base CRUD (edit/delete/export) is controlled by the Main Module Matrix.
+    const canEdit = canPerform('ncr', 'edit');
+    const canDelete = canPerform('ncr', 'delete');
+    const canExport = canPerform('ncr', 'export');
+    // Workflow actions remain stage-scoped (ncr_stage_permissions).
     const canApprove = canPerformNcrAction(stageCode, 'approve');
     const canAdvance = canAdvanceNcr(stageCode);
     const canReturn = canReturnNcr(stageCode);
@@ -195,8 +196,12 @@ export const NcrActionButton: React.FC<NcrActionButtonProps> = ({
     className = '',
     disabled = false,
 }) => {
-    const { canPerformNcrAction, loading } = useModulePermissions();
-    const hasPermission = canPerformNcrAction(stageCode, action);
+    const { canPerform, canPerformNcrAction, loading } = useModulePermissions();
+    // Base CRUD actions are module-controlled; workflow actions are stage-scoped.
+    const NCR_BASE_CRUD = ['view', 'create', 'edit', 'delete', 'export'];
+    const hasPermission = NCR_BASE_CRUD.includes(action)
+        ? canPerform('ncr', action)
+        : canPerformNcrAction(stageCode, action);
 
     if (loading) {
         return (
